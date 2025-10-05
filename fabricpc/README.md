@@ -8,3 +8,5 @@ FabricPC implements predictive coding networks using a clean abstraction of:
 - **Updates**: Iterative inference and learning algorithms
 
 ## Quick Start
+export PYTHONPATH=$PYTHONPATH:$(pwd)
+python experiments/mnist/demo_minimal.py

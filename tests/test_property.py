@@ -38,8 +38,8 @@ def test_allocate_respects_batch_and_dims(batch_size, dim_a, dim_b):
     model = PCGraphNet(config=cfg)
     model.allocate_node_states(batch_size=batch_size, device=torch.device("cpu"))
     for n in model.node_dictionary.values():
-        assert n.x_state.shape == (batch_size, n.dim)
+        assert n.z_latent.shape == (batch_size, n.dim)
         assert n.error.shape == (batch_size, n.dim)
-        assert n.x_hat.shape == (batch_size, n.dim)
+        assert n.z_mu.shape == (batch_size, n.dim)
         assert n.pre_activation_val.shape == (batch_size, n.dim)
         assert n.gain_mod_error.shape == (batch_size, n.dim)

@@ -42,7 +42,10 @@ class PCGraphNet(PCNet):
         self.eta_infer = 0.1
         self.eta_learn = 1e-3
         self.latent_init_feedforward = True  # Initialize latent state from the projected state if True, else random init
-        self.latent_init_std = 0.05  # std for random init of x_state
+        self.latent_init_std = 0.05  # std for random init of z_latent
+        self.init_method = "normal"  # normal or uniform
+        self.init_min = 0.0
+        self.init_max = 1.0
         # Process configuration
         self.task_map = task_map or {}  # dict {task_name: node_name}
         self.clamp_dict = {}  # dict {node_name: clamped_tensor}
@@ -138,21 +141,25 @@ class PCGraphNet(PCNet):
         self.clamp_dict = clamp_dict
 
         # Allocate tensors once; reuse and re-fill in-place on subsequent calls
-        # check the x_state of the first node in the dictionary
+        # check the z_latent of the first node in the dictionary
         n = next(iter(self.node_dictionary.values()))
         need_realloc = (
-            (n.x_state is None)
-            or (not isinstance(n.x_state, torch.Tensor))
-            or (n.x_state.device.type != self.device.type)
-            or (n.x_state.size(0) != batch_size)
+            (n.z_latent is None)
+            or (not isinstance(n.z_latent, torch.Tensor))
+            or (n.z_latent.device.type != self.device.type)
+            or (n.z_latent.size(0) != batch_size)
         )
         if need_realloc:
             # Fresh allocation (first call or shape/device changed)
             self.allocate_node_states(batch_size, device=self.device)
 
         for node in self.node_dictionary.values():
-            # Default is random initialization
-            node.x_state.normal_(0, self.latent_init_std)
+            if self.init_method.lower() == "uniform":
+                node.z_latent.uniform_(self.init_min, self.init_max)
+            elif self.init_method.lower() == "normal":
+                node.z_latent.normal_(0, self.latent_init_std)
+            else:
+                raise ValueError(f"Unknown init method {self.init_method}")
 
         # Validate clamps and apply
         for name, val in self.clamp_dict.items():
@@ -168,36 +175,48 @@ class PCGraphNet(PCNet):
                     f"Clamp for node '{name}' has batch {val.size(0)} != expected {batch_size}"
                 )
             # In-place copy of clamped value
-            node.x_state.copy_(val)
+            node.z_latent.copy_(val)
 
-        # Feedforward initialization for nodes downstream of any clamped latents
         if self.latent_init_feedforward:
             nodes_completed = list(
                 self.clamp_dict.keys()
             )  # List of nodes already initialized
+            # Feedforward initialization for nodes downstream of any clamped latents
             for name in self.clamp_dict.keys():
                 node = self.node_dictionary[name]
                 # Traverse the tree below the clamped node. Assumes a tree structure
                 self.propagate_init_forward(node.out_neighbors, nodes_completed)
+            # Feedforward initialization for any remaining uninitialized nodes (not downstream of any clamp)
+            # Start from all source nodes (in_degree == 0)
+            for node in self.node_dictionary.values():
+                if node.in_degree == 0 and node.name not in nodes_completed:
+                    nodes_completed.append(node.name)
+                    self.propagate_init_forward(node.out_neighbors, nodes_completed)
+            # Check that all nodes have been initialized
+            if len(nodes_completed) != len(self.node_dictionary):
+                uninit_nodes = set(self.node_dictionary.keys()) - set(nodes_completed)
+                raise ValueError(
+                    f"Some nodes were not initialized during feedforward init: {uninit_nodes}"
+                )
 
     def propagate_init_forward(self, out_neighbors: dict, nodes_completed: list):
         if len(out_neighbors) == 0:
             return
-        # Feedforward initialization for nodes downstream of any clamped latents
+        # Feedforward initialization
         for edge, node in out_neighbors.items():
             if node.name in nodes_completed:
                 continue
             nodes_completed.append(node.name)  # add to list of completed nodes
             # Initialize the node
             node.compute_projection()  # set the node latent state to the projected state of the node
-            # Copy the node x_hat values to x_state
-            node.x_state.copy_(node.x_hat)
+            # Copy the node z_mu values to z_latent
+            node.z_latent.copy_(node.z_mu)
             # Process downstream nodes
             self.propagate_init_forward(node.out_neighbors, nodes_completed)
 
     def update_projections(self):
         """
-        Project all nodes to their predicted values (x_hat) based on current latent states of their predictors.
+        Project all nodes to their predicted values (z_mu) based on current latent states of their predictors.
         """
         for node in self.node_dictionary.values():
             node.compute_projection()
@@ -206,7 +225,7 @@ class PCGraphNet(PCNet):
         """
         Update prediction errors and gain-modulated errors for all nodes.
         Computes:
-            node.error          = x_state - x_hat
+            node.error          = z_latent - z_mu
             node.gain_mod_error = error * f'(pre_activation_val)
         Returns: None
         """
@@ -222,13 +241,13 @@ class PCGraphNet(PCNet):
             if node.out_degree == 0:
                 # Sink node. No outgoing connections. Check the clamp status.
                 if node.name not in self.clamp_dict:
-                    # Unclamped sink node, x_state is undefined, set error to zero.
+                    # Unclamped sink node, z_latent is undefined, set error to zero.
                     node.error.zero_()
                     node.gain_mod_error.zero_()
                     continue
                 # Else, a clamped sink node, compute prediction error normally
             # Else, an internal node, compute prediction error normally
-            node.error = node.x_state - node.x_hat
+            node.error = node.z_latent - node.z_mu
             node.gain_mod_error = node.error * node.activation_deriv(
                 node.pre_activation_val
             )
@@ -238,7 +257,7 @@ class PCGraphNet(PCNet):
         for node in self.node_dictionary.values():
             if node.name in self.clamp_dict:
                 continue  # Skip clamped nodes
-            node.x_state -= self.eta_infer * node.compute_latent_grad()
+            node.z_latent -= self.eta_infer * node.compute_latent_grad()
 
     def update_weights(self):
         # Update weights for all edges
@@ -250,14 +269,14 @@ class PCGraphNet(PCNet):
     ):
         self.clamp_dict = clamps_dict
         for t in range(self.T_infer):
-            self.update_projections()  # Get projected states (x_hat)
+            self.update_projections()  # Get projected states (z_mu)
             self.update_error()  # Measure error
             self.get_total_energy(energy_record, selection_list)
             self.update_latents_step()  # Inference step t
 
     def learn(self, energy_record: list = None, selection_list: list = None):
         # Learning loop for weights (single step)
-        self.update_projections()  # Get projected states (x_hat)
+        self.update_projections()  # Get projected states (z_mu)
         self.update_error()  # Measure error
         self.get_total_energy(energy_record, selection_list)
         self.update_weights()  # Learning weights step
@@ -272,9 +291,9 @@ class PCGraphNet(PCNet):
         node = self.node_dictionary[node_name]
         if node.out_degree == 0:
             # No latent state available. We get its predicted value by projection.
-            return node.x_hat.clone()
+            return node.z_mu.clone()
         else:
-            return node.x_state.clone()
+            return node.z_latent.clone()
 
     def get_dim_for_key(self, key):
         # Graph model: key is a node name
@@ -284,17 +303,17 @@ class PCGraphNet(PCNet):
 
     def get_total_energy(self, energy_record: list, selection_list: list):
         if energy_record is not None:
-            B = self.node_dictionary[next(iter(self.node_dictionary))].x_state.size(
+            B = self.node_dictionary[next(iter(self.node_dictionary))].z_latent.size(
                 0
             )  # Batch size for normalization
-            total_energy = 0
+            total_energy = torch.zeros(1, device=self.device)
             if selection_list is None:
                 for node in self.node_dictionary.values():
-                    total_energy += 0.5 * node.error.pow(2).sum().item()
+                    total_energy += 0.5 * node.error.pow(2).sum()
             else:
                 for name in selection_list:
                     total_energy += (
-                        0.5 * self.node_dictionary[name].error.pow(2).sum().item()
+                        0.5 * self.node_dictionary[name].error.pow(2).sum()
                     )
             total_energy = total_energy / B
-            energy_record.append(total_energy)
+            energy_record.append(total_energy.item())

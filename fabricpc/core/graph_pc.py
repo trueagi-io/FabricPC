@@ -46,9 +46,9 @@ class PCNodeBase(GraphElement):
         self.activation_deriv = None  # activation derivative
         self.slots = {}  # dictionary of {slot_name: slot_object}
         # State variables
-        self.x_state = None  # tensor shape [batch_size, dim]
+        self.z_latent = None  # tensor shape [batch_size, dim]
         self.error = None  # tensor shape [batch_size, dim]
-        self.x_hat = None  # tensor shape [batch_size, dim]
+        self.z_mu = None  # tensor shape [batch_size, dim]
         self.pre_activation_val = None  # tensor shape [batch_size, dim]
         self.gain_mod_error = None  # tensor shape [batch_size, dim]
         # Properties
@@ -76,6 +76,7 @@ class PCNodeBase(GraphElement):
             raise ValueError(
                 f"Slot {edge.slot} not found in node {self.name}. Expected one of: {self.slots.keys()}"
             )
+
         idx_start = sum([node.dim for node in self.in_neighbors.values()])
         idx_end = idx_start + source_node.dim
         self.weight_map[edge] = [idx_start, idx_end]
@@ -91,9 +92,9 @@ class PCNodeBase(GraphElement):
 
     def allocate_state(self, batch_size: int):
         shape = (batch_size, self.dim)
-        self.x_state = torch.zeros(shape, device=self.device, dtype=self.dtype)
+        self.z_latent = torch.zeros(shape, device=self.device, dtype=self.dtype)
         self.error = torch.zeros(shape, device=self.device, dtype=self.dtype)
-        self.x_hat = torch.zeros(shape, device=self.device, dtype=self.dtype)
+        self.z_mu = torch.zeros(shape, device=self.device, dtype=self.dtype)
         self.pre_activation_val = torch.zeros(
             shape, device=self.device, dtype=self.dtype
         )
@@ -221,33 +222,33 @@ class LinearPCNode(PCNodeBase):
     def compute_projection(self):
         """
         Computes:
-            pre_activation_val = sum_s ( x_s @ W_{s->node} )
-            x_hat = f( pre_activation_val )
+            pre_activation_val = sum_s ( z_s @ W_{s->node} )
+            z_mu = f( pre_activation_val )
         Returns: None
         """
         # Handle source nodes (in_degree == 0)
         if self.in_degree == 0:
             # Source node! No predictors above; define null prediction
-            self.x_hat.zero_()
+            self.z_mu.zero_()
             return
-        # Compute x_hat and pre-activation value a sum of all incoming projections
+        # Compute z_mu and pre-activation value a sum of all incoming projections
         if len(self.in_neighbors) > 1:
             for edge, source_node in self.in_neighbors.items():
                 a, b = self.weight_map[edge]
                 self.inputs_all_concat[:, a:b] = (
-                    source_node.x_state
+                    source_node.z_latent
                 )  # Gather all inputs
             self.pre_activation_val = torch.matmul(
                 self.inputs_all_concat, self.W
             )  # Compute edge contribution
         else:
             source_node = next(iter(self.in_neighbors.values()))
-            self.pre_activation_val = torch.matmul(source_node.x_state, self.W)
+            self.pre_activation_val = torch.matmul(source_node.z_latent, self.W)
         # Add the biases
         if self.use_bias:
             self.pre_activation_val += self.b
-        # Compute predicted state x_hat
-        self.x_hat = self.activation_fn(self.pre_activation_val)
+        # Compute predicted state z_mu
+        self.z_mu = self.activation_fn(self.pre_activation_val)
 
     def init_weights(self):
         # Initialize weights
@@ -277,7 +278,7 @@ class LinearPCNode(PCNodeBase):
         elif len(self.in_neighbors) == 1:
             # single input
             source_node = next(iter(self.in_neighbors.values()))
-            grad_st = -torch.matmul(source_node.x_state.t(), self.gain_mod_error)
+            grad_st = -torch.matmul(source_node.z_latent.t(), self.gain_mod_error)
         else:
             # multiple inputs
             grad_st = -torch.matmul(self.inputs_all_concat.t(), self.gain_mod_error)
@@ -288,7 +289,7 @@ class LinearPCNode(PCNodeBase):
         return grad_b
 
     def compute_latent_grad(self):
-        grad_i = torch.zeros_like(self.x_state, device=self.device)
+        grad_i = torch.zeros_like(self.z_latent, device=self.device)
         grad_i += self.error  # Add the local error contribution
         for edge, target_node in self.out_neighbors.items():
             tgt_jacob = target_node.get_jacobian(

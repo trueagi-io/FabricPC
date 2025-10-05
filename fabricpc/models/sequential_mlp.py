@@ -39,11 +39,11 @@ class PC_MLP(PCNet, nn.Module):
         self.dims_list = dims_list  # layer dimensions, bottom-up order
         self.module_list = []  # list of transforms between state layers
         # State variables
-        self.x_state = (
+        self.z_latent = (
             []
         )  # list of tensors shape [batch_size, dim]. Each tensor is the state of a layer.
         self.error = []  # list of tensors shape [batch_size, dim]
-        self.x_hat = []  # list of tensors shape [batch_size, dim]
+        self.z_mu = []  # list of tensors shape [batch_size, dim]
         self.pre_activation_val = []  # list of tensors shape [batch_size, dim]
         self.gain_mod_error = []  # list of tensors shape [batch_size, dim]
         # Properties
@@ -91,13 +91,13 @@ class PC_MLP(PCNet, nn.Module):
             self.device = device
         # Allocate tensors once; reuse and fill in-place during inference
         print(f"Allocating layers for batch size {batch_size} on device {self.device}")
-        self.x_state = [
+        self.z_latent = [
             torch.empty(batch_size, dim, device=self.device) for dim in self.dims_list
         ]
         self.error = [
             torch.empty(batch_size, dim, device=self.device) for dim in self.dims_list
         ]
-        self.x_hat = [
+        self.z_mu = [
             torch.empty(batch_size, dim, device=self.device) for dim in self.dims_list
         ]
         self.pre_activation_val = [
@@ -111,10 +111,10 @@ class PC_MLP(PCNet, nn.Module):
         target_layer = self.task_map[task_key]
         if target_layer == 0:
             # Target state is a sink node; it has no latent state to be inferred. We get its predicted value by projection.
-            return self.x_hat[0].clone()
+            return self.z_mu[0].clone()
         else:
             # Target state is a latent node, return its inferred value.
-            return self.x_state[target_layer].clone()
+            return self.z_latent[target_layer].clone()
 
     def get_dim_for_key(self, key):
         # Sequential model key is an integer index of the layer
@@ -129,12 +129,12 @@ class PC_MLP(PCNet, nn.Module):
         self.clamp_dict = clamp_dict
 
         # Allocate tensors once; reuse and re-fill in-place on subsequent calls
-        need_realloc = len(self.x_state) != self.L or any(
+        need_realloc = len(self.z_latent) != self.L or any(
             (t is None)
             or (not isinstance(t, torch.Tensor))
             or (t.device.type != self.device.type)
             or (t.size(0) != batch_size)
-            for layer_idx, t in enumerate(self.x_state)
+            for layer_idx, t in enumerate(self.z_latent)
         )
         if need_realloc:
             # Fresh allocation (first call or shape/device changed)
@@ -153,32 +153,32 @@ class PC_MLP(PCNet, nn.Module):
                         f"Clamp for layer {layer_idx} must have shape (B, {self.dims_list[layer_idx]}), got {tuple(val.shape)}"
                     )
                 # In-place copy of clamped value
-                self.x_state[layer_idx].copy_(val)
+                self.z_latent[layer_idx].copy_(val)
             else:
                 # Reinitialize latent with random values in-place
-                self.x_state[layer_idx].normal_(mean=0.0, std=std)
+                self.z_latent[layer_idx].normal_(mean=0.0, std=std)
 
     def update_projections(self):
         """
         Project all layers to their predicted values
         Computes:
-            pre_activation_val = x_{l+1} * W_{l}
-            x_hat = f( pre_activation_val )
+            pre_activation_val = z_{l+1} * W_{l}
+            z_mu = f( pre_activation_val )
         """
         for layer_idx in range(self.L):
             # Handle source nodes (no incoming connections)
             if layer_idx == (self.L - 1):
-                # This is the top level latent. There are no predictors above; set x_hat to zeros.
+                # This is the top level latent. There are no predictors above; set z_mu to zeros.
                 self.pre_activation_val[layer_idx].zero_()
-                self.x_hat[layer_idx].zero_()
+                self.z_mu[layer_idx].zero_()
             else:
-                # Predict x_{l} from x_{l+1}
+                # Predict z_{l} from z_{l+1}
                 module = self.module_list[layer_idx]
                 # Call to module returns:
-                #   a = x_{l+1} * W_{l}     preactivations a_{l}
-                #   x_hat = f_{l}(a)        predictions \hat x_{l}
-                self.x_hat[layer_idx], self.pre_activation_val[layer_idx] = (
-                    module.forward(self.x_state[layer_idx + 1])
+                #   a = z_{l+1} * W_{l}     preactivations a_{l}
+                #   z_mu = f_{l}(a)        predictions \hat z_{l}
+                self.z_mu[layer_idx], self.pre_activation_val[layer_idx] = (
+                    module.forward(self.z_latent[layer_idx + 1])
                 )  # from latent of higher level, predict the lower level
 
     def update_error(self):
@@ -203,37 +203,37 @@ class PC_MLP(PCNet, nn.Module):
             act_derivative = self.module_list[layer_idx].activation_deriv(
                 self.pre_activation_val[layer_idx]
             )  # Activation derivative
-            self.error[layer_idx] = self.x_state[layer_idx] - self.x_hat[layer_idx]
+            self.error[layer_idx] = self.z_latent[layer_idx] - self.z_mu[layer_idx]
             self.gain_mod_error[layer_idx] = self.error[layer_idx] * act_derivative
 
     def update_latents_step(self):
         """
         Update latent states for all nodes; one inference step
-        gradient dE/dx_{l} = eps_{l} - [eps_{l-1} .* f'_{l-1}(x_{l} W_{l-1})] * [W_{l-1}^T]
+        gradient dE/dz_{l} = eps_{l} - [eps_{l-1} .* f'_{l-1}(z_{l} W_{l-1})] * [W_{l-1}^T]
         """
         for layer_idx in range(self.L):
             if layer_idx in self.clamp_dict:
                 continue  # Don't update latent of a clamped layer
             if layer_idx == 0:
                 # Bottom layer has no outgoing links to below. Its gradient is just the local prediction error.
-                dE_dx_l = self.error[layer_idx]
+                dE_dz_l = self.error[layer_idx]
             else:
                 # Layers greater than zero have contributions from local error and the projection to the layer below.
-                dE_dx_l = self.error[layer_idx] - torch.matmul(
+                dE_dz_l = self.error[layer_idx] - torch.matmul(
                     self.gain_mod_error[layer_idx - 1],
                     self.module_list[layer_idx - 1].W.T,
                 )
-            # Update latent x_{l}
-            self.x_state[layer_idx] -= self.eta_infer * dE_dx_l
+            # Update latent z_{l}
+            self.z_latent[layer_idx] -= self.eta_infer * dE_dz_l
 
     def update_weights(self):
         """
         Update weights for all transfer functions between layers
-        gradient dE/dW_{l} = -[x_{l+1}^T] * [eps_{l} .* f'_{l+1}(x_{l+1} * W_{l})]
+        gradient dE/dW_{l} = -[z_{l+1}^T] * [eps_{l} .* f'_{l+1}(z_{l+1} * W_{l})]
         """
         for layer_idx in range(self.L - 1):
             dE_dW_l = -torch.matmul(
-                self.x_state[layer_idx + 1].T, self.gain_mod_error[layer_idx]
+                self.z_latent[layer_idx + 1].T, self.gain_mod_error[layer_idx]
             )
             # self.module_list[layer_idx].W -= self.eta_learn * dE_dW_l
             self.module_list[layer_idx].optimizer.step(dE_dW_l)
@@ -243,14 +243,14 @@ class PC_MLP(PCNet, nn.Module):
     ):
         self.clamp_dict = clamps_dict
         for t in range(self.T_infer):
-            self.update_projections()  # Get projected states (x_hat)
+            self.update_projections()  # Get projected states (z_mu)
             self.update_error()  # Measure error
             self.get_total_energy(energy_record, selection_list)
             self.update_latents_step()  # Inference step t
 
     def learn(self, energy_record: list = None, selection_list: list = None):
         # Learning loop for weights (single step)
-        self.update_projections()  # Get projected states (x_hat)
+        self.update_projections()  # Get projected states (z_mu)
         self.update_error()  # Measure error
         self.get_total_energy(energy_record, selection_list)
         self.update_weights()  # Learning weights step        with torch.no_grad():

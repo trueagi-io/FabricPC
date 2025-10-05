@@ -28,6 +28,6 @@ class PCDenseLayer(nn.Module):
         # x_{l+1}: [batch_size, d_{l+1}]
         # W: [d_{l+1}, d_{l}]
         a = torch.matmul(x_above, self.W)  # a_{l} = X_{l+1} W_{l}
-        x_hat = self.activation_fn(a)  # \hat X_{l} = f_{l}( a_{l} )
+        z_mu = self.activation_fn(a)  # \hat X_{l} = f_{l}( a_{l} )
         # return: [batch_size, d_{l}]
-        return x_hat, a  # also return the preactivations for computing the gradient
+        return z_mu, a  # also return the preactivations for computing the gradient

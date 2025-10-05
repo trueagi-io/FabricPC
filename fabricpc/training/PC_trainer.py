@@ -50,8 +50,8 @@ def train_pcn(
             y_batch = y_batch.to(device)
             y_onehot = F.one_hot(y_batch, num_classes=y_dim).float()
 
-            # Clamp layers {task_key: data}
-            clamps_train = {x_key: x_batch, y_key: y_onehot}  # input  # target/output
+            # Define clamp layers {task_key: data}
+            clamps_train = {x_key: x_batch, y_key: y_onehot}  # input, output
 
             # Initialize latents
             model.init_latents(clamp_dict=clamps_train, batch_size=B, device=device)
