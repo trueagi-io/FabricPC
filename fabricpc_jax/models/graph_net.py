@@ -97,7 +97,7 @@ def build_graph_structure(config: dict) -> GraphStructure:
     for node_config in node_list:
         name = node_config["name"]
         dim = node_config["dim"]
-        activation = node_config["activation"]
+        activation_config = node_config["activation"]
 
         # Validate node type (optional but recommended)
         node_type = node_config.get("type", "")
@@ -120,7 +120,8 @@ def build_graph_structure(config: dict) -> GraphStructure:
         nodes[name] = NodeInfo(
             name=name,
             dim=dim,
-            activation=activation,
+            node_config=node_config,
+            activation=activation_config,
             in_degree=len(in_edges),
             out_degree=len(out_edges),
             in_edges=tuple(in_edges),

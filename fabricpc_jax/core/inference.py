@@ -61,7 +61,7 @@ def compute_projection(
     pre_activation = jnp.matmul(inputs_concat, W) + b
 
     # Apply activation function
-    activation_fn, _ = get_activation(node_info.activation)
+    activation_fn, _ = get_activation(node_info.activation_config)
     z_mu = activation_fn(pre_activation)
 
     return z_mu, pre_activation
@@ -132,7 +132,7 @@ def compute_errors(
             # Source nodes have no prediction, so no gain modulation
             gain_mod_error[node_name] = jnp.zeros_like(err)
         else:
-            _, deriv_fn = get_activation(node_info.activation)
+            _, deriv_fn = get_activation(node_info.activation_config)
             gain = deriv_fn(pre_activation[node_name])
             gain_mod_error[node_name] = err * gain
 
