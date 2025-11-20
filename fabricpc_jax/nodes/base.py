@@ -61,6 +61,7 @@ class NodeBase(ABC):
     ) -> NodeParams:
         """
         Initialize parameters for this node.
+        Describe the weights and biases structure in the docstring.
 
         Args:
             key: JAX random key

@@ -47,6 +47,9 @@ class LinearNode(NodeBase):
     ) -> NodeParams:
         """
         Initialize weight matrix and bias vector.
+        Linear node weights structure:
+            NodeParams.weights: is a dict keyed by EdgeInfo.key for each incoming edge.
+            NodeParams.biases: Dict['b': bias vector]
 
         Args:
             key: JAX random key
