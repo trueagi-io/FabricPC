@@ -97,7 +97,7 @@ def train_step(
     Returns:
         Tuple of (updated_params, updated_opt_state, loss, final_state)
     """
-    from fabricpc.models.graph_net import initialize_state
+    from fabricpc.graph.graph_net import initialize_state
 
     batch_size = next(iter(batch.values())).shape[0]
 
@@ -272,7 +272,7 @@ def evaluate_pcn(
     Returns:
         Dictionary of evaluation metrics (e.g., accuracy, loss)
     """
-    from fabricpc.models.graph_net import initialize_state
+    from fabricpc.graph.graph_net import initialize_state
 
     infer_steps = config.get("infer_steps", 20)
     eta_infer = config.get("eta_infer", 0.1)

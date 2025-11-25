@@ -22,7 +22,7 @@ from torchvision import datasets, transforms
 import time
 import os
 
-from fabricpc.models import create_pc_graph
+from fabricpc.graph import create_pc_graph
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.training.data_utils import OneHotWrapper
 from fabricpc.examples.plotting.visualize_experiment import plot_energy_history_interactive

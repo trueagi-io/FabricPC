@@ -12,7 +12,7 @@ import optax
 
 from fabricpc.core.types import GraphParams, GraphState, GraphStructure
 from fabricpc.core.inference import run_inference
-from fabricpc.models.graph_net import initialize_state
+from fabricpc.graph.graph_net import initialize_state
 from fabricpc.core.initialization import get_default_state_init
 
 

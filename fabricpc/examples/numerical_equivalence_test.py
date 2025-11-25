@@ -23,10 +23,10 @@ from typing import Dict
 # Add paths
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from fabricpc.models.graph_net import PCGraphNet
-from fabricpc.models import create_pc_graph
+from fabricpc.graph.graph_net import PCGraphNet
+from fabricpc.graph import create_pc_graph
 from fabricpc.core.inference import run_inference
-from fabricpc.models.graph_net import initialize_state
+from fabricpc.graph.graph_net import initialize_state
 
 
 def create_test_config():

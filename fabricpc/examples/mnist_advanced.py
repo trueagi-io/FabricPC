@@ -18,7 +18,7 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 import time
 
-from fabricpc.models import create_pc_graph
+from fabricpc.graph import create_pc_graph
 from fabricpc.training import train_step, create_optimizer, evaluate_pcn
 from fabricpc.training.data_utils import OneHotWrapper
 

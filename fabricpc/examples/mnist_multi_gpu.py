@@ -20,7 +20,7 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 import time
 
-from fabricpc.models import create_pc_graph
+from fabricpc.graph import create_pc_graph
 from fabricpc.training import train_pcn_multi_gpu, evaluate_pcn_multi_gpu
 from fabricpc.training.data_utils import OneHotWrapper
 

@@ -21,7 +21,7 @@ import jax
 import jax.numpy as jnp
 
 from fabricpc.core.types import NodeState, NodeParams, GraphState
-from fabricpc.models.graph_net import create_pc_graph, build_graph_structure, initialize_state
+from fabricpc.graph.graph_net import create_pc_graph, build_graph_structure, initialize_state
 from fabricpc.core.inference import run_inference
 from fabricpc.training import train_step, compute_local_weight_gradients
 from fabricpc.training.optimizers import create_optimizer
