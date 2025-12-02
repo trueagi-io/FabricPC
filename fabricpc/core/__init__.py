@@ -32,10 +32,7 @@ from fabricpc.core.activations import (
 
 # Inference functions
 from fabricpc.core.inference import (
-    compute_node_projection,
-    compute_latent_gradients,
-    compute_all_projections,
-    compute_errors,
+    gather_inputs,
     inference_step,
     run_inference,
 )
@@ -75,10 +72,7 @@ __all__ = [
     "hard_tanh_deriv",
     "ACTIVATIONS",
     # Inference
-    "compute_node_projection",
-    "compute_latent_gradients",
-    "compute_all_projections",
-    "compute_errors",
+    "gather_inputs",
     "inference_step",
     "run_inference",
     # Initialization

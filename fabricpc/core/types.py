@@ -80,6 +80,7 @@ class NodeState(NamedTuple):
         z_latent: Latent states (what the network infers)
         z_mu: Predicted expectations (what the network predicts)
         error: Prediction errors (z_latent - z_mu)
+        energy: Energy
         pre_activation: Pre-activation values (before activation function)
         latent_grad: Gradients w.r.t. latent states for inference updates
         gain_mod_error: Gain-modulated errors (error * activation_derivative)
@@ -89,7 +90,7 @@ class NodeState(NamedTuple):
     z_latent: jnp.ndarray
     z_mu: jnp.ndarray
     error: jnp.ndarray
-    energy: jnp.ndarray
+    energy: jnp.ndarray  # per-sample energy, shape (batch_size,)
     pre_activation: jnp.ndarray
     latent_grad: jnp.ndarray  # For local gradient accumulation
     gain_mod_error: jnp.ndarray  # gain modulated error per node, for gradient computation

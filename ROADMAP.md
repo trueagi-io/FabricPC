@@ -207,7 +207,7 @@ class LayerNormNode(NodeBase):
         )
 
     @staticmethod
-    def forward(params, inputs, node_info, node_out_shape):
+    def forward(params, inputs, state, node_info):
         x = list(inputs.values())[0]
         eps = node_info.node_config.get("eps", 1e-5)
 
@@ -221,7 +221,21 @@ class LayerNormNode(NodeBase):
         z_mu = gamma * x_norm + beta
         pre_activation = z_mu  # No separate activation
 
-        return z_mu, pre_activation, {"mean": mean, "var": var, "x_norm": x_norm}
+        # Compute error and energy
+        error = state.z_latent - z_mu
+        energy = 0.5 * jnp.sum(error ** 2, axis=-1)
+
+        # Update state
+        state = state._replace(
+            z_mu=z_mu,
+            pre_activation=pre_activation,
+            error=error,
+            energy=energy,
+            gain_mod_error=error,  # identity activation derivative = 1
+            substructure={"mean": mean, "var": var, "x_norm": x_norm}
+        )
+
+        return jnp.sum(energy), state
 ```
 
 #### 2.1.2 BatchNorm Node
@@ -276,7 +290,12 @@ class SoftmaxNode(NodeBase):
         return {"in": SlotSpec(name="in", is_multi_input=True)}
 
     @staticmethod
-    def forward(params, inputs, node_info, node_out_shape):
+    def forward(params, inputs, state, node_info):
+        """
+        Forward pass returning (total_energy, updated_state).
+        """
+        node_out_shape = state.z_latent.shape
+
         # Sum all inputs (like LinearNode but without weights)
         pre_activation = jnp.zeros(node_out_shape)
         for edge_key, x in inputs.items():
@@ -293,28 +312,20 @@ class SoftmaxNode(NodeBase):
         exp_x = jnp.exp(pre_activation - x_max)
         z_mu = exp_x / jnp.sum(exp_x, axis=-1, keepdims=True)
 
-        return z_mu, pre_activation, {}
+        # Compute error and energy
+        error = state.z_latent - z_mu
+        energy = 0.5 * jnp.sum(error ** 2, axis=-1)
 
-    @staticmethod
-    def compute_jacobian_for_edge(edge_key, params, inputs, node_state, node_info):
-        """
-        Softmax Jacobian: ∂y_i/∂x_j = y_i(δ_ij - y_j)
-        """
-        y = node_state.z_mu  # (batch, dim)
-        batch_size, dim = y.shape
+        state = state._replace(
+            z_mu=z_mu,
+            pre_activation=pre_activation,
+            error=error,
+            energy=energy,
+            gain_mod_error=gain_mod_error,
+            substructure={}
+        )
 
-        # Jacobian is (batch, dim, dim)
-        # J[b,i,j] = y[b,i] * (δ_ij - y[b,j])
-        eye = jnp.eye(dim)
-        jacobian = y[..., :, None] * (eye - y[..., None, :])
-
-        # If there are weights, chain rule
-        if edge_key in params.weights:
-            W = params.weights[edge_key]  # (in_dim, out_dim)
-            # J_full = J_softmax @ W.T
-            jacobian = jnp.einsum('boi,io->boi', jacobian, W)
-
-        return jacobian
+        return jnp.sum(energy), state
 ```
 
 ### 2.3 Convolutional Node
@@ -359,7 +370,8 @@ class Conv2DNode(NodeBase):
         )
 
     @staticmethod
-    def forward(params, inputs, node_info, node_out_shape):
+    def forward(params, inputs, state, node_info):
+        """Forward pass returning (total_energy, updated_state)."""
         config = node_info.node_config
         stride = config.get("stride", (1, 1))
         padding = config.get("padding", "SAME")
@@ -380,44 +392,55 @@ class Conv2DNode(NodeBase):
             pre_activation = pre_activation + params.biases["b"]
 
         # Apply activation
-        activation_fn, _ = get_activation(node_info.activation_config)
+        activation_fn, activation_deriv = get_activation(node_info.activation_config)
         z_mu = activation_fn(pre_activation)
 
-        return z_mu, pre_activation, {}
+        # Compute error and energy
+        error = state.z_latent - z_mu
+        energy = 0.5 * jnp.sum(error ** 2, axis=(-3, -2, -1))  # Sum over H, W, C
+
+        state = state._replace(
+            z_mu=z_mu,
+            pre_activation=pre_activation,
+            error=error,
+            energy=energy,
+            gain_mod_error=gain_mod_error,
+            substructure={}
+        )
+
+        return jnp.sum(energy), state
 
     @staticmethod
-    def compute_gradient(params, inputs, node_state, node_info, structure):
+    def forward_inference(params, inputs, state, node_info):
         """
-        Compute gradients using transposed convolution.
+        Forward pass with input gradient computation using transposed convolution.
 
         For conv: y = conv(x, W)
         Gradient: ∂L/∂x = conv_transpose(∂L/∂y, W)
         """
+        from fabricpc.nodes import get_node_class_from_type
+        node_class = get_node_class_from_type(node_info.node_type)
+
+        _, state = node_class.forward(params, inputs, state, node_info)
+
         config = node_info.node_config
         stride = config.get("stride", (1, 1))
         padding = config.get("padding", "SAME")
 
-        latent_grads = {node_info.name: node_state.error}
-
         kernel = params.weights["kernel"]
-        gain_mod_error = node_state.gain_mod_error
+        input_grads = {}
 
         for edge_key, x in inputs.items():
-            source_name = structure.edges[edge_key].source
-
-            # Transposed convolution for gradient
+            # Transposed convolution for gradient w.r.t. input
             grad = jax.lax.conv_transpose(
-                gain_mod_error, kernel,
+                state.gain_mod_error, kernel,
                 strides=stride,
                 padding=padding,
                 dimension_numbers=('NHWC', 'HWIO', 'NHWC')
             )
+            input_grads[edge_key] = -grad
 
-            if source_name not in latent_grads:
-                latent_grads[source_name] = jnp.zeros_like(x)
-            latent_grads[source_name] = latent_grads[source_name] - grad
-
-        return latent_grads
+        return state, input_grads
 ```
 
 ### 2.4 Attention Nodes
@@ -477,7 +500,8 @@ class MultiHeadAttentionNode(NodeBase):
         )
 
     @staticmethod
-    def forward(params, inputs, node_info, node_out_shape):
+    def forward(params, inputs, state, node_info):
+        """Forward pass returning (total_energy, updated_state)."""
         config = node_info.node_config
         num_heads = config.get("num_heads", 8)
 
@@ -515,17 +539,30 @@ class MultiHeadAttentionNode(NodeBase):
         # Output projection
         pre_activation = jnp.matmul(attn_output, params.weights["W_o"]) + params.biases["b_o"]
 
+        # Apply activation (typically identity for attention output)
+        activation_fn, activation_deriv = get_activation(node_info.activation_config)
+        z_mu = activation_fn(pre_activation)
+
+        # Compute error and energy
+        error = state.z_latent - z_mu
+        energy = 0.5 * jnp.sum(error ** 2, axis=(-2, -1))  # Sum over seq_len and embed_dim
+
         # Store attention weights for gradient computation
         substructure = {
             "attn_weights": attn_weights,
             "Q": Q, "K": K, "V": V,
         }
 
-        # Apply activation (typically identity for attention output)
-        activation_fn, _ = get_activation(node_info.activation_config)
-        z_mu = activation_fn(pre_activation)
+        state = state._replace(
+            z_mu=z_mu,
+            pre_activation=pre_activation,
+            error=error,
+            energy=energy,
+            gain_mod_error=gain_mod_error,
+            substructure=substructure
+        )
 
-        return z_mu, pre_activation, substructure
+        return jnp.sum(energy), state
 ```
 
 #### 2.4.2 Transformer Block
@@ -640,22 +677,31 @@ def ipc_inference_step(
         if node_name in clamps:
             continue  # Skip clamped nodes
 
-        # Recompute prediction for this node with current state
-        z_mu, pre_act, substruct = compute_node_projection(
-            params, state, node_name, structure
+        node_info = structure.nodes[node_name]
+        if node_info.in_degree == 0:
+            continue  # Skip source nodes
+
+        # Get node class and gather inputs
+        node_class = get_node_class_from_type(node_info.node_type)
+        in_edges_data = gather_inputs(node_info, structure, state)
+
+        # Compute forward pass and input gradients for this node
+        node_state, inedge_grads = node_class.forward_inference(
+            params.nodes[node_name], in_edges_data,
+            state.nodes[node_name], node_info
         )
-        state = update_node_in_state(state, node_name,
-                                     z_mu=z_mu, pre_activation=pre_act)
 
-        # Compute error
-        state = compute_node_error(state, node_name, structure)
+        # Update node state with predictions, error, energy
+        state = state._replace(nodes={**state.nodes, node_name: node_state})
 
-        # Compute gradient only for this node
-        grad = compute_single_node_gradient(state, params, node_name, structure)
+        # Accumulate gradients to source nodes
+        for edge_key, grad in inedge_grads.items():
+            source_name = structure.edges[edge_key].source
+            latent_grad = state.nodes[source_name].latent_grad + grad
+            state = update_node_in_state(state, source_name, latent_grad=latent_grad)
 
-        # Update this node's latent
-        node_state = state.nodes[node_name]
-        new_z = node_state.z_latent - eta_infer * grad
+        # Update this node's latent using its accumulated gradient
+        new_z = node_state.z_latent - eta_infer * node_state.latent_grad
         state = update_node_in_state(state, node_name, z_latent=new_z)
 
     return state
@@ -751,7 +797,7 @@ def update_scheduler(
     new_history = {}
 
     for node_name, node_state in state.nodes.items():
-        energy = node_state.energy
+        energy = sum(node_state.energy)  # sum energy over batch dimension
         history = scheduler.energy_history[node_name]
 
         # Update history (rolling window)
@@ -791,11 +837,34 @@ def scheduled_inference_step(
 ) -> Tuple[GraphState, SchedulerState]:
     """
     Inference step with per-node adaptive learning rates.
+    Uses forward_inference to compute predictions, errors, and gradients.
     """
-    # Standard forward pass
-    state = compute_all_projections(params, state, structure)
-    state = compute_errors(state, structure)
-    state = compute_latent_gradients(state, params, structure)
+    # Zero latent gradients
+    for node_name in structure.nodes:
+        node_state = state.nodes[node_name]
+        zero_grad = jnp.zeros_like(node_state.z_latent)
+        state = update_node_in_state(state, node_name, latent_grad=zero_grad)
+
+    # Forward pass: compute predictions, errors, and accumulate gradients
+    for node_name in structure.nodes:
+        node_info = structure.nodes[node_name]
+        if node_info.in_degree == 0:
+            continue  # Skip source nodes
+
+        node_class = get_node_class_from_type(node_info.node_type)
+        in_edges_data = gather_inputs(node_info, structure, state)
+
+        node_state, inedge_grads = node_class.forward_inference(
+            params.nodes[node_name], in_edges_data,
+            state.nodes[node_name], node_info
+        )
+        state = state._replace(nodes={**state.nodes, node_name: node_state})
+
+        # Accumulate gradients to source nodes
+        for edge_key, grad in inedge_grads.items():
+            source_name = structure.edges[edge_key].source
+            latent_grad = state.nodes[source_name].latent_grad + grad
+            state = update_node_in_state(state, source_name, latent_grad=latent_grad)
 
     # Update latents with per-node learning rates
     for node_name in structure.nodes:
@@ -977,9 +1046,10 @@ class HyperNode(NodeBase):
         )
 
     @staticmethod
-    def forward(params, inputs, node_info, node_out_shape):
+    def forward(params, inputs, state, node_info):
         """
         Forward pass runs internal subgraph inference.
+        Returns (total_energy, updated_state).
         """
         config = node_info.node_config
         subgraph_params = params.weights["_subgraph_weights"]
@@ -1016,41 +1086,73 @@ class HyperNode(NodeBase):
         output_node = config["output_mapping"]["out"]
         z_mu = subgraph_state.nodes[output_node].z_latent
 
-        return z_mu, z_mu, {"_subgraph_state": subgraph_state}
+        # Compute error and energy
+        error = state.z_latent - z_mu
+        energy = 0.5 * jnp.sum(error ** 2, axis=-1)
+
+        # Update state
+        state = state._replace(
+            z_mu=z_mu,
+            pre_activation=z_mu,
+            error=error,
+            energy=energy,
+            gain_mod_error=error,  # identity activation
+            substructure={"_subgraph_state": subgraph_state}
+        )
+
+        return jnp.sum(energy), state
 
     @staticmethod
-    def compute_gradient(params, inputs, node_state, node_info, structure):
+    def forward_inference(params, inputs, state, node_info):
         """
-        Propagate gradients through the hypernode.
+        Forward pass with gradient computation for inputs.
 
-        The error at this node's output becomes the error signal
-        for the subgraph's output node, and we run inference
-        to propagate it backward through the subgraph.
+        Propagates gradients backward through the subgraph to get
+        input gradients for the parent graph.
         """
+        from fabricpc.nodes import get_node_class_from_type
+        node_class = get_node_class_from_type(node_info.node_type)
+
+        # Run forward to get updated state
+        _, state = node_class.forward(params, inputs, state, node_info)
+
         config = node_info.node_config
-        subgraph_state = node_state.substructure["_subgraph_state"]
+        subgraph_state = state.substructure["_subgraph_state"]
         subgraph_structure = config["_subgraph_structure"]
         subgraph_params = params.weights["_subgraph_weights"]
 
-        # Clamp output error and propagate backward
-        output_node = config["output_mapping"]["out"]
         # Set the output node's error to match this node's error
+        output_node = config["output_mapping"]["out"]
         subgraph_state = update_node_in_state(
             subgraph_state, output_node,
-            error=node_state.error
+            error=state.error,
+            latent_grad=state.error  # Start gradient propagation
         )
 
-        # Run backward error propagation through subgraph
-        subgraph_state = compute_latent_gradients(
-            subgraph_state, subgraph_params, subgraph_structure
-        )
+        # Run one inference step backward through subgraph to propagate gradients
+        for node_name in reversed(subgraph_structure.node_order):
+            sub_node_info = subgraph_structure.nodes[node_name]
+            if sub_node_info.in_degree == 0:
+                continue
+
+            sub_node_class = get_node_class_from_type(sub_node_info.node_type)
+            in_edges_data = gather_inputs(sub_node_info, subgraph_structure, subgraph_state)
+
+            _, inedge_grads = sub_node_class.forward_inference(
+                subgraph_params.nodes[node_name], in_edges_data,
+                subgraph_state.nodes[node_name], sub_node_info
+            )
+
+            # Accumulate gradients to source nodes
+            for edge_key, grad in inedge_grads.items():
+                source_name = subgraph_structure.edges[edge_key].source
+                latent_grad = subgraph_state.nodes[source_name].latent_grad + grad
+                subgraph_state = update_node_in_state(subgraph_state, source_name, latent_grad=latent_grad)
 
         # Extract gradients for parent graph's source nodes
-        latent_grads = {node_info.name: node_state.error}
-
+        input_grads = {}
         for edge_key, ext_input in inputs.items():
             slot = edge_key.split(":")[-1]
-            source_name = structure.edges[edge_key].source
             internal_input = config["input_mapping"].get(slot)
 
             if internal_input:
@@ -1064,11 +1166,9 @@ class HyperNode(NodeBase):
                 else:
                     grad = internal_grad
 
-                if source_name not in latent_grads:
-                    latent_grads[source_name] = jnp.zeros_like(ext_input)
-                latent_grads[source_name] = latent_grads[source_name] - grad
+                input_grads[edge_key] = -grad
 
-        return latent_grads
+        return state, input_grads
 ```
 
 ### 4.2 Subgraph Sharing
@@ -1351,7 +1451,7 @@ class EnergyMonitor(Callback):
     def on_inference_step(self, step, state):
         if step % self.log_frequency == 0:
             energies = {
-                name: float(ns.energy)
+                name: float(sum(ns.energy))  # sum energy over batch dimension
                 for name, ns in state.nodes.items()
             }
             self.energy_history.append(energies)

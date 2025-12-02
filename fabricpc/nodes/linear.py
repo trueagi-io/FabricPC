@@ -10,7 +10,7 @@ import jax
 import jax.numpy as jnp
 
 from fabricpc.nodes.base import NodeBase, SlotSpec
-from fabricpc.core.types import NodeParams, NodeState, NodeInfo, GraphStructure
+from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.activations import get_activation
 from fabricpc.core.initialization import initialize_weights
 
@@ -92,149 +92,121 @@ class LinearNode(NodeBase):
 
     @staticmethod
     def forward(
-        params: NodeParams,
-        inputs: Dict[str, jnp.ndarray], # EdgeInfo.key -> input tensors
-        node_info: NodeInfo,
-        node_out_shape: Tuple[int, ...],
-    ) -> Tuple[jnp.ndarray, jnp.ndarray, Dict[str, jnp.ndarray]]:
+            params: NodeParams,
+            inputs: Dict[str, jnp.ndarray],  # EdgeInfo.key -> inputs data
+            state: NodeState,  # state object for the present node
+            node_info: NodeInfo,
+    ) -> tuple[jax.Array, NodeState]:
         """
-        Forward pass: linear transformation with activation.
+        Linear transformation with activation.
+
+        Forward pass through the node, returning energy scalar and updated state.
+        Computes:
+            forward pass -> compute error -> compute energy -> total energy
 
         Args:
             params: Node parameters (weights, biases)
             inputs: Dictionary mapping edge keys to input tensors
+            state: state object for the present node
             node_info: NodeInfo object (contains activation function, etc.)
-            node_out_shape: shape of the node output (same as latent state)
 
         Returns:
-            Tuple of (z_mu, pre_activation, substructure_state):
+            Tuple of (total_energy, NodeState):
+                - total_energy: scalar energy value for this node
+                - NodeState: updated node state (z_mu, pre_activation, etc.)
         """
+        from fabricpc.nodes import get_node_class_from_type
+        node_class = get_node_class_from_type(node_info.node_type)
 
+        # Initialize pre-activation
+        node_out_shape = state.z_latent.shape
         pre_activation = jnp.zeros(node_out_shape)
 
-        # Linear transformation
-        for edge_key, x in inputs.items():
-            pre_activation = pre_activation + jnp.matmul(x, params.weights[edge_key])
+        if node_info.in_degree == 0:
+            # Source nodes: no inputs
+            z_mu = state.z_latent  # prediction is the latent state itself
+            error = jnp.zeros_like(state.z_latent)
+            gain_mod_error = jnp.zeros_like(state.z_latent)
+        else:
+            # Linear transformation
+            for edge_key, x in inputs.items():
+                pre_activation = pre_activation + jnp.matmul(x, params.weights[edge_key])
 
-        # Add bias if present
-        if "b" in params.biases and params.biases["b"].size > 0:
-            pre_activation = pre_activation + params.biases["b"]
+            # Add bias if present
+            if "b" in params.biases and params.biases["b"].size > 0:
+                pre_activation = pre_activation + params.biases["b"]
 
-        # Apply activation function
-        activation_fn, _ = get_activation(node_info.activation_config)
-        z_mu = activation_fn(pre_activation)
+            # Apply activation function
+            activation_fn, activation_deriv = get_activation(node_info.activation_config)
+            z_mu = activation_fn(pre_activation)  # TODO turn off activation if latents represent preactivations
 
-        return z_mu, pre_activation, {}
+            # Error
+            error = state.z_latent - z_mu
+
+            # Gain-modulated error (use newly computed pre_activation, not state.pre_activation)
+            f_prime = activation_deriv(pre_activation)  # shape (batch_size, dim_node_latent)
+            gain_mod_error = error * f_prime  # element-wise multiplication
+
+        # Update node state
+        state = state._replace(
+            pre_activation=pre_activation,
+            z_mu=z_mu,
+            error=error,
+            gain_mod_error=gain_mod_error)
+
+        # Compute energy, accumulate the self-latent gradient
+        state = node_class.energy_functional(state, node_info)
+
+        total_energy = jnp.sum(state.energy)
+        return total_energy, state
 
     @staticmethod
-    def compute_error(
-        state: NodeState,
-        node_info: NodeInfo
-    ) -> NodeState:
+    def forward_inference(
+        params: NodeParams,
+        inputs: Dict[str, jnp.ndarray],  # EdgeInfo.key -> inputs data
+        state: NodeState,  # state object for the present node
+        node_info: NodeInfo,
+    ) -> Tuple[NodeState, Dict[str, jnp.ndarray]]:
         """
-        Compute prediction error and gain-modulated error.
+        Forward pass: updates node state and computes gradients w.r.t. inputs.
+        Explicitly compute gradients
 
         Args:
-            state: NodeState object (contains z_latent, z_mu)
+            params: Node parameters (weights, biases)
+            inputs: Dictionary mapping edge keys to input tensors
+            state: state object for the present node
             node_info: NodeInfo object (contains activation function, etc.)
 
         Returns:
-            Updated NodeState with error and gain_mod_error computed
+            Tuple of (NodeState, gradient_wrt_inputs):
+                - NodeState: updated node state (z_mu, pre_activation, etc.)
+                - gradient_wrt_inputs: dictionary of gradients w.r.t. each input edge
         """
-        if node_info.in_degree == 0:
-            # Source nodes have no prediction error
-            zero_error = jnp.zeros_like(state.z_latent)
-            zero_gain_mod_error = jnp.zeros_like(state.z_latent)
-            state = state._replace(error=zero_error, gain_mod_error=zero_gain_mod_error)
-            return state
+        from fabricpc.nodes import get_node_class_from_type
+        node_class = get_node_class_from_type(node_info.node_type)
 
-        error = state.z_latent - state.z_mu
-
-        # Get activation derivative
-        _, activation_deriv = get_activation(node_info.activation_config)
-        f_prime = activation_deriv(state.pre_activation)  # shape (batch_size, dim_node_latent)
-
-        gain_mod_error = error * f_prime  # element-wise multiplication
-
-        # Update node state
-        state = state._replace(error=error, gain_mod_error=gain_mod_error)
-        return state
-
-    @staticmethod
-    def energy_functional(
-        state: NodeState,
-        node_info: NodeInfo
-    ) -> NodeState:
-        """
-        Compute energy of the node using Gaussian energy functional.
-
-        E = 0.5 * ||z_latent - z_mu||^2
-
-        Args:
-            state: NodeState object (contains z_latent, z_mu)
-            node_info: NodeInfo object (not used here)
-
-        Returns:
-            Updated NodeState with energy computed
-        """
-        error = state.z_latent - state.z_mu
-        energy = 0.5 * jnp.sum(error ** 2, axis=1)  # sum over latent dimensions
-
-        # Update node state
-        state = state._replace(energy=energy)
-        return state
-
-    @staticmethod
-    def compute_gradient(
-        params: NodeParams,
-        inputs: Dict[str, jnp.ndarray],
-        node_state: NodeState,
-        node_info: NodeInfo,
-        structure: GraphStructure,
-    ) -> Dict[str, jnp.ndarray]:
-        """
-        Compute local gradients of latent states for inference updates.
-        Compute the contributions of node itself and its source nodes to the energy of this node.
-        Use the energy functional specific in NodeInfo to compute the gradients.
-
-        Computes:
-        ∂E/∂z_i, where i is in {this node} ∪ {source nodes connected to this node}
-
-        Args:
-            params: Current node parameters
-            inputs: Dictionary mapping edge key to input tensors
-            node_state: Current node state (contains errors, pre-activations, etc.)
-            node_info: Node configuration
-            structure: GraphStructure object
-
-        Returns:
-            Dictionary mapping node names to latent gradient contributions
-        """
+        # Forward pass to get new state
+        _, state = node_class.forward(params, inputs, state, node_info)
+        # Note: the self-latent gradient is accumulated in state.latent_grad by the forward method
 
         # Determine the energy functional to use for the node from its config
         energy_functional = "gaussian"  # TODO make configurable per node, node_info.config.get("energy_functional", "gaussian")
         latent_is_preactivation = node_info.node_config.get("latent_type") == "preactivation"
-        latent_grads = {}
-
-        # Self energy gradient
-        latent_grads[node_info.name] = node_state.error
+        input_grads = {}
 
         # Back-synapse gradients for each edge, and accumulate to source nodes
-        # ∂E/∂z_source = -W^T @ gain_mod_error_target
+        # ∂E/∂z_source = -Wcompute_params_gradient^T @ gain_mod_error_target
         for edge_key, z in inputs.items():
-            source_name = structure.edges[edge_key].source
-            if source_name not in latent_grads:
-                latent_grads[source_name] = jnp.zeros_like(z)
 
             if energy_functional == "gaussian":
                 if latent_is_preactivation:
                     raise NotImplementedError("pre-activation latent type not implemented for LinearNode with Gaussian energy.")
-                    grad_contribution = -jnp.matmul(node_state.error, params.weights[edge_key].T)
+                    grad_contribution = -jnp.matmul(state.error, params.weights[edge_key].T)
                     # error (batch, dim_t)
                     # weights{s->t} (dim_s, dim_t)
                 else:
                     # For Gaussian energy, the gradient contribution is W @ gain_mod_error
-                    grad_contribution = -jnp.matmul(node_state.gain_mod_error, params.weights[edge_key].T)
+                    grad_contribution = -jnp.matmul(state.gain_mod_error, params.weights[edge_key].T)
                     # gain_mod_error (batch, dim_t) = error * f'(a)
                     # weights{s->t} (dim_s, dim_t)
             else:
@@ -242,50 +214,54 @@ class LinearNode(NodeBase):
                 # _, activation_deriv = get_activation(node_info.node_config.get("activation_config"))
                 # f_prime = activation_deriv(node_state.pre_activation)  # shape (batch_size, dim_node_latent)
 
-            latent_grads[source_name] = latent_grads[source_name] + grad_contribution
+            input_grads[edge_key] = grad_contribution
 
-        return latent_grads
+        return state, input_grads
 
     @staticmethod
-    def compute_params_gradient(
+    def forward_learning(
         params: NodeParams,
         inputs: Dict[str, jnp.ndarray],
-        node_state: NodeState,  # state object for the present node
+        state: NodeState,  # state object for the present node
         node_info: NodeInfo
-    ) -> NodeParams:
+    ) -> Tuple[NodeState, NodeParams]:
         """
-        Compute local gradients for weights and biases.
+        Forward pass: update state and compute gradients of weights for local learning.
+        Explicitly compute gradients
 
-        For linear nodes:
-        - Weight gradient: -(input.T @ gain_mod_error)
-        - Bias gradient: -sum(gain_mod_error, axis=0)
+        The local gradient for weights is: -(input.T @ gain_mod_error)
 
         Args:
             params: Current node parameters
             inputs: Dictionary with edge_key -> input tensor
-            node_state: state object for the present node
+            state: state object for the present node
             node_info: NodeInfo object
 
         Returns:
-            NodeParams containing weight and bias gradients
+            Tuple of (NodeState, params_grad):
+                - NodeState: updated node state (z_mu, pre_activation, etc.)
+                - params_grad: NodeParams containing weight and bias gradients
         """
+        from fabricpc.nodes import get_node_class_from_type
+        node_class = get_node_class_from_type(node_info.node_type)
 
-        # fix the test file line 203 to check for params keyed on edge strings
+        # Forward pass to get new state
+        _, state = node_class.forward(params, inputs, state, node_info)
 
         weight_grads = {}
         bias_grads = {}
 
         # Weight gradient
         for edge_key, in_tensor in inputs.items():
-            grad_w = -jnp.matmul(in_tensor.T, node_state.gain_mod_error)
+            grad_w = -jnp.matmul(in_tensor.T, state.gain_mod_error)
             weight_grads[edge_key] = grad_w
 
         # Bias gradient
         if "b" in params.biases:
-            grad_b = -jnp.sum(node_state.gain_mod_error, axis=0, keepdims=True)
+            grad_b = -jnp.sum(state.gain_mod_error, axis=0, keepdims=True)
             bias_grads["b"] = grad_b
 
-        return NodeParams(weights=weight_grads, biases=bias_grads)
+        return state, NodeParams(weights=weight_grads, biases=bias_grads)
 
 
 class LinearAutoGradNode(LinearNode):
@@ -303,17 +279,29 @@ class LinearAutoGradNode(LinearNode):
     """
 
     @staticmethod
-    def compute_gradient(
+    def forward_inference(
+        params: NodeParams,
+        inputs: Dict[str, jnp.ndarray],  # EdgeInfo.key -> inputs data
+        state: NodeState,  # state object for the present node
+        node_info: NodeInfo,
+    ) -> Tuple[NodeState, Dict[str, jnp.ndarray]]:
+        """
+        Forward pass: updates node state and computes gradients w.r.t. inputs.
+
+        Delegate to NodeBase's implementation which uses JAX autodiff.
+        """
+        return NodeBase.forward_inference(params, inputs, state, node_info)
+
+    @staticmethod
+    def forward_learning(
         params: NodeParams,
         inputs: Dict[str, jnp.ndarray],
-        node_state: NodeState,
-        node_info: NodeInfo,
-        structure: GraphStructure,
-    ) -> Dict[str, jnp.ndarray]:
+        state: NodeState,  # state object for the present node
+        node_info: NodeInfo
+    ) -> Tuple[NodeState, NodeParams]:
         """
-        Compute gradients using NodeBase's autodiff implementation.
+        Forward pass: update state and compute gradients of weights for local learning.
 
-        This delegates to NodeBase.compute_gradient which uses JAX's
-        automatic differentiation to compute Jacobians.
+        Delegate to NodeBase's implementation which uses JAX autodiff.
         """
-        return NodeBase.compute_gradient(params, inputs, node_state, node_info, structure)
+        return NodeBase.forward_learning(params, inputs, state, node_info)

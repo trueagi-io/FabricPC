@@ -196,12 +196,12 @@ class TestInference:
 
         # Check that energy decreased
         initial_energy = sum(
-            jnp.sum(initial_state.nodes[name].error ** 2)
+            jnp.sum(initial_state.nodes[name].energy)
             for name in structure.nodes
             if structure.nodes[name].in_degree > 0
         )
         final_energy = sum(
-            jnp.sum(final_state.nodes[name].error ** 2)
+            jnp.sum(final_state.nodes[name].energy)
             for name in structure.nodes
             if structure.nodes[name].in_degree > 0
         )
@@ -294,12 +294,12 @@ class TestTraining:
         assert loss > 0, "Loss should be positive"
 
 
-class TestJacobian:
-    """Test suite for Jacobian computation."""
+class TestForwardMethods:
+    """Test suite for node forward methods."""
 
     @pytest.fixture
-    def jacobian_setup(self, graph, rng_key):
-        """Setup for Jacobian tests."""
+    def forward_setup(self, graph, rng_key):
+        """Setup for forward method tests."""
         params, structure = graph
         batch_size = 4
 
@@ -315,7 +315,7 @@ class TestJacobian:
                 latent_grad=jnp.zeros((batch_size, node_info.dim)),
                 z_mu=jnp.zeros((batch_size, node_info.dim)),
                 error=jnp.zeros((batch_size, node_info.dim)),
-                energy=jnp.zeros(()),
+                energy=jnp.zeros((batch_size,)),
                 pre_activation=jnp.zeros((batch_size, node_info.dim)),
                 gain_mod_error=jnp.zeros((batch_size, node_info.dim)),
                 substructure={}
@@ -326,37 +326,69 @@ class TestJacobian:
 
         return params, structure, state
 
-    def test_jacobian_computation(self, jacobian_setup):
-        """Test Jacobian computation for local gradients."""
-        params, structure, state = jacobian_setup
+    def test_forward_inference_shapes(self, forward_setup):
+        """Test that forward_inference returns correct shapes."""
+        params, structure, state = forward_setup
 
-        # Test Jacobian for linear nodes
         for node_name, node_info in structure.nodes.items():
             if node_info.in_degree > 0:  # Skip source nodes
                 node_class = get_node_class_from_type(node_info.node_type)
                 node_state = state.nodes[node_name]
 
-                # Collect edge inputs for Jacobian computation
+                # Collect edge inputs
                 edge_inputs = {}
                 for edge_key in node_info.in_edges:
                     in_edge_info = structure.edges[edge_key]
                     edge_inputs[edge_key] = state.nodes[in_edge_info.source].z_latent
 
-                # Test Jacobian computation for each edge
+                # Run forward_inference
+                new_state, input_grads = node_class.forward_inference(
+                    params.nodes[node_name], edge_inputs, node_state, node_info
+                )
+
+                # Verify state shapes
+                assert new_state.z_mu.shape == node_state.z_latent.shape, \
+                    f"z_mu shape mismatch for {node_name}"
+                assert new_state.error.shape == node_state.z_latent.shape, \
+                    f"error shape mismatch for {node_name}"
+
+                # Verify input gradient shapes
                 for edge_key in node_info.in_edges:
                     edge_info = structure.edges[edge_key]
                     source_dim = structure.nodes[edge_info.source].dim
-                    target_dim = structure.nodes[edge_info.target].dim
+                    expected_shape = (state.batch_size, source_dim)
+                    assert input_grads[edge_key].shape == expected_shape, \
+                        f"Input gradient shape mismatch for {edge_key}"
 
-                    # Compute Jacobian
-                    jacobian = node_class.compute_jacobian_for_edge(
-                        edge_key, params.nodes[node_name], edge_inputs, node_state, node_info
-                    )
+    def test_forward_learning_shapes(self, forward_setup):
+        """Test that forward_learning returns correct shapes."""
+        params, structure, state = forward_setup
 
-                    # Verify Jacobian shape
-                    expected_shape = (state.batch_size, target_dim, state.batch_size, source_dim)
-                    assert jacobian.shape == expected_shape, \
-                        f"Jacobian shape mismatch for {edge_key}: got {jacobian.shape}, expected {expected_shape}"
+        for node_name, node_info in structure.nodes.items():
+            if node_info.in_degree > 0:  # Skip source nodes
+                node_class = get_node_class_from_type(node_info.node_type)
+                node_state = state.nodes[node_name]
+                node_params = params.nodes[node_name]
+
+                # Collect edge inputs
+                edge_inputs = {}
+                for edge_key in node_info.in_edges:
+                    in_edge_info = structure.edges[edge_key]
+                    edge_inputs[edge_key] = state.nodes[in_edge_info.source].z_latent
+
+                # Run forward_learning
+                new_state, param_grads = node_class.forward_learning(
+                    node_params, edge_inputs, node_state, node_info
+                )
+
+                # Verify param gradient shapes match original params
+                for edge_key in node_params.weights:
+                    assert param_grads.weights[edge_key].shape == node_params.weights[edge_key].shape, \
+                        f"Weight gradient shape mismatch for {edge_key}"
+
+                for bias_key in node_params.biases:
+                    assert param_grads.biases[bias_key].shape == node_params.biases[bias_key].shape, \
+                        f"Bias gradient shape mismatch for {bias_key}"
 
 
 @pytest.mark.parametrize("activation_type", ["identity", "relu", "tanh", "sigmoid"])

@@ -22,6 +22,8 @@ from fabricpc.training.data_utils import OneHotWrapper
 
 os.environ["JAX_PLATFORMS"] = "cuda"  # change to "cpu", "cuda" or "tpu" if available
 
+# jax.config.update("jax_traceback_filtering", "off")
+
 # Set random seed for reproducibility
 jax.config.update('jax_default_prng_impl', 'threefry2x32')  # 'rbg' is faster than 'threefry2x32', but less reproducible across vmap
 master_rng_key = jax.random.PRNGKey(0)
@@ -61,7 +63,7 @@ config = {
 
 # Training hyperparameters
 train_config = {
-    "num_epochs": 2,       # Number of training epochs
+    "num_epochs": 20,       # Number of training epochs
     "infer_steps": 20,      # Inference steps
     "eta_infer": 0.05,      # Inference learning rate
     "optimizer": {"type": "adam", "lr": 0.001, "weight_decay": 0.001},

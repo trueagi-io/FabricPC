@@ -28,7 +28,7 @@ from fabricpc.core.initialization import (
     get_default_state_init,
 )
 from fabricpc.nodes import get_node_class_from_type
-from fabricpc.core.inference import compute_errors
+from fabricpc.core.inference import gather_inputs
 from fabricpc.utils.helpers import update_node_in_state
 
 
@@ -381,7 +381,7 @@ def initialize_state(
             z_latent=z_latent,  # init latent state
             z_mu=jnp.zeros(shape),
             error=jnp.zeros(shape),
-            energy=jnp.zeros(()),  # Scalar zero
+            energy=jnp.zeros((batch_size,)),  # Per-sample energy
             pre_activation=jnp.zeros(shape),
             gain_mod_error=jnp.zeros(shape),
             latent_grad=jnp.zeros(shape),
@@ -395,31 +395,30 @@ def initialize_state(
     )
     # Feedforward initialization if requested
     if init_method == "feedforward" and params is not None:
-        from fabricpc.core.inference import compute_node_projection
 
         # Process nodes in topological order
         for node_name in structure.node_order:
-            if structure.nodes[node_name].in_degree > 0:
+            node_info = structure.nodes[node_name]
+            if node_info.in_degree > 0:
+
+                # Collect edge inputs
+                node_state = state.nodes[node_name]
+                node_params = params.nodes[node_name]
+                node_class = get_node_class_from_type(node_info.node_type)
+                edge_inputs = gather_inputs(node_info, structure, state)
+
                 # Compute forward projection
-                z_mu_init, pre_act_init, sub_state = compute_node_projection(
-                    params, state, node_name, structure
-                )
+                _, node_state = node_class.forward(node_params, edge_inputs, node_state, node_info)
+
                 # Update the state with feedforward values
                 if node_name not in clamps:
                     # z_latent <- z_mu_init
-                    z_latent_init = z_mu_init
+                    node_state = node_state._replace(z_latent=node_state.z_mu)
                 else:
                     # Respect clamped values
-                    z_latent_init = clamps[node_name]
+                    node_state = node_state._replace(z_latent=clamps[node_name])
                 # Update state
-                state = update_node_in_state(state, node_name,
-                                            z_latent=z_latent_init,
-                                            z_mu=z_mu_init,
-                                            pre_activation=pre_act_init,
-                                            substructure=sub_state)
-
-    # Compute the initial energy
-    state = compute_errors(state, structure)
+                state = state._replace(nodes={**state.nodes, node_name: node_state})
 
     return state
 

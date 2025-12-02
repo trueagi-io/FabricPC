@@ -13,12 +13,12 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from fabricpc.core.types import NodeState, NodeParams
+from fabricpc.core.types import NodeState, NodeParams, NodeInfo, EdgeInfo, GraphStructure
 from fabricpc.graph.graph_net import create_pc_graph, initialize_state
-from fabricpc.core.inference import compute_all_projections, compute_errors
+from fabricpc.core.inference import run_inference, gather_inputs
 from fabricpc.nodes import get_node_class_from_type, LinearNode, LinearAutoGradNode
 
-jax.config.update("jax_platform_name", "cpu")
+jax.config.update("jax_platform_name", "cpu")  # using cuda causes larger numerical differences because of TF32 precision
 
 
 @pytest.fixture
@@ -26,6 +26,10 @@ def rng_key():
     """Fixture to provide a JAX random key."""
     return jax.random.PRNGKey(42)
 
+@pytest.fixture
+def grad_tolerance():
+    """Fixture to provide gradient comparison tolerance."""
+    return 1e-5
 
 def create_config(node_type: str):
     """Create a small network config with specified node type."""
@@ -62,8 +66,8 @@ class TestLinearAutoGradNode:
     """Test that LinearAutoGradNode produces identical gradients to LinearNode."""
 
     @pytest.mark.parametrize("activation", ["identity", "relu", "tanh", "sigmoid"])
-    def test_gradient_equivalence_single_node(self, rng_key, activation):
-        """Test gradient equivalence for different activation functions."""
+    def test_forward_inference_equivalence(self, rng_key, activation, grad_tolerance):
+        """Test that forward_inference produces equivalent input gradients for different activations."""
         batch_size = 4
         input_dim = 6
         output_dim = 8
@@ -77,7 +81,6 @@ class TestLinearAutoGradNode:
         )
         inputs = {edge_key: jax.random.normal(rngkey_inputs, (batch_size, input_dim))}
 
-        from fabricpc.core.types import NodeInfo, GraphStructure, EdgeInfo
         node_info = NodeInfo(
             name="dst",
             dim=output_dim,
@@ -87,59 +90,98 @@ class TestLinearAutoGradNode:
             in_degree=1,
             out_degree=0,
             slots={},
-            in_edges=frozenset([edge_key]),
-            out_edges=frozenset(),
-        )
-        source_info = NodeInfo(
-            name="src",
-            dim=input_dim,
-            node_type="linear",
-            activation_config={"type": "identity"},
-            node_config={},
-            in_degree=0,
-            out_degree=1,
-            slots={},
-            in_edges=frozenset(),
-            out_edges=frozenset([edge_key]),
-        )
-        structure = GraphStructure(
-            nodes={"src": source_info, "dst": node_info},
-            edges={edge_key: EdgeInfo(source="src", target="dst", slot="in", key=edge_key)},
-            node_order=["src", "dst"],
-            task_map={"x": "src"},
+            in_edges=(edge_key,),
+            out_edges=(),
         )
 
-        # Forward pass
-        node_out_shape = (batch_size, output_dim)
-        z_mu, pre_activation, _ = LinearNode.forward(params, inputs, node_info, node_out_shape)
-
-        # Create initial state with random latent
+        # Create initial node state with random latent
         z_latent = jax.random.normal(rngkey_latent, (batch_size, output_dim))
         node_state = NodeState(
             z_latent=z_latent,
             latent_grad=jnp.zeros((batch_size, output_dim)),
-            z_mu=z_mu,
+            z_mu=jnp.zeros((batch_size, output_dim)),
             error=jnp.zeros((batch_size, output_dim)),
-            energy=jnp.zeros(()),
-            pre_activation=pre_activation,
+            energy=jnp.zeros((batch_size,)),
+            pre_activation=jnp.zeros((batch_size, output_dim)),
             gain_mod_error=jnp.zeros((batch_size, output_dim)),
             substructure={},
         )
 
-        # Use node class methods to compute error and energy
-        node_state = LinearNode.compute_error(node_state, node_info)
-        node_state = LinearNode.energy_functional(node_state, node_info)
+        # Compare forward_inference results
+        state_linear, grads_linear = LinearNode.forward_inference(params, inputs, node_state, node_info)
+        state_autograd, grads_autograd = LinearAutoGradNode.forward_inference(params, inputs, node_state, node_info)
 
-        # Compare gradients
-        grads_linear = LinearNode.compute_gradient(params, inputs, node_state, node_info, structure)
-        grads_autograd = LinearAutoGradNode.compute_gradient(params, inputs, node_state, node_info, structure)
+        # Compare input gradients
+        for edge_key in grads_linear:
+            max_diff = jnp.max(jnp.abs(grads_linear[edge_key] - grads_autograd[edge_key]))
+            assert max_diff < grad_tolerance, \
+                f"Input gradient mismatch for activation={activation}, edge={edge_key}: max diff = {max_diff}"
 
-        for node_name in grads_linear:
-            max_diff = jnp.max(jnp.abs(grads_linear[node_name] - grads_autograd[node_name]))
-            assert max_diff < 1e-5, \
-                f"Gradient mismatch for activation={activation}, node={node_name}: max diff = {max_diff}"
+        # Compare state values
+        assert jnp.allclose(state_linear.z_mu, state_autograd.z_mu, atol=grad_tolerance), \
+            f"z_mu mismatch for activation={activation}"
+        assert jnp.allclose(state_linear.error, state_autograd.error, atol=grad_tolerance), \
+            f"error mismatch for activation={activation}"
 
-    def test_gradient_equivalence_full_network(self, rng_key):
+    @pytest.mark.parametrize("activation", ["identity", "relu", "tanh", "sigmoid"])
+    def test_forward_learning_equivalence(self, rng_key, activation, grad_tolerance):
+        """Test that forward_learning produces equivalent param gradients for different activations."""
+        batch_size = 4
+        input_dim = 6
+        output_dim = 8
+
+        rngkey_weights, rngkey_inputs, rngkey_latent = jax.random.split(rng_key, 3)
+
+        edge_key = "src->dst:in"
+        params = NodeParams(
+            weights={edge_key: jax.random.normal(rngkey_weights, (input_dim, output_dim)) * 0.1},
+            biases={"b": jnp.zeros((1, output_dim))}
+        )
+        inputs = {edge_key: jax.random.normal(rngkey_inputs, (batch_size, input_dim))}
+
+        node_info = NodeInfo(
+            name="dst",
+            dim=output_dim,
+            node_type="linear",
+            activation_config={"type": activation},
+            node_config={},
+            in_degree=1,
+            out_degree=0,
+            slots={},
+            in_edges=(edge_key,),
+            out_edges=(),
+        )
+
+        # Create initial node state with random latent
+        z_latent = jax.random.normal(rngkey_latent, (batch_size, output_dim))
+        node_state = NodeState(
+            z_latent=z_latent,
+            latent_grad=jnp.zeros((batch_size, output_dim)),
+            z_mu=jnp.zeros((batch_size, output_dim)),
+            error=jnp.zeros((batch_size, output_dim)),
+            energy=jnp.zeros((batch_size,)),
+            pre_activation=jnp.zeros((batch_size, output_dim)),
+            gain_mod_error=jnp.zeros((batch_size, output_dim)),
+            substructure={},
+        )
+
+        # Compare forward_learning results
+        state_linear, grads_linear = LinearNode.forward_learning(params, inputs, node_state, node_info)
+        state_autograd, grads_autograd = LinearAutoGradNode.forward_learning(params, inputs, node_state, node_info)
+
+        # Compare weight gradients
+        for edge_key in grads_linear.weights:
+            max_diff = jnp.max(jnp.abs(grads_linear.weights[edge_key] - grads_autograd.weights[edge_key]))
+            assert max_diff < grad_tolerance, \
+                f"Weight gradient mismatch for activation={activation}, edge={edge_key}: max diff = {max_diff}"
+
+        # Compare bias gradients
+        for bias_key in grads_linear.biases:
+            max_diff = jnp.max(jnp.abs(grads_linear.biases[bias_key] - grads_autograd.biases[bias_key]))
+            assert max_diff < grad_tolerance, \
+                f"Bias gradient mismatch for activation={activation}, bias={bias_key}: max diff = {max_diff}"
+
+    def test_gradient_equivalence_full_network(self, rng_key, grad_tolerance):
         """Test gradient equivalence across a full network with inference."""
         batch_size = 8
 
@@ -173,47 +215,37 @@ class TestLinearAutoGradNode:
             structure_autograd, batch_size, rngkey_state, clamps=clamps, params=params_autograd
         )
 
-        # Compute projections
-        state_linear = compute_all_projections(params_linear, state_linear, structure_linear)
-        state_autograd = compute_all_projections(params_autograd, state_autograd, structure_autograd)
+        # Run inference
+        state_linear = run_inference(params_linear, state_linear, clamps, structure_linear, infer_steps=5, eta_infer=0.1)
+        state_autograd = run_inference(params_autograd, state_autograd, clamps, structure_autograd, infer_steps=5, eta_infer=0.1)
 
-        # Compute errors
-        state_linear = compute_errors(state_linear, structure_linear)
-        state_autograd = compute_errors(state_autograd, structure_autograd)
-
-        # Compare gradients for each non-input node
+        # Compare gradients for each non-input node using forward_inference
         for node_name in ["hidden", "output"]:
             node_info = structure_linear.nodes[node_name]
-            node_state_linear = state_linear.nodes[node_name]
-            node_state_autograd = state_autograd.nodes[node_name]
 
             # Gather inputs for gradient computation
-            inputs = {}
-            for edge_key in node_info.in_edges:
-                source_name = structure_linear.edges[edge_key].source
-                inputs[edge_key] = state_linear.nodes[source_name].z_latent
+            inputs = gather_inputs(node_info, structure_linear, state_linear)
 
-            # Compute gradients
-            grads_linear = LinearNode.compute_gradient(
+            # Compute input gradients using forward_inference
+            _, grads_linear = LinearNode.forward_inference(
                 params_linear.nodes[node_name],
                 inputs,
-                node_state_linear,
-                node_info,
-                structure_linear
+                state_linear.nodes[node_name],
+                node_info
             )
-            grads_autograd = LinearAutoGradNode.compute_gradient(
+            _, grads_autograd = LinearAutoGradNode.forward_inference(
                 params_autograd.nodes[node_name],
                 inputs,
-                node_state_autograd,
-                node_info,
-                structure_autograd
+                state_autograd.nodes[node_name],
+                node_info
             )
 
             # Compare
-            for grad_node in grads_linear:
-                max_diff = jnp.max(jnp.abs(grads_linear[grad_node] - grads_autograd[grad_node]))
-                assert max_diff < 1e-5, \
-                    f"Gradient mismatch at {node_name} for {grad_node}: max diff = {max_diff}"
+            for edge_key in grads_linear:
+                max_diff = jnp.max(jnp.abs(grads_linear[edge_key] - grads_autograd[edge_key]))
+                assert max_diff < grad_tolerance, \
+                    f"Input gradient mismatch at {node_name} for {edge_key}: max diff = {max_diff}"
+
 
 class TestLinearAutoGradNodeRegistration:
     """Test that LinearAutoGradNode is properly registered."""

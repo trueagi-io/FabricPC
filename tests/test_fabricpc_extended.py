@@ -297,12 +297,12 @@ class TestComplexGraphs:
 
         # Verify convergence
         initial_energy = sum(
-            jnp.sum(state.nodes[name].error ** 2)
+            jnp.sum(state.nodes[name].energy)
             for name in structure.nodes
             if structure.nodes[name].in_degree > 0
         )
         final_energy = sum(
-            jnp.sum(final_state.nodes[name].error ** 2)
+            jnp.sum(final_state.nodes[name].energy)
             for name in structure.nodes
             if structure.nodes[name].in_degree > 0
         )
@@ -376,7 +376,7 @@ class TestEnergyDynamics:
                 params, current_state, clamps, structure, infer_steps=1, eta_infer=0.1
             )
             energy = sum(
-                jnp.sum(current_state.nodes[name].error ** 2)
+                jnp.sum(current_state.nodes[name].energy)
                 for name in structure.nodes
                 if structure.nodes[name].in_degree > 0
             )

@@ -50,7 +50,7 @@ def compute_local_weight_gradients(
         node_class = get_node_class_from_type(node_info.node_type)
 
         # Compute local gradients using node's method
-        grad_params = node_class.compute_params_gradient(
+        node_state, grad_params = node_class.forward_learning(
             params.nodes[node_name],
             in_edges_data,
             final_state.nodes[node_name],
@@ -118,8 +118,8 @@ def train_step(
         params, init_state, clamps, structure, infer_steps, eta_infer
     )
 
-    # Compute energy (sum of squared errors)
-    energy = sum([final_state.nodes[node_name].energy for node_name in structure.nodes if
+    # Compute energy (ignore source nodes)
+    energy = sum([sum(final_state.nodes[node_name].energy) for node_name in structure.nodes if
                   structure.nodes[node_name].in_degree > 0])
 
     loss = energy
@@ -250,6 +250,73 @@ def train_pcn(
     return params, iter_results, epoch_results
 
 
+def eval_step(
+    params: GraphParams,
+    batch: Dict[str, jnp.ndarray],
+    structure: GraphStructure,
+    rng_key: jax.Array,
+    infer_steps: int,
+    eta_infer: float,
+) -> Tuple[float, int, int]:
+    """
+    Single evaluation step (JIT-compilable).
+
+    Args:
+        params: Model parameters
+        batch: Batch data with 'x' and 'y' keys
+        structure: Graph structure
+        rng_key: Random key for initialization
+        infer_steps: Number of inference steps
+        eta_infer: Inference learning rate
+
+    Returns:
+        Tuple of (loss, correct, batch_size)
+    """
+    from fabricpc.graph.graph_net import initialize_state
+
+    batch_size = batch["x"].shape[0]
+
+    # Map batch to clamps (only clamp input during eval)
+    clamps = {}
+    if "x" in structure.task_map:
+        x_node = structure.task_map["x"]
+        clamps[x_node] = batch["x"]
+
+    # Initialize and run inference
+    state = initialize_state(
+        structure, batch_size, rng_key, clamps=clamps, params=params
+    )
+    final_state = run_inference(
+        params, state, clamps, structure, infer_steps, eta_infer
+    )
+
+    # Compute energy from all non-source nodes
+    energy = jnp.array(0.0)
+    for node_name in structure.nodes:
+        if structure.nodes[node_name].in_degree > 0:
+            energy = energy + jnp.sum(final_state.nodes[node_name].energy)
+
+    # Add prediction error for label node
+    if "y" in structure.task_map:
+        y_node = structure.task_map["y"]
+        node_state = final_state.nodes[y_node]
+        error = node_state.z_latent - batch["y"]
+        energy = energy + jnp.sum(error ** 2)
+
+    loss = energy / batch_size
+
+    # Compute accuracy
+    correct = 0
+    if "y" in structure.task_map:
+        y_node = structure.task_map["y"]
+        predictions = final_state.nodes[y_node].z_latent
+        pred_labels = jnp.argmax(predictions, axis=1)
+        true_labels = jnp.argmax(batch["y"], axis=1)
+        correct = jnp.sum(pred_labels == true_labels)
+
+    return loss, correct, batch_size
+
+
 def evaluate_pcn(
     params: GraphParams,
     structure: GraphStructure,
@@ -272,10 +339,13 @@ def evaluate_pcn(
     Returns:
         Dictionary of evaluation metrics (e.g., accuracy, loss)
     """
-    from fabricpc.graph.graph_net import initialize_state
-
     infer_steps = config.get("infer_steps", 20)
     eta_infer = config.get("eta_infer", 0.1)
+
+    # Create JIT-compiled eval step
+    jit_eval_step = jax.jit(
+        lambda p, b, k: eval_step(p, b, structure, k, infer_steps, eta_infer)
+    )
 
     # Estimate number of batches
     try:
@@ -299,56 +369,12 @@ def evaluate_pcn(
         else:
             raise ValueError(f"Unsupported batch format: {type(batch_data)}")
 
-        batch_size = next(iter(batch.values())).shape[0]
+        # Run JIT-compiled eval step
+        loss, correct, batch_size = jit_eval_step(params, batch, batch_keys[batch_idx])
 
-        # Map batch to clamps (only clamp input during eval)
-        clamps = {}
-        if "x" in structure.task_map:
-            x_node = structure.task_map["x"]
-            clamps[x_node] = batch["x"]
-
-        # Initialize and run inference with unique rng_key
-        state = initialize_state(
-            structure, batch_size, batch_keys[batch_idx], clamps=clamps, params=params
-        )
-        final_state = run_inference(
-            params, state, clamps, structure, infer_steps, eta_infer
-        )
-
-        # Get the label for energy evaluation
-        labels = {}
-        if "y" in structure.task_map:
-            y_node = structure.task_map["y"]
-            labels[y_node] = batch["y"]
-
-        # Compute energy
-        energy = sum([final_state.nodes[node_name].energy for node_name in structure.nodes if
-                      structure.nodes[node_name].in_degree > 0])
-
-        # Add the energy from the label node if applicable
-        for node_name, label in labels.items():
-            node_state = final_state.nodes[node_name]
-            error = node_state.z_latent - label
-            energy += jnp.sum(error ** 2)  # TODO: use node's energy functional
-
-        loss = energy / batch_size
-
-        # Compute loss
-        total_loss += float(loss) * batch_size
-
-        # Compute accuracy (if applicable)
-        if "y" in structure.task_map:
-            y_node = structure.task_map["y"]
-            predictions = final_state.nodes[y_node].z_latent
-            targets = batch["y"]
-
-            # Assume classification: argmax predictions
-            pred_labels = jnp.argmax(predictions, axis=1)
-            true_labels = jnp.argmax(targets, axis=1)
-            correct = jnp.sum(pred_labels == true_labels)
-
-            total_correct += int(correct)
-            total_samples += batch_size
+        total_loss += float(loss) * int(batch_size)
+        total_correct += int(correct)
+        total_samples += int(batch_size)
 
     avg_loss = total_loss / total_samples if total_samples > 0 else 0.0
     accuracy = total_correct / total_samples if total_samples > 0 else 0.0

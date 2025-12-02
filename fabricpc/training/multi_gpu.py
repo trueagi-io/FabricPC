@@ -145,10 +145,10 @@ def train_step_pmap(
         )
 
         # Compute energy
-        energy = 0.0
+        energy = jnp.array(0.0)
         for node_name, node_info in structure.nodes.items():
             if node_info.in_degree > 0:
-                energy += final_state.nodes[node_name].energy
+                energy += jnp.sum(final_state.nodes[node_name].energy)
 
         energy = energy / batch_size
 
