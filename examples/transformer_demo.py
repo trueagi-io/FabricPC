@@ -12,7 +12,7 @@ This demo:
 
 Expected runtime: ~5-10 minutes on a consumer GPU (RTX 3080/4080 class)
 
-Training is still buggy and needs more tuning - treat this as a starting point!
+Training needs tuning, eval metrics, and AIM tensor board - treat this as a starting point!
 """
 
 import os
@@ -29,6 +29,7 @@ from typing import Tuple, Iterator, Dict, List
 
 from fabricpc.graph import create_pc_graph
 from fabricpc.training.train_autoregressive import train_autoregressive, generate_autoregressive
+from fabricpc.training.train_backprop import train_backprop_autoregressive
 
 # Reproducibility
 jax.config.update('jax_default_prng_impl', 'threefry2x32')
@@ -196,7 +197,7 @@ def create_transformer_config(
             "type": "transformer_block",
             "num_heads": num_heads,
             "ff_dim": ff_dim,
-            "activation": {"type": "gelu"},  # gelu vs sigmoid?
+            "internal_activation": {"type": "gelu"},
         })
         edge_list.append({"source_name": prev_name, "target_name": block_name, "slot": "in"})  # wire one block to the next
         edge_list.append({"source_name": "mask", "target_name": block_name, "slot": "mask"})  # wire mask to the block
@@ -208,7 +209,7 @@ def create_transformer_config(
         "shape": (seq_len, vocab_size),
         "type": "linear",
         "activation": {"type": "softmax"},
-        "energy": {"type": "gaussian"},
+        "energy": {"type": "cross_entropy"},
         "weight_init": {"type": "kaiming", "mode": "fan_out"},
     })
     edge_list.append({"source_name": prev_name, "target_name": "output", "slot": "in"})
@@ -232,8 +233,8 @@ def generate_text(
     max_new_tokens: int = 100,
     rng_key: jax.Array = None,
     temperature: float = 0.8,
-    infer_steps: int = 20,
-    eta_infer: float = 0.1,
+    infer_steps: int = 30,
+    eta_infer: float = 0.01,
     top_k: int = None,
     top_p: float = None,
 ) -> List[str]:
@@ -313,23 +314,27 @@ def generate_text(
 # MAIN EXPERIMENT
 # ==============================================================================
 
+
 def main():
     print("=" * 70)
     print("Transformer Predictive Coding Demo")
     print("Character-level language modeling on TinyShakespeare")
     print("=" * 70)
 
+    # Choose training mode (PC or backprop)
+    use_pcn = True  # Set to True to use predictive coding training
+
     # Configuration
-    SEQ_LEN = 64        # Sequence length
-    EMBED_DIM = 16     # Embedding dimension
+    SEQ_LEN = 128        # Sequence length
+    EMBED_DIM = 64     # Embedding dimension
     NUM_HEADS = 8       # Attention heads
-    NUM_BLOCKS = 1      # Transformer blocks
-    FF_DIM = 64        # Feedforward hidden dimension
+    NUM_BLOCKS = 3      # Transformer blocks
+    FF_DIM = 256        # Feedforward hidden dimension
     BATCH_SIZE = 128     # Batch size
-    NUM_EPOCHS = 5      # Training epochs
-    INFER_STEPS = 10    # Inference iterations per step
+    NUM_EPOCHS = 10      # Training epochs
+    INFER_STEPS = 20    # Inference iterations per step
     ETA_INFER = 0.05    # Inference learning rate
-    LR = 1e-3           # Weight learning rate
+    LR = 1e-5           # Weight learning rate
 
     # Random keys
     master_key = jax.random.PRNGKey(42)
@@ -379,14 +384,26 @@ def main():
     print(f"Config: {NUM_EPOCHS} epochs, {INFER_STEPS} inference steps, lr={LR}")
 
     start_time = time.time()
-    trained_params, energy_history, _ = train_autoregressive(
-        params=params,
-        structure=structure,
-        train_loader=train_loader,
-        config=train_config,
-        rng_key=train_key,
-        verbose=True,
-    )
+
+    ### Choose one of the training methods below
+    if use_pcn:
+        # Train with predictive coding (autoregressive)
+        trained_params, energy_history, _ = train_autoregressive(
+            params=params,
+            structure=structure,
+            train_loader=train_loader,
+            config=train_config,
+            rng_key=train_key,
+            verbose=True,
+        )
+    else:
+        # Backprop (autoregressive)
+        trained_params, energy_history, _ = train_backprop_autoregressive(
+            params, structure, train_loader,
+            {"num_epochs": NUM_EPOCHS, "optimizer": {"type": "adam", "lr": 1e-3}, "use_causal_mask": True},
+            train_key
+        )
+
     train_time = time.time() - start_time
 
     print(f"\nTraining completed in {train_time:.1f}s ({train_time/NUM_EPOCHS:.1f}s per epoch)")

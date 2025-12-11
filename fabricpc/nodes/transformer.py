@@ -118,7 +118,7 @@ class TransformerBlockNode(NodeBase):
         "name": "transformer_block_1",
         "shape": (128, 512),  # (seq_len, embed_dim)
         "type": "transformer_block",
-        "activation": {"type": "gelu"},
+        "internal_activation": {"type": "gelu"},
         # Transformer-specific config:
         "num_heads": 8,
         "ff_dim": 2048,
@@ -137,6 +137,11 @@ class TransformerBlockNode(NodeBase):
             "type": int,
             "default": None,  # Will be computed as 4 * embed_dim if not specified
             "description": "Feedforward hidden dimension (defaults to 4 * embed_dim)"
+        },
+        "internal_activation": {
+            "type": dict,
+            "default": {"type": "gelu"},
+            "description": "Internal activation function for the feedforward network"
         },
         "dropout_rate": {
             "type": float,
@@ -166,7 +171,7 @@ class TransformerBlockNode(NodeBase):
     }
 
     DEFAULT_ENERGY_CONFIG = {"type": "gaussian"}
-    DEFAULT_ACTIVATION_CONFIG = {"type": "gelu"}
+    DEFAULT_ACTIVATION_CONFIG = {"type": "identity"}  # Identity at output of node; internal activations handled in "internal_activation"
 
     @staticmethod
     def get_slots():
@@ -244,7 +249,7 @@ class TransformerBlockNode(NodeBase):
         # Find mask input key if provided
         mask_edge_key = next((k for k in inputs.keys() if k.endswith(":mask")), None)
         mask = inputs[mask_edge_key] if mask_edge_key else None
-        activation_fn, _ = get_activation(config["activation"])
+        activation_fn, _ = get_activation(config["internal_activation"])
 
         # LayerNorm 1
         x_norm1 = TransformerBlockNode._layernorm(

@@ -14,16 +14,35 @@ from fabricpc.training.data_utils import (
     OneHotWrapper,
     # TODO: jax data loaders)
 )
+from fabricpc.training.train_backprop import (
+    compute_loss,
+    train_step_backprop,
+    train_backprop,
+    compute_loss_autoregressive,
+    train_step_backprop_autoregressive,
+    train_backprop_autoregressive,
+    evaluate_backprop,
+)
 
 
 __all__ = [
+    # Predictive coding training
     "train_step",
     "train_pcn",
     "evaluate_pcn",
     "compute_local_weight_gradients",
     "create_optimizer",
+    # Multi-GPU
     "train_pcn_multi_gpu",
     "evaluate_pcn_multi_gpu",
     "replicate_params",
     "shard_batch",
+    # Backprop training
+    "compute_loss",
+    "train_step_backprop",
+    "train_backprop",
+    "compute_loss_autoregressive",
+    "train_step_backprop_autoregressive",
+    "train_backprop_autoregressive",
+    "evaluate_backprop",
 ]
