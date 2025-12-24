@@ -181,7 +181,7 @@ class LinearNode(FlattenInputMixin, NodeBase):
 
         if node_info.in_degree == 0:
             # Source nodes: no inputs
-            z_mu = state.z_latent  # prediction is the latent state itself
+            z_mu = state.z_latent.copy()  # prediction is the latent state itself
             pre_activation = jnp.zeros_like(state.z_latent)
             error = jnp.zeros_like(state.z_latent)
         else:

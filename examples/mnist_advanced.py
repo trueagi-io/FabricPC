@@ -88,10 +88,7 @@ config = {
     "task_map": {"x": "pixels", "y": "class"},
 
     # Graph-level state initialization (feedforward with normal fallback)
-    "graph_state_initializer": {
-        "type": "feedforward",
-        "fallback": {"type": "normal", "mean": 0.0, "std": 0.05}
-    },
+    "graph_state_initializer": {"type": "feedforward"},
 }
 
 # More sophisticated training configuration
@@ -189,23 +186,23 @@ all_rng_keys = all_rng_keys.reshape((num_epochs, num_batches, 2))
 
 for epoch in range(num_epochs):
     epoch_start = time.time()
-    epoch_losses = []
+    epoch_energies = []
 
     for batch_idx, (x, y) in enumerate(train_loader):
         batch = {"x": jnp.array(x), "y": y}
 
         # Training step with unique rng_key
-        params, opt_state, loss, _ = jit_train_step(params, opt_state, batch, all_rng_keys[epoch, batch_idx])
-        epoch_losses.append(float(loss))
+        params, opt_state, energy, _ = jit_train_step(params, opt_state, batch, all_rng_keys[epoch, batch_idx])
+        epoch_energies.append(float(energy))
 
         # Progress indicator every n_batch_update batches
         n_batch_update = 100
         if (batch_idx + 1) % n_batch_update == 0:
-            avg_loss = sum(epoch_losses[-n_batch_update:]) / len(epoch_losses[-n_batch_update:])
-            print(f"  Epoch {epoch+1}/{num_epochs}, Batch {batch_idx+1}/{len(train_loader)}, Loss: {avg_loss:.4f}")
+            avg_energy = sum(epoch_energies[-n_batch_update:]) / len(epoch_energies[-n_batch_update:])
+            print(f"  Epoch {epoch+1}/{num_epochs}, Batch {batch_idx+1}/{len(train_loader)}, energy: {avg_energy:.4f}")
 
     epoch_time = time.time() - epoch_start
-    avg_loss = sum(epoch_losses) / len(epoch_losses)
+    avg_energy = sum(epoch_energies) / len(epoch_energies)
 
     # Evaluate on test set with unique eval key for this epoch
     epoch_eval_key, eval_key = jax.random.split(eval_key)
@@ -218,11 +215,11 @@ for epoch in range(num_epochs):
         best_params = params
         print(f"  ★ New best accuracy: {accuracy:.2f}%")
 
-    print(f"  Epoch {epoch+1}/{num_epochs} - Loss: {avg_loss:.4f}, Accuracy: {accuracy:.2f}%, Time: {epoch_time:.1f}s")
+    print(f"  Epoch {epoch+1}/{num_epochs} - energy: {avg_energy:.4f}, Accuracy: {accuracy:.2f}%, Time: {epoch_time:.1f}s")
 
     training_history.append({
         'epoch': epoch + 1,
-        'loss': avg_loss,
+        'energy': avg_energy,
         'accuracy': accuracy,
         'time': epoch_time
     })
@@ -238,10 +235,10 @@ print(f"  Total training time: {sum(h['time'] for h in training_history):.1f}s")
 
 # Print training history
 print(f"\n[Training History]")
-print("  Epoch | Loss    | Accuracy | Time")
+print("  Epoch | Energy    | Accuracy | Time")
 print("  ------|---------|----------|------")
 for h in training_history:
-    print(f"  {h['epoch']:5d} | {h['loss']:7.4f} | {h['accuracy']:7.2f}% | {h['time']:4.1f}s")
+    print(f"  {h['epoch']:5d} | {h['energy']:7.4f} | {h['accuracy']:7.2f}% | {h['time']:4.1f}s")
 
 print("\n" + "="*70)
 print("Advanced Training Complete!")

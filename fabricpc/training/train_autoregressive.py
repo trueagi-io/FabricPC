@@ -35,50 +35,40 @@ def create_causal_mask(seq_len: int) -> jnp.ndarray:
     """
     return jnp.tril(jnp.ones((seq_len, seq_len)))
 
-
-def compute_autoregressive_energy(
-    final_state: GraphState,
-    structure: GraphStructure,
-    targets: jnp.ndarray,
-    output_node: str,
-    loss_type: str = "cross_entropy",
+def compute_loss(
+        final_state: GraphState,
+        targets: jnp.ndarray,
+        output_node: str,
+        loss_type: str = "cross_entropy",
 ) -> jnp.ndarray:
     """
-    Compute autoregressive prediction loss.
+    Compute differentiable loss
 
     Args:
-        final_state: Converged state after inference
-        structure: Graph structure
-        targets: Target tokens, shape (batch, seq_len) or (batch, seq_len, vocab_size)
+        final_state: Final graph state after forward pass
+        targets: Target values for output node, expects one-hot for cross-entropy
         output_node: Name of the output node
-        loss_type: "cross_entropy" or "mse"
+        loss_type: Loss function type: "cross_entropy" or "mse"
 
     Returns:
-        Scalar loss value
+        Scalar loss value (mean over batch)
     """
-    predictions = final_state.nodes[output_node].z_latent  # (batch, seq_len, vocab_size)
 
+    # Get prediction from output node
+    predictions = final_state.nodes[output_node].z_mu
+
+    # Compute loss
     if loss_type == "cross_entropy":
-        # Targets should be one-hot or indices
-        if targets.ndim == 2:
-            # Convert indices to one-hot
-            vocab_size = predictions.shape[-1]
-            targets = jax.nn.one_hot(targets, vocab_size)
-
-        # Cross-entropy loss: -sum(target * log(pred))
-        # Add small epsilon for numerical stability
         log_preds = jnp.log(predictions + 1e-10)
-        loss = -jnp.sum(targets * log_preds) / targets.shape[0]
+        loss = -jnp.mean(jnp.sum(targets * log_preds, axis=-1))
 
     elif loss_type == "mse":
-        # Mean squared error
         loss = jnp.mean((predictions - targets) ** 2)
 
     else:
         raise ValueError(f"Unknown loss_type: {loss_type}")
 
     return loss
-
 
 def compute_local_weight_gradients_ar(
     params: GraphParams,
@@ -132,7 +122,7 @@ def train_step_autoregressive(
     infer_steps: int,
     eta_infer: float = 0.1,
     use_causal_mask: bool = True,
-) -> Tuple[GraphParams, optax.OptState, float, GraphState]:
+) -> Tuple[GraphParams, optax.OptState, float, float, GraphState]:
     """
     Single autoregressive training step.
 
@@ -158,7 +148,7 @@ def train_step_autoregressive(
         use_causal_mask: Whether to apply causal masking
 
     Returns:
-        Tuple of (updated_params, updated_opt_state, loss, final_state)
+        Tuple of (updated_params, updated_opt_state, avg_energy, output_ce_loss, final_state)
     """
     batch_size = batch["x"].shape[0]
     seq_len = batch["x"].shape[1]
@@ -171,7 +161,9 @@ def train_step_autoregressive(
             clamps[node_name] = task_value
 
     # Generate and clamp causal mask if enabled and configured in task_map
-    if use_causal_mask and "causal_mask" in structure.task_map:
+    if use_causal_mask:
+        if "causal_mask" not in structure.task_map:
+            raise ValueError("Causal masking enabled but 'causal_mask' not in task_map")
         # Create causal mask: (seq_len, seq_len) where mask[i,j] = 1 if j <= i
         causal_mask = create_causal_mask(seq_len)
         # Broadcast to (batch, 1, seq_len, seq_len) for attention scores
@@ -184,7 +176,10 @@ def train_step_autoregressive(
 
     # Initialize state
     init_state = initialize_graph_state(
-        structure, batch_size, rng_key, clamps=clamps, params=params
+        structure, batch_size, rng_key,
+        clamps=clamps,
+        state_init_config=structure.config["graph_state_initializer"],
+        params=params
     )
 
     # Run inference
@@ -192,13 +187,18 @@ def train_step_autoregressive(
         params, init_state, clamps, structure, infer_steps, eta_infer
     )
 
-    # Compute energy (sum over non-source nodes)
+    # Compute total energy (sum over non-source nodes)
     energy = jnp.array(0.0)
     for node_name, node_info in structure.nodes.items():
         if node_info.in_degree > 0:
             energy = energy + jnp.sum(final_state.nodes[node_name].energy)
 
-    loss = energy / batch_size
+    avg_energy = energy / batch_size
+
+    # Compute output cross-entropy loss for perplexity
+    output_ce_loss = compute_loss(
+        final_state, batch["y"], structure.task_map["y"], loss_type="cross_entropy"
+    )
 
     # Compute local gradients
     grads = compute_local_weight_gradients_ar(params, final_state, structure)
@@ -207,7 +207,7 @@ def train_step_autoregressive(
     updates, opt_state = optimizer.update(grads, opt_state, params)
     params = cast(GraphParams, optax.apply_updates(params, updates))
 
-    return params, opt_state, loss.astype(float), final_state
+    return params, opt_state, avg_energy.astype(float), output_ce_loss.astype(float), final_state
 
 
 def train_autoregressive(
@@ -276,7 +276,8 @@ def train_autoregressive(
         batch_keys = jax.random.split(epoch_rng_key, num_batches)
 
         batch_energies = []
-        epoch_loss = 0.0
+        epoch_energy = 0.0
+        epoch_ce_loss = 0.0
 
         for batch_idx, batch_data in enumerate(train_loader):
             # Convert batch to JAX format
@@ -291,19 +292,21 @@ def train_autoregressive(
                 raise ValueError(f"Unsupported batch format: {type(batch_data)}")
 
             # Training step
-            params, opt_state, loss, _ = jit_train_step(
+            params, opt_state, energy, ce_loss, _ = jit_train_step(
                 params, opt_state, batch, batch_keys[batch_idx]
             )
 
-            epoch_loss += loss
+            epoch_energy += energy
+            epoch_ce_loss += ce_loss
 
             if iter_callback is not None:
-                batch_energies.append(iter_callback(epoch_idx, batch_idx, loss))
+                batch_energies.append(iter_callback(epoch_idx, batch_idx, energy))
             else:
-                batch_energies.append(loss)
+                batch_energies.append(energy)
 
         iter_results.append(batch_energies)
-        avg_loss = epoch_loss / num_batches
+        avg_energy = epoch_energy / num_batches
+        avg_ce_loss = epoch_ce_loss / num_batches
 
         # Epoch callback
         if epoch_callback is not None:
@@ -314,7 +317,8 @@ def train_autoregressive(
             epoch_results.append(None)
 
         if verbose:
-            print(f"Epoch {epoch_idx + 1}/{num_epochs}, Loss: {avg_loss:.4f}")
+            perplexity = float(jnp.exp(avg_ce_loss))
+            print(f"Train Epoch {epoch_idx + 1}/{num_epochs}, Energy: {avg_energy:.4f}, Loss: {avg_ce_loss:.4f}, Perplexity: {perplexity:.2f}")
 
     return params, iter_results, epoch_results
 
@@ -363,11 +367,15 @@ def _generation_step(
 
     # Initialize and run inference
     state = initialize_graph_state(
-        structure, batch_size, init_key, clamps=clamps, params=params
+        structure, batch_size, init_key,
+        clamps=clamps,
+        state_init_config=structure.config["graph_state_initializer"],
+        params=params
     )
-    final_state = run_inference(
-        params, state, clamps, structure, infer_steps, eta_infer
-    )
+    if infer_steps > 0:
+        final_state = run_inference(params, state, clamps, structure, infer_steps, eta_infer)
+    else:
+        final_state = state
 
     # Get output for the last position
     # z_mu contains the predicted output after activation (softmax for output node)
@@ -530,6 +538,61 @@ def generate_autoregressive(
 
     return result
 
+def _eval_step_autoregressive(
+    params: GraphParams,
+    structure: GraphStructure,
+    batch: Dict[str, jnp.ndarray],
+    rng_key: jax.Array,
+    infer_steps: int,
+    eta_infer: float,
+    use_causal_mask: bool,
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """
+    Single evaluation step for autoregressive model (JIT-compilable).
+
+    Args:
+        params: Model parameters
+        structure: Graph structure
+        batch: Batch with 'x' and 'y'
+        rng_key: Random key
+        infer_steps: Number of inference steps
+        eta_infer: Inference learning rate
+        use_causal_mask: Whether to use causal masking
+
+    Returns:
+        Tuple of (loss, predictions)
+    """
+    batch_size = batch["x"].shape[0]
+    seq_len = batch["x"].shape[1]
+
+    # Create clamps (input only for evaluation)
+    clamps = {structure.task_map["x"]: batch["x"]}
+
+    # Add causal mask if enabled
+    if use_causal_mask:
+        causal_mask = create_causal_mask(seq_len)
+        causal_mask = causal_mask[None, None, :, :]
+        causal_mask = jnp.broadcast_to(causal_mask, (batch_size, 1, seq_len, seq_len))
+        clamps[structure.task_map["causal_mask"]] = causal_mask
+
+    # Initialize and run inference
+    state = initialize_graph_state(
+        structure, batch_size, rng_key,
+        clamps=clamps,
+        state_init_config=structure.config["graph_state_initializer"],
+        params=params
+    )
+    if infer_steps > 0:
+        final_state = run_inference(params, state, clamps, structure, infer_steps, eta_infer)
+    else:
+        final_state = state
+
+    # Compute loss and get predictions
+    output_node = structure.task_map["y"]
+    loss = compute_loss(final_state, batch["y"], output_node, loss_type="cross_entropy")
+    predictions = final_state.nodes[output_node].z_mu
+
+    return loss, predictions
 
 def evaluate_autoregressive(
     params: GraphParams,
@@ -537,12 +600,13 @@ def evaluate_autoregressive(
     test_loader: Any,
     config: dict,
     rng_key: jax.Array,
+    debug: bool = False,
 ) -> Dict[str, float]:
     """
     Evaluate autoregressive model on test data.
 
     Computes:
-    - Average loss (energy)
+    - Average loss (cross-entropy)
     - Perplexity (if cross-entropy loss)
     - Accuracy (next-token prediction)
 
@@ -550,30 +614,42 @@ def evaluate_autoregressive(
         params: Trained parameters
         structure: Graph structure
         test_loader: Test data loader
-        config: Evaluation config (infer_steps, eta_infer)
+        config: Evaluation config (infer_steps, eta_infer, use_causal_mask)
         rng_key: Random key
+        debug: If True, print detailed diagnostics for first batch
 
     Returns:
         Dictionary of metrics
     """
-    infer_steps = config.get("infer_steps", 20)
-    eta_infer = config.get("eta_infer", 0.1)
+    infer_steps = config["infer_steps"]
+    eta_infer = config["eta_infer"]
+    use_causal_mask = config["use_causal_mask"]
 
     output_node = structure.task_map.get("y")
     if output_node is None:
         raise ValueError("Structure must have 'y' in task_map")
 
-    total_loss = 0.0
-    total_correct = 0
-    total_tokens = 0
-    num_batches = 0
+    if use_causal_mask and "causal_mask" not in structure.task_map:
+        raise ValueError("Causal masking enabled but 'causal_mask' not in task_map")
 
     try:
         num_batches_total = len(test_loader)
     except TypeError:
-        num_batches_total = 1000
+        raise TypeError("test_loader must support len()")
 
     batch_keys = jax.random.split(rng_key, num_batches_total)
+
+    # JIT compile the evaluation step
+    jit_eval_step = jax.jit(
+        lambda p, b, k: _eval_step_autoregressive(
+            p, structure, b, k, infer_steps, eta_infer, use_causal_mask
+        )
+    )
+
+    total_loss = 0.0
+    total_correct = 0
+    total_tokens = 0
+    num_batches = 0
 
     for batch_idx, batch_data in enumerate(test_loader):
         # Convert batch
@@ -586,37 +662,30 @@ def evaluate_autoregressive(
 
         batch_size = batch["x"].shape[0]
 
-        # Create clamps (input only for evaluation)
-        clamps = {}
-        if "x" in structure.task_map:
-            clamps[structure.task_map["x"]] = batch["x"]
+        # Run JIT-compiled evaluation step
+        loss, predictions = jit_eval_step(params, batch, batch_keys[batch_idx])
+        total_loss += float(loss)
 
-        # Initialize and run inference
-        state = initialize_graph_state(
-            structure, batch_size, batch_keys[batch_idx],
-            clamps=clamps, params=params
-        )
-        final_state = run_inference(
-            params, state, clamps, structure, infer_steps, eta_infer
-        )
+        # Debug diagnostics for first batch
+        if debug and batch_idx == 0:
+            tgt = batch["y"]  # (batch, seq_len, vocab_size) one-hot
 
-        # Get predictions
-        predictions = final_state.nodes[output_node].z_latent
+            # Check individual loss components
+            log_preds = jnp.log(predictions + 1e-10)
+            per_token_loss = -jnp.sum(tgt * log_preds, axis=-1)  # (batch, seq_len)
+            print(f"  [DEBUG] per-token CE loss: min={float(jnp.min(per_token_loss)):.4f}, max={float(jnp.max(per_token_loss)):.4f}, mean={float(jnp.mean(per_token_loss)):.4f}")
+
+            token_intrinsic_perplexity = jnp.exp(-jnp.sum(predictions * log_preds, axis=-1))  # (batch, seq_len)
+            print(f"  [DEBUG] per-token intrinsic perplexity: min={float(jnp.min(token_intrinsic_perplexity)):.4f}, max={float(jnp.max(token_intrinsic_perplexity)):.4f}, mean={float(jnp.mean(token_intrinsic_perplexity)):.4f}")
+
+            # Check if there are extreme values
+            correct_probs = jnp.sum(tgt * predictions, axis=-1)  # prob assigned to correct class
+            print(f"  [DEBUG] prob of correct token: min={float(jnp.min(correct_probs)):.6f}, max={float(jnp.max(correct_probs)):.6f}, mean={float(jnp.mean(correct_probs)):.6f}")
+
+            print(f"  [DEBUG] batch loss: {float(loss):.4f}")
+
+        # Compute accuracy
         targets = batch["y"]
-
-        # Compute loss
-        if targets.ndim == 2:
-            vocab_size = predictions.shape[-1]
-            targets_onehot = jax.nn.one_hot(targets, vocab_size)
-        else:
-            targets_onehot = targets
-
-        # Cross-entropy loss
-        log_preds = jnp.log(predictions + 1e-10)
-        batch_loss = -jnp.sum(targets_onehot * log_preds)
-        total_loss += float(batch_loss)
-
-        # Accuracy
         pred_tokens = jnp.argmax(predictions, axis=-1)
         if targets.ndim == 3:
             target_tokens = jnp.argmax(targets, axis=-1)
@@ -628,7 +697,7 @@ def evaluate_autoregressive(
         total_tokens += int(batch_size * predictions.shape[1])
         num_batches += 1
 
-    avg_loss = total_loss / total_tokens if total_tokens > 0 else 0.0
+    avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
     perplexity = float(jnp.exp(avg_loss))
     accuracy = total_correct / total_tokens if total_tokens > 0 else 0.0
 
@@ -636,5 +705,5 @@ def evaluate_autoregressive(
         "loss": avg_loss,
         "perplexity": perplexity,
         "accuracy": accuracy,
-        "num_tokens": total_tokens,
+        "num_batches": num_batches,
     }

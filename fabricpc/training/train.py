@@ -93,7 +93,7 @@ def train_step(
         eta_infer: Inference learning rate
 
     Returns:
-        Tuple of (updated_params, updated_opt_state, loss, final_state)
+        Tuple of (updated_params, updated_opt_state, energy, final_state)
     """
     from fabricpc.graph.state_initializer import initialize_graph_state
 
@@ -121,8 +121,6 @@ def train_step(
     energy = sum([sum(final_state.nodes[node_name].energy) for node_name in structure.nodes if
                   structure.nodes[node_name].in_degree > 0])
 
-    loss = energy
-
     # Compute LOCAL gradients for each node
     grads = compute_local_weight_gradients(params, final_state, structure)
 
@@ -131,7 +129,7 @@ def train_step(
     params = cast(GraphParams, optax.apply_updates(params, updates))
     # Note: optax.apply_updates preserves the structure but loses type info
 
-    return params, opt_state, loss, final_state
+    return params, opt_state, energy, final_state
 
 def train_pcn(
     params: GraphParams,
@@ -160,7 +158,7 @@ def train_pcn(
         epoch_callback: Optional function called at end of each epoch:
             (epoch_idx, params, structure, config, rng_key) -> any
         iter_callback: Optional function called at end of each batch:
-            (epoch_idx, batch_idx, loss) -> any
+            (epoch_idx, batch_idx, energy) -> any
 
     Returns:
         Trained parameters
@@ -228,23 +226,23 @@ def train_pcn(
                 raise ValueError(f"unsupported batch format: {type(batch_data)}")
 
             # Training step with unique rng_key for this batch
-            params, opt_state, loss, _ = jit_train_step(params, opt_state, batch, batch_keys[batch_idx])
+            params, opt_state, energy, _ = jit_train_step(params, opt_state, batch, batch_keys[batch_idx])
 
             if iter_callback is not None:
-                batch_energies.append(iter_callback(epoch_idx, batch_idx, loss))
+                batch_energies.append(iter_callback(epoch_idx, batch_idx, energy))
             else:
-                batch_energies.append(float(loss) / next(iter(batch.values())).shape[0])  # nornalize by batch size
+                batch_energies.append(float(energy) / next(iter(batch.values())).shape[0])  # nornalize by batch size
 
         iter_results.append(batch_energies)
 
-        # Compute average loss for epoch
-        avg_loss = sum(batch_energies) / len(batch_energies) if batch_energies else 0.0
+        # Compute average energy for epoch
+        avg_energy = sum(batch_energies) / len(batch_energies) if batch_energies else 0.0
 
         # Epoch callback
         epoch_results.append(epoch_callback(epoch_idx, params, structure, config, rng_key) if epoch_callback else None)
 
         if verbose:
-            print(f"Epoch {epoch_idx + 1}/{num_epochs}, Loss: {avg_loss:.4f}")
+            print(f"Epoch {epoch_idx + 1}/{num_epochs}, energy: {avg_energy:.4f}")
 
     return params, iter_results, epoch_results
 
@@ -269,7 +267,7 @@ def eval_step(
         eta_infer: Inference learning rate
 
     Returns:
-        Tuple of (loss, correct, batch_size)
+        Tuple of (avg_energy, correct, batch_size)
     """
     from fabricpc.graph.state_initializer import initialize_graph_state
 
@@ -303,7 +301,7 @@ def eval_step(
         error = node_state.z_latent - batch["y"]
         energy = energy + jnp.sum(error ** 2)
 
-    loss = energy / batch_size
+    avg_energy = energy / batch_size
 
     # Compute accuracy
     correct = 0
@@ -314,7 +312,7 @@ def eval_step(
         true_labels = jnp.argmax(batch["y"], axis=1)
         correct = jnp.sum(pred_labels == true_labels)
 
-    return loss, correct, batch_size
+    return avg_energy, correct, batch_size
 
 
 def evaluate_pcn(
@@ -337,7 +335,7 @@ def evaluate_pcn(
         rng_key: JAX random key (will be split for each batch)
 
     Returns:
-        Dictionary of evaluation metrics (e.g., accuracy, loss)
+        Dictionary of evaluation metrics {"energy": avg_energy, "accuracy": accuracy}
     """
     infer_steps = config.get("infer_steps", 20)
     eta_infer = config.get("eta_infer", 0.1)
@@ -356,7 +354,7 @@ def evaluate_pcn(
     # Split rng_key for all batches
     batch_keys = jax.random.split(rng_key, num_batches)
 
-    total_loss = 0.0
+    total_energy = 0.0
     total_correct = 0
     total_samples = 0
 
@@ -370,13 +368,13 @@ def evaluate_pcn(
             raise ValueError(f"Unsupported batch format: {type(batch_data)}")
 
         # Run JIT-compiled eval step
-        loss, correct, batch_size = jit_eval_step(params, batch, batch_keys[batch_idx])
+        batch_energy, correct, batch_size = jit_eval_step(params, batch, batch_keys[batch_idx])
 
-        total_loss += float(loss) * int(batch_size)
+        total_energy += float(batch_energy) * int(batch_size)
         total_correct += int(correct)
         total_samples += int(batch_size)
 
-    avg_loss = total_loss / total_samples if total_samples > 0 else 0.0
+    avg_energy = total_energy / total_samples if total_samples > 0 else 0.0
     accuracy = total_correct / total_samples if total_samples > 0 else 0.0
 
-    return {"loss": avg_loss, "accuracy": accuracy}
+    return {"energy": avg_energy, "accuracy": accuracy}

@@ -151,7 +151,7 @@ class NodeBase(ABC):
     DEFAULT_ACTIVATION_CONFIG: Dict[str, Any] = {"type": "identity"}
 
     # Node-level state initialization config
-    DEFAULT_STATE_INIT: Dict[str, Any] = {"type": "normal"}
+    DEFAULT_LATENT_INIT: Dict[str, Any] = {"type": "normal"}
     
     @staticmethod
     @abstractmethod
@@ -280,7 +280,7 @@ class NodeBase(ABC):
         """
         Forward pass through the node, returning energy scalar and updated state.
         Computes:
-            forward pass -> compute error -> compute energy -> total energy
+            forward projection -> compute error & update state -> compute energy & update state -> total energy
 
         Args:
             params: Node parameters (weights, biases)
@@ -294,6 +294,42 @@ class NodeBase(ABC):
                 - NodeState: updated node state (z_mu, pre_activation, etc.)
         """
         pass
+        """ 
+        # example
+        
+        # handle source nodes
+        if node_info.in_degree == 0:
+            # Source nodes: no inputs
+            z_mu = state.z_latent.copy()  # prediction is the latent state itself
+            pre_activation = jnp.zeros_like(state.z_latent)
+            error = jnp.zeros_like(state.z_latent)
+        else:
+            pre_activation = zeros_like(state.z_latent)
+            for edge_key, x in inputs.items():
+                pre_activation += jnp.matmul(x, params.weights[edge_key])
+            if "bias" in params:
+                pre_activation += params.biases["bias"]
+            
+            # Apply activation function
+            activation_fn, _ = get_activation(node_info.node_config["activation"])
+            z_mu = activation_fn(pre_activation)
+    
+            # Error
+            error = state.z_latent - z_mu
+
+        # Update node state before computing energy
+        state = state._replace(
+            pre_activation=pre_activation,
+            z_mu=z_mu,
+            error=error
+        )
+
+        # Compute energy, accumulate the self-latent gradient
+        state = node_class.energy_functional(state, node_info)
+
+        total_energy = jnp.sum(state.energy)
+        return total_energy, state
+        """
 
     @staticmethod
     def energy_functional(
@@ -528,8 +564,7 @@ class NodeBase(ABC):
         """
         Resolve state initialization config with validation.
 
-        Uses node_config["latent_init"] if specified, otherwise returns None
-        to let the graph-level state initializer use its default.
+        Uses node_config["latent_init"] if specified, otherwise
 
         Args:
             node_config: Node configuration dictionary
@@ -542,7 +577,7 @@ class NodeBase(ABC):
         state_init_config = node_config.get("latent_init")
 
         if state_init_config is None:
-            return None  # Let graph-level state initializer use its default
+            state_init_config = cls.DEFAULT_LATENT_INIT.copy()
         elif isinstance(state_init_config, str):
             state_init_config = {"type": state_init_config}
 

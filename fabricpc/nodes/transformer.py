@@ -293,17 +293,18 @@ class TransformerBlockNode(NodeBase):
 
         # Residual connection 2
         z_mu = x_res1 + ff_output
-        pre_activation = z_mu.copy()  # Store pre-activation from FFN for analysis
-        error = state.z_latent - z_mu
 
-        # Compute energy, accumulate the self-latent gradient
-        state = node_class.energy_functional(state, node_info)
+        pre_activation = z_mu.copy()
+        error = state.z_latent - z_mu
 
         state = state._replace(
             z_mu=z_mu,
             pre_activation=pre_activation,
             error=error,
         )
+
+        # Compute energy, accumulate the self-latent gradient
+        state = node_class.energy_functional(state, node_info)
 
         total_energy = jnp.sum(state.energy)
         return total_energy, state

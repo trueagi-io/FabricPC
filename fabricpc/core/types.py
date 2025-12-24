@@ -331,7 +331,7 @@ GraphStructure.CONFIG_SCHEMA = {
     },
     "graph_state_initializer": {
         "type": dict,
-        "default": {"type": "feedforward", "fallback": {"type": "normal", "std": 0.05}},
+        "default": {"type": "feedforward"},
         "description": "Graph-level latent state initialization configuration"
     }
 }

@@ -23,7 +23,6 @@ Add `graph_state_initializer` parameter to the graph config schema with default:
 ```python
 "graph_state_initializer": {
     "type": "feedforward",
-    "fallback": {"type": "normal", "std": 0.05}
 }
 ```
 
@@ -99,7 +98,6 @@ class StateInitBase(ABC):
    - Processes nodes independently
 
 2. `FeedforwardStateInit`:
-   - CONFIG: `fallback_initializer` (dict, for source nodes)
    - Requires `params` to be provided
    - Pass 1: Initialize all nodes with fallback
    - Pass 2: Process nodes in topological order, set `z_latent = z_mu` from forward pass
@@ -201,7 +199,6 @@ Pattern: Read `graph_state_initializer` from the graph config and pass to `initi
 ```python
 state_init_config = graph_config.get("graph_state_initializer", {
     "type": "feedforward",
-    "fallback": {"type": "normal", "std": 0.05}
 })
 state = initialize_state(structure, batch_size, key, clamps, state_init_config, params)
 ```
@@ -283,7 +280,7 @@ graph_config = {
 ```python
 state = initialize_state(
     structure, batch_size, key, clamps,
-    {"type": "feedforward", "fallback_initializer": {"type": "zeros"}},
+    {"type": "feedforward"},
     params=params  # Required for feedforward
 )
 ```

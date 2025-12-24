@@ -9,6 +9,7 @@ This demo:
 1. Downloads TinyShakespeare (~1MB of text)
 2. Trains a small transformer for next-character prediction
 3. Generates sample text
+4. Backprop training option, set use_pcn=False
 
 Expected runtime: ~5-10 minutes on a consumer GPU (RTX 3080/4080 class)
 
@@ -28,8 +29,8 @@ import urllib.request
 from typing import Tuple, Iterator, Dict, List
 
 from fabricpc.graph import create_pc_graph
-from fabricpc.training.train_autoregressive import train_autoregressive, generate_autoregressive
-from fabricpc.training.train_backprop import train_backprop_autoregressive
+from fabricpc.training.train_autoregressive import train_autoregressive, generate_autoregressive, evaluate_autoregressive
+from fabricpc.training.train_backprop import train_backprop_autoregressive, evaluate_backprop_autoregressive
 
 # Reproducibility
 jax.config.update('jax_default_prng_impl', 'threefry2x32')
@@ -60,15 +61,21 @@ def download_tiny_shakespeare(data_dir: str = "./data") -> str:
 class CharDataset:
     """Character-level dataset for language modeling."""
 
-    def __init__(self, text: str, seq_len: int = 64):
+    def __init__(self, text: str, seq_len: int, vocab: dict = None):
         self.text = text
         self.seq_len = seq_len
 
-        # Build vocabulary
-        self.chars = sorted(list(set(text)))
-        self.vocab_size = len(self.chars)
-        self.char_to_idx = {ch: i for i, ch in enumerate(self.chars)}
-        self.idx_to_char = {i: ch for i, ch in enumerate(self.chars)}
+        # Build vocabulary or use provided one
+        if vocab is None:
+            self.chars = sorted(list(set(text)))
+            self.vocab_size = len(self.chars)
+            self.char_to_idx = {ch: i for i, ch in enumerate(self.chars)}
+            self.idx_to_char = {i: ch for i, ch in enumerate(self.chars)}
+        else:
+            self.char_to_idx = vocab["char_to_idx"]
+            self.idx_to_char = vocab["idx_to_char"]
+            self.chars = vocab["chars"]
+            self.vocab_size = vocab["vocab_size"]
 
         # Encode full text
         self.data = np.array([self.char_to_idx[ch] for ch in text], dtype=np.int32)
@@ -76,6 +83,15 @@ class CharDataset:
         print(f"Vocabulary size: {self.vocab_size}")
         print(f"Dataset size: {len(self.data)} characters")
         print(f"Sample chars: {''.join(self.chars[:20])}...")
+
+    def get_vocab(self) -> dict:
+        """Return vocabulary for sharing with other datasets."""
+        return {
+            "char_to_idx": self.char_to_idx,
+            "idx_to_char": self.idx_to_char,
+            "chars": self.chars,
+            "vocab_size": self.vocab_size,
+        }
 
     def __len__(self) -> int:
         return len(self.data) - self.seq_len - 1
@@ -146,11 +162,12 @@ class DataLoaderWrapper:
 
 def create_transformer_config(
     vocab_size: int,
-    seq_len: int = 64,
-    embed_dim: int = 128,
-    num_heads: int = 4,
-    num_blocks: int = 2,
-    ff_dim: int = 256,
+    seq_len: int,
+    embed_dim: int,
+    num_heads: int,
+    num_blocks: int,
+    ff_dim: int,  # should be 4x embed_dim
+    rope_theta: float, # longer than sequence length
 ) -> dict:
     """
     Create a transformer language model configuration.
@@ -198,26 +215,31 @@ def create_transformer_config(
             "num_heads": num_heads,
             "ff_dim": ff_dim,
             "internal_activation": {"type": "gelu"},
+            "rope_theta": rope_theta,
         })
         edge_list.append({"source_name": prev_name, "target_name": block_name, "slot": "in"})  # wire one block to the next
         edge_list.append({"source_name": "mask", "target_name": block_name, "slot": "mask"})  # wire mask to the block
         prev_name = block_name
 
     # Output projection back to vocabulary
+    # Use small initialization to prevent softmax saturation from large logits
     node_list.append({
         "name": "output",
         "shape": (seq_len, vocab_size),
         "type": "linear",
         "activation": {"type": "softmax"},
         "energy": {"type": "cross_entropy"},
-        "weight_init": {"type": "kaiming", "mode": "fan_out"},
+        "weight_init": {"type": "normal", "mean": 0.0, "std": 0.02},
     })
     edge_list.append({"source_name": prev_name, "target_name": "output", "slot": "in"})
 
+    # Assemble the complete model configuration
     return {
         "node_list": node_list,
         "edge_list": edge_list,
         "task_map": {"x": "input", "y": "output", "causal_mask": "mask"},
+        "graph_state_initializer": {"type": "feedforward"},
+        # "graph_state_initializer": {"type": "global", "initializer": {"type": "normal", "mean": 0.0, "std": 0.01}},
     }
 
 
@@ -326,15 +348,16 @@ def main():
 
     # Configuration
     SEQ_LEN = 128        # Sequence length
-    EMBED_DIM = 64     # Embedding dimension
+    EMBED_DIM = 128      # Embedding dimension
     NUM_HEADS = 8       # Attention heads
     NUM_BLOCKS = 3      # Transformer blocks
-    FF_DIM = 256        # Feedforward hidden dimension
+    FF_DIM = 512        # Feedforward hidden dimension
+    ROPE_THETA = 500.0    # RoPE frequency
     BATCH_SIZE = 128     # Batch size
-    NUM_EPOCHS = 10      # Training epochs
-    INFER_STEPS = 20    # Inference iterations per step
+    NUM_EPOCHS = 1      # Training epochs
+    INFER_STEPS = 10    # Inference iterations per step
     ETA_INFER = 0.05    # Inference learning rate
-    LR = 1e-5           # Weight learning rate
+    LR = 1e-3           # Weight learning rate
 
     # Random keys
     master_key = jax.random.PRNGKey(42)
@@ -342,26 +365,42 @@ def main():
 
     # Load data
     print("\n[1/5] Loading TinyShakespeare dataset...")
-    text = download_tiny_shakespeare()
+    full_text = download_tiny_shakespeare()
 
-    # Use a subset for faster training (first 100k characters)
-    dataset_cutoff_len = 100000
-    print(f"Using first {dataset_cutoff_len} of {len(text)} total characters for training...")
-    text = text[:dataset_cutoff_len]
-    dataset = CharDataset(text, seq_len=SEQ_LEN)
+    # Optionally use a subset for faster training (e.g. first 100k characters)
+    dataset_cutoff_len = len(full_text)
+    print(f"Using first {dataset_cutoff_len} of {len(full_text)} total characters...")
+    full_text = full_text[:dataset_cutoff_len]
 
-    train_loader = DataLoaderWrapper(dataset, BATCH_SIZE, shuffle=True)
-    print(f"Training batches per epoch: {len(train_loader)}")
+    # Split into train (90%) and test (10%) - last 10% reserved for test
+    split_idx = int(len(full_text) * 0.9)
+    train_text = full_text[:split_idx]
+    test_text = full_text[split_idx:]
+    print(f"Train/test split: {len(train_text):,} train / {len(test_text):,} test characters")
+
+    # Create train dataset (builds vocabulary)
+    print("\nTrain dataset:")
+    train_dataset = CharDataset(train_text, seq_len=SEQ_LEN)
+
+    # Create test dataset (uses train vocabulary)
+    print("\nTest dataset:")
+    test_dataset = CharDataset(test_text, seq_len=SEQ_LEN, vocab=train_dataset.get_vocab())
+
+    train_loader = DataLoaderWrapper(train_dataset, BATCH_SIZE, shuffle=True)
+    test_loader = DataLoaderWrapper(test_dataset, BATCH_SIZE, shuffle=False)
+    print(f"\nTraining batches per epoch: {len(train_loader)}")
+    print(f"Test batches: {len(test_loader)}")
 
     # Create model
     print("\n[2/5] Creating transformer model...")
     config = create_transformer_config(
-        vocab_size=dataset.vocab_size,
+        vocab_size=train_dataset.vocab_size,
         seq_len=SEQ_LEN,
         embed_dim=EMBED_DIM,
         num_heads=NUM_HEADS,
         num_blocks=NUM_BLOCKS,
         ff_dim=FF_DIM,
+        rope_theta=ROPE_THETA,
     )
 
     params, structure = create_pc_graph(config, graph_key)
@@ -379,29 +418,62 @@ def main():
         "use_causal_mask": True,  # Enable causal masking for autoregressive
     }
 
+    # Create evaluation callback for test set
+    def create_eval_callback(use_pc: bool):
+        """Create appropriate eval callback based on training method."""
+        if use_pc:
+            def eval_callback(epoch_idx, params, structure, config, rng_key):
+                eval_rng = jax.random.fold_in(rng_key, epoch_idx)
+                metrics = evaluate_autoregressive(
+                    params, structure, test_loader,
+                    {"infer_steps": 0, "eta_infer": ETA_INFER, "use_causal_mask": True},  # No inference steps for eval because model predicts feedforward
+                    eval_rng,
+                    debug=(epoch_idx == 0)  # Debug first epoch only
+                )
+                print(f"  Test - Loss: {metrics['loss']:.4f}, Perplexity: {metrics['perplexity']:.2f}, Acc: {metrics['accuracy']:.4f}")
+                return metrics
+        else:
+            def eval_callback(epoch_idx, params, structure, config, rng_key):
+                eval_rng = jax.random.fold_in(rng_key, epoch_idx)
+                # Enable debug on first epoch to diagnose metrics
+                metrics = evaluate_backprop_autoregressive(
+                    params, structure, test_loader,
+                    {"use_causal_mask": True},
+                    eval_rng,
+                    debug=(epoch_idx == 0)  # Debug first epoch only
+                )
+                print(f"  Test - Loss: {metrics['loss']:.4f}, Perplexity: {metrics['perplexity']:.2f}, Acc: {metrics['accuracy']:.4f}")
+                return metrics
+        return eval_callback
+
+    eval_callback = create_eval_callback(use_pcn)
+
     # Train using autoregressive trainer
     print("\n[3/5] Training with autoregressive trainer (JIT compilation on first batch)...")
     print(f"Config: {NUM_EPOCHS} epochs, {INFER_STEPS} inference steps, lr={LR}")
+    print(f"Using {'Predictive Coding' if use_pcn else 'Backpropagation'} training method")
 
     start_time = time.time()
 
     ### Choose one of the training methods below
     if use_pcn:
         # Train with predictive coding (autoregressive)
-        trained_params, energy_history, _ = train_autoregressive(
+        trained_params, energy_history, eval_results = train_autoregressive(
             params=params,
             structure=structure,
             train_loader=train_loader,
             config=train_config,
             rng_key=train_key,
             verbose=True,
+            epoch_callback=eval_callback,
         )
     else:
         # Backprop (autoregressive)
-        trained_params, energy_history, _ = train_backprop_autoregressive(
+        trained_params, energy_history, eval_results = train_backprop_autoregressive(
             params, structure, train_loader,
             {"num_epochs": NUM_EPOCHS, "optimizer": {"type": "adam", "lr": 1e-3}, "use_causal_mask": True},
-            train_key
+            train_key,
+            epoch_callback=eval_callback,
         )
 
     train_time = time.time() - start_time
@@ -424,12 +496,12 @@ def main():
     generated_texts = generate_text(
         trained_params,
         structure,
-        dataset,
+        train_dataset,
         prompts=prompts,
         max_new_tokens=20,
         rng_key=gen_key,
         temperature=0.8,
-        infer_steps=INFER_STEPS,
+        infer_steps=0,  # No inference steps needed for generation
         eta_infer=ETA_INFER,
     )
 
@@ -442,14 +514,18 @@ def main():
     # Summary
     print("\n[5/5] Summary")
     print("=" * 70)
-    print(f"Dataset: TinyShakespeare ({len(text):,} characters, {dataset.vocab_size} unique)")
+    print(f"Dataset: TinyShakespeare ({len(full_text):,} total, {len(train_text):,} train, {len(test_text):,} test)")
+    print(f"Vocabulary: {train_dataset.vocab_size} unique characters")
     print(f"Model: {NUM_BLOCKS} transformer blocks, {EMBED_DIM}d embeddings, {NUM_HEADS} heads")
     print(f"Parameters: {total_params:,}")
     print(f"Training: {NUM_EPOCHS} epochs in {train_time:.1f}s")
-    print(f"Final energy: {energy_history[-1][-1]:.4f}")
+    print(f"Final train loss: {energy_history[-1][-1]:.4f}")
+    if eval_results and eval_results[-1]:
+        final_eval = eval_results[-1]
+        print(f"Final test loss: {final_eval['loss']:.4f}, Perplexity: {final_eval['perplexity']:.2f}")
     print("=" * 70)
 
-    return trained_params, structure, dataset
+    return trained_params, structure, train_dataset, test_dataset
 
 
 if __name__ == "__main__":

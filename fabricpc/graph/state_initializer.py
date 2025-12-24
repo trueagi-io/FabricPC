@@ -41,7 +41,6 @@ State initializers are configured via graph config:
         "edge_list": [...],
         "graph_state_initializer": {
             "type": "feedforward",
-            "fallback": {"type": "normal", "std": 0.05}
         }
     }
 
@@ -255,27 +254,23 @@ def discover_external_state_inits() -> None:
 # Built-in State Initialization Strategies
 # =============================================================================
 
-@register_state_init("distribution")
+@register_state_init("global")
 class DistributionStateInit(StateInitBase):
     """
     Initialize states from a distribution.
-
-    Each node's state is initialized using an Initializer, either from:
-    1. Node-level config: node_config["latent_init"]
-    2. Graph-level fallback: config["default_initializer"]
-
+    Each node's state is initialized using a graph-level initializer applied to all nodes.
     Processes nodes independently (no dependencies between nodes).
 
     Config options:
-        - default_initializer: Default initializer config for nodes without override
+        - initializer: Global initializer config for all nodes
                               (default: {"type": "normal", "mean": 0.0, "std": 0.05})
     """
 
     CONFIG_SCHEMA = {
-        "default_initializer": {
+        "initializer": {
             "type": dict,
             "default": {"type": "normal", "mean": 0.0, "std": 0.05},
-            "description": "Default initializer config for nodes without node-level override"
+            "description": "Global initializer config for all nodes, any type supported by fabricpc.core.initializers.initialize"
         },
     }
 
@@ -291,7 +286,7 @@ class DistributionStateInit(StateInitBase):
         """Initialize states from a distribution."""
         from fabricpc.core.initializers import initialize
 
-        default_init_config = config.get("default_initializer", {"type": "normal"})
+        global_init_config = config["initializer"]
 
         node_names = list(structure.nodes.keys())
         node_keys = jax.random.split(rng_key, len(node_names))
@@ -303,13 +298,61 @@ class DistributionStateInit(StateInitBase):
             shape = (batch_size, *node_info.shape)
 
             if node_name in clamps:
-                z_latent = clamps[node_name]
+                z_latent = clamps[node_name].copy()
             else:
-                # Check for node-level latent_init config
-                node_init_config = node_info.node_config.get("latent_init")
-                if node_init_config is None:
-                    node_init_config = default_init_config
+                z_latent = initialize(node_key_map[node_name], shape, global_init_config)
 
+            node_state_dict[node_name] = NodeState(
+                z_latent=z_latent,
+                z_mu=jnp.zeros(shape),
+                error=jnp.zeros(shape),
+                energy=jnp.zeros((batch_size,)),
+                pre_activation=jnp.zeros(shape),
+                latent_grad=jnp.zeros(shape),
+                substructure={},
+            )
+
+        return GraphState(nodes=node_state_dict, batch_size=batch_size)
+
+@register_state_init("node_distribution")
+class NodeDistributionStateInit(StateInitBase):
+    """
+    Initialize states from a distribution using node level configs for initializer.
+    Each node's state is initialized using its specified Initializer.
+    Processes nodes independently (no dependencies between nodes).
+
+    Config options:
+    none
+    """
+
+    CONFIG_SCHEMA = {
+    }
+
+    @staticmethod
+    def initialize_state(
+        structure: GraphStructure,
+        batch_size: int,
+        rng_key: jax.Array,
+        clamps: Dict[str, jnp.ndarray],
+        config: Dict[str, Any],
+        params: GraphParams = None,
+    ) -> GraphState:
+        """Initialize states from a distribution."""
+        from fabricpc.core.initializers import initialize
+
+        node_names = list(structure.nodes.keys())
+        node_keys = jax.random.split(rng_key, len(node_names))
+        node_key_map = dict(zip(node_names, node_keys))
+
+        node_state_dict = {}
+
+        for node_name, node_info in structure.nodes.items():
+            shape = (batch_size, *node_info.shape)
+
+            if node_name in clamps:
+                z_latent = clamps[node_name].copy()
+            else:
+                node_init_config = node_info.node_config["latent_init"]
                 z_latent = initialize(node_key_map[node_name], shape, node_init_config)
 
             node_state_dict[node_name] = NodeState(
@@ -324,30 +367,23 @@ class DistributionStateInit(StateInitBase):
 
         return GraphState(nodes=node_state_dict, batch_size=batch_size)
 
-
 @register_state_init("feedforward")
 class FeedforwardStateInit(StateInitBase):
     """
     Initialize states via feedforward propagation through the network.
 
-    1. Initialize source nodes (in_degree=0) with fallback initializer
+    1. Initialize source nodes and recurrency nodes with fallback to node's configured initializer
     2. Process nodes in topological order
     3. For each node, compute z_mu via forward pass and set z_latent = z_mu
     4. Clamps override computed values
 
-    Requires params to be provided.
+    Requires params to be provided to compute projections.
 
     Config options:
-        - fallback: Initializer config for source nodes and initial states
-                   (default: {"type": "normal", "mean": 0.0, "std": 0.05})
+    none
     """
 
     CONFIG_SCHEMA = {
-        "fallback": {
-            "type": dict,
-            "default": {"type": "normal", "mean": 0.0, "std": 0.05},
-            "description": "Initializer for source nodes and initial states"
-        },
     }
 
     @staticmethod
@@ -367,20 +403,19 @@ class FeedforwardStateInit(StateInitBase):
         if params is None:
             raise ValueError("FeedforwardStateInit requires params to be provided")
 
-        fallback_config = config.get("fallback", {"type": "normal"})
-
         node_names = list(structure.nodes.keys())
         node_keys = jax.random.split(rng_key, len(node_names))
         node_key_map = dict(zip(node_names, node_keys))
 
-        # First pass: initialize all nodes with fallback, in case of clamps and/or graph cycles
+        # First pass: initialize all nodes with clamps or fallback in case of graph cycles
         node_state_dict = {}
         for node_name, node_info in structure.nodes.items():
             shape = (batch_size, *node_info.shape)
 
             if node_name in clamps:
-                z_latent = clamps[node_name]
+                z_latent = clamps[node_name].copy()
             else:
+                fallback_config = node_info.node_config["latent_init"]
                 z_latent = initialize(node_key_map[node_name], shape, fallback_config)
 
             node_state_dict[node_name] = NodeState(
@@ -405,14 +440,25 @@ class FeedforwardStateInit(StateInitBase):
                 node_class = get_node_class(node_info.node_type)
                 edge_inputs = gather_inputs(node_info, structure, state)
 
-                _, node_state = node_class.forward(node_params, edge_inputs, node_state, node_info)
+                _, projected= node_class.forward(node_params, edge_inputs, node_state, node_info)
+                # node forward modifies z_mu, pre_activation, errror, and energy
 
                 if node_name not in clamps:
-                    # z_latent <- z_mu_init
-                    node_state = node_state._replace(z_latent=node_state.z_mu)
+                    # z_latent <- z_mu, error <- 0 (since z_latent = z_mu)
+                    node_state = node_state._replace(
+                        z_latent=projected.z_mu,
+                        z_mu=projected.z_mu,
+                    )  # leave energy and error already initialized to zeros
+
                 else:
-                    # Respect clamped values
-                    node_state = node_state._replace(z_latent=clamps[node_name])
+                    # Respect clamped values, retain newly computed error
+                    node_state = node_state._replace(
+                        z_latent=clamps[node_name].copy(),
+                        z_mu=projected.z_mu,
+                        error=projected.error,
+                        energy=projected.energy,
+                    )  # error and energy are valid for clamped nodes
+
                 # Update state
                 state = state._replace(nodes={**state.nodes, node_name: node_state})
 
@@ -438,9 +484,8 @@ def initialize_graph_state(
         structure: Graph structure
         batch_size: Batch size
         rng_key: JAX random key
-        clamps: Optional dictionary of clamped values
-        state_init_config: State initialization config with "type" field.
-                          If None, uses distribution init with normal fallback.
+        clamps: Dictionary of clamped values
+        state_init_config: State initialization config with "type" for a StateInitBase like object.
         params: GraphParams (required for feedforward init)
 
     Returns:
@@ -456,9 +501,9 @@ def initialize_graph_state(
     clamps = clamps or {}
 
     if state_init_config is None:
-        state_init_config = {"type": "distribution"}
+        state_init_config = structure.config["graph_state_initializer"]
 
-    init_type = state_init_config.get("type", "distribution")
+    init_type = state_init_config["type"]
     init_class = get_state_init_class(init_type)
 
     validated_config = validate_state_init_config(init_class, state_init_config)

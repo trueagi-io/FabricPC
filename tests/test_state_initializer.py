@@ -63,12 +63,13 @@ class TestStateInitRegistry:
         types = list_state_init_types()
 
         # Should include built-in types
-        assert "distribution" in types
+        assert "global" in types
+        assert "node_distribution" in types
         assert "feedforward" in types
 
     def test_get_state_init_class(self):
         """Test getting state init class by type."""
-        dist_class = get_state_init_class("distribution")
+        dist_class = get_state_init_class("node_distribution")
 
         assert dist_class is not None
         assert hasattr(dist_class, "initialize_state")
@@ -76,7 +77,7 @@ class TestStateInitRegistry:
 
     def test_get_state_init_class_case_insensitive(self):
         """Test that type lookup is case-insensitive."""
-        assert get_state_init_class("Distribution") == get_state_init_class("distribution")
+        assert get_state_init_class("node_Distribution") == get_state_init_class("node_distribution")
         assert get_state_init_class("FEEDFORWARD") == get_state_init_class("feedforward")
 
     def test_get_unknown_type_raises(self):
@@ -100,8 +101,8 @@ class TestDistributionStateInit:
         state = initialize_graph_state(
             structure, batch_size, rng_key, clamps,
             state_init_config={
-                "type": "distribution",
-                "default_initializer": {"type": "normal", "std": 0.1}
+                "type": "global",
+                "initializer": {"type": "normal", "std": 0.1}
             }
         )
 
@@ -133,8 +134,8 @@ class TestDistributionStateInit:
         state = initialize_graph_state(
             structure, batch_size, rng_key, clamps,
             state_init_config={
-                "type": "distribution",
-                "default_initializer": {"type": "zeros"}
+                "type": "global",
+                "initializer": {"type": "zeros"}
             }
         )
 
@@ -172,8 +173,7 @@ class TestDistributionStateInit:
         state = initialize_graph_state(
             structure, batch_size, rng_key, clamps,
             state_init_config={
-                "type": "distribution",
-                "default_initializer": {"type": "zeros"}  # Default to zeros
+                "type": "node_distribution",
             }
         )
 
@@ -266,27 +266,6 @@ class TestFeedforwardStateInit:
             assert not jnp.allclose(state.nodes[name].z_latent, 0.0), \
                 f"Node {name} should have non-zero z_latent after feedforward init"
 
-    def test_feedforward_init_with_custom_fallback(self, simple_graph_config, rng_key):
-        """Test feedforward init with custom fallback initializer."""
-        params, structure = create_pc_graph(simple_graph_config, rng_key)
-
-        batch_size = 4
-        x = jax.random.normal(rng_key, (batch_size, 784))
-        y = jax.random.normal(rng_key, (batch_size, 10))
-        clamps = {"input": x, "output": y}
-
-        state = initialize_graph_state(
-            structure, batch_size, rng_key, clamps,
-            state_init_config={
-                "type": "feedforward",
-                "fallback": {"type": "zeros"}  # Use zeros fallback
-            },
-            params=params
-        )
-
-        # Should still work with zeros fallback
-        assert state.nodes["hidden"].z_latent.shape == (batch_size, 128)
-
 
 class TestClampHandling:
     """Test clamp handling in state initialization."""
@@ -302,7 +281,7 @@ class TestClampHandling:
 
         state = initialize_graph_state(
             structure, batch_size, rng_key, clamps,
-            state_init_config={"type": "distribution"}
+            state_init_config={"type": "node_distribution"}
         )
 
         # Clamped nodes should have exact clamped values
@@ -439,6 +418,190 @@ class TestCustomStateInit:
             unregister_state_init("test_custom_state")
 
 
+class TestFeedforwardZeroError:
+    """Test that feedforward initialization produces zero error at all nodes."""
+
+    def test_feedforward_zero_error_mlp(self, rng_key):
+        """Test that feedforward init produces zero error for MLP architecture."""
+        # Create a 4-layer MLP
+        config = {
+            "node_list": [
+                {"name": "input", "shape": (32,), "type": "linear"},
+                {"name": "h1", "shape": (64,), "type": "linear", "activation": {"type": "relu"}},
+                {"name": "h2", "shape": (32,), "type": "linear", "activation": {"type": "relu"}},
+                {"name": "output", "shape": (10,), "type": "linear", "activation": {"type": "softmax"}},
+            ],
+            "edge_list": [
+                {"source_name": "input", "target_name": "h1", "slot": "in"},
+                {"source_name": "h1", "target_name": "h2", "slot": "in"},
+                {"source_name": "h2", "target_name": "output", "slot": "in"},
+            ],
+            "task_map": {"x": "input", "y": "output"},
+        }
+
+        params, structure = create_pc_graph(config, rng_key)
+
+        batch_size = 4
+        x = jax.random.normal(rng_key, (batch_size, 32))
+        clamps = {"input": x}  # Only clamp input, not output
+
+        state = initialize_graph_state(
+            structure, batch_size, rng_key, clamps,
+            state_init_config={"type": "feedforward"},
+            params=params
+        )
+
+        # Verify that error is zero at all nodes after feedforward init
+        for node_name in structure.nodes:
+            error = state.nodes[node_name].error
+            assert jnp.allclose(error, 0.0, atol=1e-6), \
+                f"Node {node_name} has non-zero error after feedforward init: max={jnp.max(jnp.abs(error))}"
+
+            # Also verify z_latent == z_mu for non-clamped nodes
+            if node_name not in clamps:
+                z_latent = state.nodes[node_name].z_latent
+                z_mu = state.nodes[node_name].z_mu
+                assert jnp.allclose(z_latent, z_mu, atol=1e-6), \
+                    f"Node {node_name}: z_latent != z_mu after feedforward init"
+
+    def test_feedforward_zero_error_transformer(self, rng_key):
+        """Test that feedforward init produces zero error for transformer architecture."""
+        seq_len = 8
+        embed_dim = 16
+        vocab_size = 10
+
+        config = {
+            "node_list": [
+                {
+                    "name": "input",
+                    "shape": (seq_len, vocab_size),
+                    "type": "linear",
+                    "activation": {"type": "identity"},
+                },
+                {
+                    "name": "embed",
+                    "shape": (seq_len, embed_dim),
+                    "type": "linear",
+                    "activation": {"type": "identity"},
+                },
+                {
+                    "name": "mask",
+                    "shape": (1, seq_len, seq_len),
+                    "type": "linear",
+                    "activation": {"type": "identity"},
+                },
+                {
+                    "name": "transformer_0",
+                    "shape": (seq_len, embed_dim),
+                    "type": "transformer_block",
+                    "num_heads": 2,
+                    "ff_dim": 32,
+                    "internal_activation": {"type": "gelu"},
+                    "rope_theta": 100.0,
+                },
+                {
+                    "name": "output",
+                    "shape": (seq_len, vocab_size),
+                    "type": "linear",
+                    "activation": {"type": "softmax"},
+                },
+            ],
+            "edge_list": [
+                {"source_name": "input", "target_name": "embed", "slot": "in"},
+                {"source_name": "embed", "target_name": "transformer_0", "slot": "in"},
+                {"source_name": "mask", "target_name": "transformer_0", "slot": "mask"},
+                {"source_name": "transformer_0", "target_name": "output", "slot": "in"},
+            ],
+            "task_map": {"x": "input", "y": "output", "causal_mask": "mask"},
+        }
+
+        params, structure = create_pc_graph(config, rng_key)
+
+        batch_size = 2
+        # Create one-hot input
+        x_indices = jax.random.randint(rng_key, (batch_size, seq_len), 0, vocab_size)
+        x = jax.nn.one_hot(x_indices, vocab_size)
+
+        # Create causal mask
+        causal_mask = jnp.tril(jnp.ones((1, seq_len, seq_len)))
+        causal_mask = jnp.broadcast_to(causal_mask, (batch_size, 1, seq_len, seq_len))
+
+        clamps = {"input": x, "mask": causal_mask}
+
+        state = initialize_graph_state(
+            structure, batch_size, rng_key, clamps,
+            state_init_config={"type": "feedforward"},
+            params=params
+        )
+
+        # Verify that error is zero at all nodes after feedforward init
+        for node_name in structure.nodes:
+            error = state.nodes[node_name].error
+            max_error = jnp.max(jnp.abs(error))
+            assert jnp.allclose(error, 0.0, atol=1e-5), \
+                f"Node {node_name} has non-zero error after feedforward init: max={max_error}"
+
+            # Also verify z_latent == z_mu for non-clamped nodes
+            if node_name not in clamps:
+                z_latent = state.nodes[node_name].z_latent
+                z_mu = state.nodes[node_name].z_mu
+                assert jnp.allclose(z_latent, z_mu, atol=1e-5), \
+                    f"Node {node_name}: z_latent != z_mu after feedforward init"
+
+    def test_feedforward_no_change_after_inference_without_output_clamp(self, rng_key):
+        """
+        Test that inference with no output clamp does not change latent states
+        when error is zero after feedforward init.
+        """
+        from fabricpc.core.inference import run_inference
+
+        config = {
+            "node_list": [
+                {"name": "input", "shape": (16,), "type": "linear"},
+                {"name": "hidden", "shape": (32,), "type": "linear", "activation": {"type": "relu"}},
+                {"name": "output", "shape": (8,), "type": "linear"},
+            ],
+            "edge_list": [
+                {"source_name": "input", "target_name": "hidden", "slot": "in"},
+                {"source_name": "hidden", "target_name": "output", "slot": "in"},
+            ],
+            "task_map": {"x": "input", "y": "output"},
+        }
+
+        params, structure = create_pc_graph(config, rng_key)
+
+        batch_size = 2
+        x = jax.random.normal(rng_key, (batch_size, 16))
+        clamps = {"input": x}  # Only clamp input, no output clamp
+
+        state = initialize_graph_state(
+            structure, batch_size, rng_key, clamps,
+            state_init_config={"type": "feedforward"},
+            params=params
+        )
+
+        # Save original latent states
+        original_latents = {
+            name: state.nodes[name].z_latent.copy()
+            for name in structure.nodes
+        }
+
+        # Run inference with no output clamp
+        infer_key = jax.random.fold_in(rng_key, 1)
+        final_state = run_inference(
+            params, state, clamps, structure,
+            infer_steps=10, eta_infer=0.1
+        )
+
+        # Latent states should not have changed since error was zero
+        for node_name in structure.nodes:
+            original = original_latents[node_name]
+            final = final_state.nodes[node_name].z_latent
+            max_diff = jnp.max(jnp.abs(original - final))
+            assert jnp.allclose(original, final, atol=1e-5), \
+                f"Node {node_name} changed after inference despite zero error: max_diff={max_diff}"
+
+
 class TestStateInitDeterminism:
     """Test that state initialization is deterministic."""
 
@@ -451,11 +614,11 @@ class TestStateInitDeterminism:
 
         state1 = initialize_graph_state(
             structure, batch_size, rng_key, clamps,
-            state_init_config={"type": "distribution"}
+            state_init_config={"type": "node_distribution"}
         )
         state2 = initialize_graph_state(
             structure, batch_size, rng_key, clamps,
-            state_init_config={"type": "distribution"}
+            state_init_config={"type": "node_distribution"}
         )
 
         # Should produce identical results
