@@ -1,5 +1,5 @@
 """
-Test suite for EmbeddingNode functionality in FabricPC.
+Test suite for EmbeddingNode and TransformerBlockNode functionality in FabricPC.
 """
 
 import os
@@ -197,6 +197,93 @@ class TestEmbeddingNode:
         _, new_state = node_cls.forward(node_params, inputs, state, node_info)
         
         assert new_state.z_mu.shape == (2, 5, 8)
+
+class TestTransformerBlock:
+
+    @pytest.fixture
+    def single_block_config(self):
+        """Standard config for testing a single block node."""
+        return {
+            "node_list": [
+                {"name": "input", "shape": (10, 32), "type": "linear"},
+                {
+                    "name": "block", 
+                    "shape": (10, 32), 
+                    "type": "transformer_block",
+                    "embed_dim": 32, "num_heads": 4, "mlp_dim": 64, "use_rope": True
+                },
+                {"name": "output", "shape": (10, 32), "type": "linear"},
+            ],
+            "edge_list": [
+                {"source_name": "input", "target_name": "block", "slot": "in"},
+                {"source_name": "block", "target_name": "output", "slot": "in"},
+            ],
+            "task_map": {"x": "input", "y": "output"},
+        }
+
+    def test_block_forward_shapes(self, single_block_config, rng_key):
+        """Verify output shapes are preserved through Attention and MLP."""
+        params, structure = create_pc_graph(single_block_config, rng_key)
+        batch_size = 2
+        
+        # Random inputs
+        x = jax.random.normal(rng_key, (batch_size, 10, 32))
+        clamps = {"input": x, "output": jnp.zeros_like(x)}
+        
+        state = initialize_state(structure, batch_size, rng_key, clamps=clamps, params=params)
+        final_state = run_inference(params, state, clamps, structure, infer_steps=1)
+        
+        block_latent = final_state.nodes["block"].z_latent
+        assert block_latent.shape == (batch_size, 10, 32)
+        assert jnp.abs(block_latent).mean() > 0.0
+
+    def test_causal_masking(self, single_block_config, rng_key):
+        """Verify future tokens do not affect past tokens."""
+        params, structure = create_pc_graph(single_block_config, rng_key)
+        batch_size = 1
+        
+        x_base = jax.random.normal(rng_key, (batch_size, 10, 32))
+        clamps_base = {"input": x_base, "output": jnp.zeros_like(x_base)}
+        
+        state_1 = initialize_state(structure, batch_size, rng_key, clamps=clamps_base, 
+                                   state_init_config={"type": "feedforward"}, params=params)
+        out_1 = state_1.nodes["block"].z_mu
+        
+        # Modified run: Change ONLY the last token
+        x_mod = x_base.at[:, -1, :].add(5.0)
+        clamps_mod = {"input": x_mod, "output": jnp.zeros_like(x_base)}
+        
+        state_2 = initialize_state(structure, batch_size, rng_key, clamps=clamps_mod, 
+                                   state_init_config={"type": "feedforward"}, params=params)
+        out_2 = state_2.nodes["block"].z_mu
+        
+        # Check First Token (Should be Identical - Masking Working)
+        diff_first = jnp.abs(out_1[:, 0, :] - out_2[:, 0, :]).max()
+        assert diff_first < 1e-5, f"Causal mask failed! Past changed by {diff_first}"
+        
+        # Check Last Token (Should Change - Self Attention Working)
+        diff_last = jnp.abs(out_1[:, -1, :] - out_2[:, -1, :]).max()
+        assert diff_last > 1e-4, "Self-attention failed! Last token ignored input change."
+
+    def test_block_learning(self, single_block_config, rng_key):
+        """Verify gradients propagate and loss decreases (overfitting test)."""
+        params, structure = create_pc_graph(single_block_config, rng_key)
+        optimizer = create_optimizer({"type": "adam", "lr": 0.01})
+        opt_state = optimizer.init(params)
+        
+        target = jax.random.normal(rng_key, (4, 10, 32))
+        batch = {"x": target, "y": target}
+        
+        losses = []
+        for _ in range(5):
+            rng_key, step_key = jax.random.split(rng_key)
+            params, opt_state, loss, _ = train_step(
+                params, opt_state, batch, structure, optimizer, step_key,
+                infer_steps=5, eta_infer=0.1
+            )
+            losses.append(loss)
+            
+        assert losses[-1] < losses[0], "Transformer block failed to learn."    
 
 if __name__ == "__main__":
     import sys
