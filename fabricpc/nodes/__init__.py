@@ -17,7 +17,7 @@ from fabricpc.nodes.base import (
 from fabricpc.nodes.linear import Linear, LinearExplicitGrad
 from fabricpc.nodes.transformer import TransformerBlock
 from fabricpc.nodes.identity import IdentityNode
-from fabricpc.nodes.transformer_v2 import EmbeddingNode
+from fabricpc.nodes.transformer_v2 import EmbeddingNode, TransformerBlockNode
 
 # Convenience aliases matching the target API
 Linear = Linear
@@ -35,4 +35,5 @@ __all__ = [
     "TransformerBlock",
     "IdentityNode",
     "EmbeddingNode",
+    "TransformerBlockNode",
 ]
