@@ -17,7 +17,7 @@ from fabricpc.core.inference import run_inference
 from fabricpc.training import train_step, create_optimizer
 from fabricpc.nodes import get_node_class
 
-from fabricpc.nodes.transformer import EmbeddingNode
+from fabricpc.nodes.transformer import EmbeddingNode, create_deep_transformer
 
 @pytest.fixture
 def rng_key():
@@ -284,6 +284,37 @@ class TestTransformerBlock:
             losses.append(loss)
             
         assert losses[-1] < losses[0], "Transformer block failed to learn."    
+        
+    def test_factory_structure(self, rng_key):
+        """Verify create_deep_transformer generates correct graph topology."""
+        config = create_deep_transformer(depth=3, embed_dim=16, num_heads=2, mlp_dim=32)
+        
+        # Expect 1 Input + 3 Blocks + 1 Output = 5 Nodes
+        assert len(config["node_list"]) == 5
+        
+        # Expect 4 Edges connecting them linearly
+        assert len(config["edge_list"]) == 4
+        
+        # Check Node Types
+        types = [n["type"] for n in config["node_list"]]
+        assert types == ["linear", "transformer_block", "transformer_block", "transformer_block", "linear"]
+
+    def test_deep_network_inference(self, rng_key):
+        """Integration test: Build deep network via factory and run data through it."""
+        config = create_deep_transformer(depth=2, embed_dim=16, num_heads=4, mlp_dim=32, seq_len=8)
+        params, structure = create_pc_graph(config, rng_key)
+        
+        batch_size = 2
+        x = jax.random.normal(rng_key, (batch_size, 8, 16))
+        clamps = {"input_embed": x, "output": jnp.zeros_like(x)}
+        
+        state = initialize_state(structure, batch_size, rng_key, clamps=clamps, params=params)
+        final_state = run_inference(params, state, clamps, structure, infer_steps=2)
+        
+        # Check signal reached the end
+        output = final_state.nodes["output"].z_mu
+        assert output.shape == (batch_size, 8, 16)
+        assert jnp.abs(output).mean() > 0.0
 
 if __name__ == "__main__":
     import sys
