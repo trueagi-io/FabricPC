@@ -314,3 +314,79 @@ class TransformerBlockNode(NodeBase):
         total_energy = jnp.sum(state.energy)
 
         return total_energy, state
+
+
+# To build deep transformer PC graphs
+def create_deep_transformer(
+    depth: int,
+    embed_dim: int,
+    num_heads: int,
+    mlp_dim: int,
+    seq_len: int = 10,
+    vocab_size: int = None,
+):
+    nodes = []
+    edges = []
+
+    # Input Node
+    if vocab_size is not None:
+        nodes.append(
+            {
+                "name": "input_embed",
+                "shape": (seq_len, embed_dim),
+                "type": "embedding",
+                "vocab_size": vocab_size,
+                "embed_dim": embed_dim,
+            }
+        )
+    else:
+        nodes.append(
+            {
+                "name": "input_embed",
+                "shape": (seq_len, embed_dim),
+                "type": "linear",
+                "activation": {"type": "identity"},
+            }
+        )
+
+    # Stack Transformer Blocks
+    previous_node = "input_embed"
+
+    for i in range(depth):
+        block_name = f"block_{i}"
+
+        nodes.append(
+            {
+                "name": block_name,
+                "shape": (seq_len, embed_dim),
+                "type": "transformer_block",
+                "embed_dim": embed_dim,
+                "num_heads": num_heads,
+                "mlp_dim": mlp_dim,
+                "use_rope": True,
+            }
+        )
+
+        # Connect previous -> current
+        edges.append(
+            {"source_name": previous_node, "target_name": block_name, "slot": "in"}
+        )
+
+        previous_node = block_name
+
+    # Output Head
+    nodes.append(
+        {
+            "name": "output",
+            "shape": (seq_len, embed_dim),
+            "type": "linear",
+            "activation": {"type": "identity"},
+        }
+    )
+    edges.append({"source_name": previous_node, "target_name": "output", "slot": "in"})
+
+    return {
+        "node_list": nodes,
+        "edge_list": edges,
+        "task_map": {"x": "input_embed", "y": "output"},
+    }
