@@ -79,7 +79,7 @@ print(f"  Device types: {[d.device_kind for d in devices]}")
 print(f"  Device IDs: {[d.id for d in devices]}")
 
 if n_devices == 1:
-    print(f"\n  ⚠ Only 1 device available - will fall back to single-GPU training")
+    print(f"\n  ⚠ Only 1 device available.")
     print(f"     To see multi-GPU benefits, run on a machine with multiple GPUs")
 else:
     print(f"\n  ✓ Multi-GPU training enabled!")

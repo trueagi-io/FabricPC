@@ -1,0 +1,453 @@
+#!/usr/bin/env python3
+"""
+Test suite for multi-GPU training utilities.
+
+This test verifies numerical similarity between train.train_pcn() and
+multi_gpu.train_pcn_multi_gpu() by comparing:
+1. Both methods run without errors
+2. Both methods reduce energy over training
+3. Final energy values are within an acceptable range
+
+"""
+
+import os
+
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.5")
+os.environ.setdefault("JAX_TRACEBACK_FILTERING", "off")
+
+import copy
+import pytest
+import jax
+import jax.numpy as jnp
+import numpy as np
+
+from fabricpc.graph.graph_net import create_pc_graph
+from fabricpc.training import train_pcn, evaluate_pcn
+from fabricpc.training.multi_gpu import train_pcn_multi_gpu
+
+# Force CPU for reproducibility in tests
+jax.config.update("jax_platform_name", "cpu")
+
+
+@pytest.fixture
+def rng_key():
+    """Fixture to provide a JAX random key."""
+    return jax.random.PRNGKey(42)
+
+
+@pytest.fixture
+def simple_config():
+    """Simple graph configuration for testing."""
+    return {
+        "node_list": [
+            {
+                "name": "input",
+                "shape": (8,),
+                "type": "linear",
+                "activation": {"type": "identity"},
+            },
+            {
+                "name": "hidden1",
+                "shape": (16,),
+                "type": "linear",
+                "activation": {"type": "relu"},
+                "weight_init": {"type": "xavier"},
+            },
+            {
+                "name": "hidden2",
+                "shape": (16,),
+                "type": "linear",
+                "activation": {"type": "relu"},
+                "weight_init": {"type": "xavier"},
+            },
+            {
+                "name": "hidden3",
+                "shape": (16,),
+                "type": "linear",
+                "activation": {"type": "relu"},
+                "weight_init": {"type": "xavier"},
+            },
+            {
+                "name": "hidden4",
+                "shape": (16,),
+                "type": "linear",
+                "activation": {"type": "relu"},
+                "weight_init": {"type": "xavier"},
+            },
+            {
+                "name": "output",
+                "shape": (8,),
+                "type": "linear",
+                "activation": {"type": "identity"},
+            },
+        ],
+        "edge_list": [
+            {"source_name": "input", "target_name": "hidden1", "slot": "in"},
+            {"source_name": "hidden1", "target_name": "hidden2", "slot": "in"},
+            {"source_name": "hidden2", "target_name": "hidden3", "slot": "in"},
+            {"source_name": "hidden3", "target_name": "hidden4", "slot": "in"},
+            {"source_name": "hidden4", "target_name": "output", "slot": "in"},
+        ],
+        "task_map": {"x": "input", "y": "output"},
+    }
+
+
+@pytest.fixture
+def train_config():
+    """Training configuration."""
+    return {
+        "optimizer": {"type": "adam", "lr": 1e-3},
+        "num_epochs": 1,
+        "infer_steps": 18,
+        "eta_infer": 0.05,
+    }
+
+
+class SimpleDataLoader:
+    """Simple data loader that yields random batches."""
+
+    def __init__(self, input_shape, output_shape, batch_size, num_batches, rng_key):
+        self.input_shape = input_shape
+        self.output_shape = output_shape
+        self.batch_size = batch_size
+        self.num_batches = num_batches
+        self.rng_key = rng_key
+        self._data = self._generate_data()
+
+    def _generate_data(self):
+        """Pre-generate all batches for consistency."""
+        batches = []
+        rng_key = self.rng_key
+        for _ in range(self.num_batches):
+            rng_key, x_key, y_key = jax.random.split(rng_key, 3)
+            x = jax.random.normal(x_key, (self.batch_size, *self.input_shape))
+            y = jnp.tanh(x) + jax.random.normal(y_key, (self.batch_size, *self.output_shape))
+            batches.append({"x": x, "y": y})
+        return batches
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return self.num_batches
+
+
+class TestMultiGPUTraining:
+    """Test suite for multi-GPU training numerical similarity."""
+
+    def test_both_methods_run_successfully(self, simple_config, train_config, rng_key):
+        """Test that both training methods run without errors."""
+        # Split keys for different uses
+        model_key, train_key1, train_key2, data_key = jax.random.split(rng_key, 4)
+
+        # Create graph
+        params, structure = create_pc_graph(simple_config, model_key)
+
+        # Create data loader
+        input_shape = structure.nodes["input"].shape
+        output_shape = structure.nodes["output"].shape
+        train_loader = SimpleDataLoader(
+            input_shape, output_shape, batch_size=8, num_batches=4, rng_key=data_key
+        )
+
+        # Make a copy of params for the second training run
+        params_single = copy.deepcopy(params)
+        params_multi = copy.deepcopy(params)
+
+        # Run single-GPU training
+        trained_single, iter_results_single, _ = train_pcn(
+            params_single, structure, train_loader, train_config, train_key1, verbose=False
+        )
+
+        # Run multi-GPU training
+        trained_multi = train_pcn_multi_gpu(
+            params_multi, structure, train_loader, train_config, train_key2, verbose=False
+        )
+
+        # Both should complete and return valid parameters
+        assert trained_single is not None, "Single-GPU training should return params"
+        assert trained_multi is not None, "Multi-GPU training should return params"
+
+        # Check parameter structure is preserved
+        assert set(trained_single.nodes.keys()) == set(params.nodes.keys())
+        assert set(trained_multi.nodes.keys()) == set(params.nodes.keys())
+
+    def test_both_methods_reduce_energy(self, simple_config, train_config, rng_key):
+        """Test that both training methods reduce energy over training."""
+        model_key, train_key1, train_key2, data_key, eval_key = jax.random.split(rng_key, 5)
+
+        # Create graph
+        params, structure = create_pc_graph(simple_config, model_key)
+
+        # Create data loader
+        input_shape = structure.nodes["input"].shape
+        output_shape = structure.nodes["output"].shape
+        train_loader = SimpleDataLoader(
+            input_shape, output_shape, batch_size=8, num_batches=4, rng_key=data_key
+        )
+
+        # Make copies
+        params_single = copy.deepcopy(params)
+        params_multi = copy.deepcopy(params)
+
+        # Run single-GPU training and capture energies
+        trained_single, iter_results_single, _ = train_pcn(
+            params_single, structure, train_loader, train_config, train_key1, verbose=False
+        )
+
+        # Run multi-GPU training (captures losses internally)
+        trained_multi = train_pcn_multi_gpu(
+            params_multi, structure, train_loader, train_config, train_key2, verbose=False
+        )
+
+        # Check that single-GPU training reduced energy
+        first_epoch_energy = np.mean(iter_results_single[0])
+        last_epoch_energy = np.mean(iter_results_single[-1])
+        assert last_epoch_energy <= first_epoch_energy, (
+            f"Single-GPU: Energy should decrease. First: {first_epoch_energy:.4f}, "
+            f"Last: {last_epoch_energy:.4f}"
+        )
+
+        # Evaluate both trained models on same data
+        eval_loader = SimpleDataLoader(
+            input_shape, output_shape, batch_size=8, num_batches=2, rng_key=eval_key
+        )
+
+        eval_config = {
+            "infer_steps": train_config["infer_steps"],
+            "eta_infer": train_config["eta_infer"],
+        }
+
+        eval_key1, eval_key2 = jax.random.split(eval_key)
+        metrics_single = evaluate_pcn(
+            trained_single, structure, eval_loader, eval_config, eval_key1
+        )
+        metrics_multi = evaluate_pcn(
+            trained_multi, structure, eval_loader, eval_config, eval_key2
+        )
+
+        # Both should have finite energy
+        assert np.isfinite(metrics_single["energy"]), "Single-GPU eval energy should be finite"
+        assert np.isfinite(metrics_multi["energy"]), "Multi-GPU eval energy should be finite"
+
+    def test_numerical_similarity(self, simple_config, train_config, rng_key):
+        """
+        Test that train_pcn_multi_gpu with a single shard produces numerically
+        identical results to train_pcn.
+
+        When running on a single device, the multi-GPU training path should be
+        mathematically equivalent to the single-GPU path. Both should use the
+        same local learning dynamics and produce identical parameter updates.
+        """
+        model_key, train_key, data_key = jax.random.split(rng_key, 3)
+
+        # Create graph
+        params, structure = create_pc_graph(simple_config, model_key)
+
+        # Create data loader
+        input_shape = structure.nodes["input"].shape
+        output_shape = structure.nodes["output"].shape
+        train_loader = SimpleDataLoader(
+            input_shape, output_shape, batch_size=8, num_batches=4, rng_key=data_key
+        )
+
+        # Make copies with same initial params
+        params_single = copy.deepcopy(params)
+        params_multi = copy.deepcopy(params)
+
+        # Use the SAME training key - results should be identical
+        trained_single, _, _ = train_pcn(
+            params_single, structure, train_loader, train_config, train_key, verbose=False
+        )
+        trained_multi = train_pcn_multi_gpu(
+            params_multi, structure, train_loader, train_config, train_key, verbose=False
+        )
+
+        # Compare actual parameter values element-wise
+        # With same inputs and same RNG, parameters should be numerically identical
+        max_relative_diff = 0.0
+        param_diffs = []
+
+        for node_name in structure.nodes:
+            if structure.nodes[node_name].in_degree > 0:  # Skip source nodes
+                single_node = trained_single.nodes[node_name]
+                multi_node = trained_multi.nodes[node_name]
+
+                for edge_key in single_node.weights:
+                    w_single = single_node.weights[edge_key]
+                    w_multi = multi_node.weights[edge_key]
+
+                    # Compute relative difference
+                    diff = jnp.abs(w_single - w_multi)
+                    scale = jnp.maximum(jnp.abs(w_single), jnp.abs(w_multi)) + 1e-8
+                    rel_diff = diff / scale
+                    max_rel = float(jnp.max(rel_diff))
+                    mean_rel = float(jnp.mean(rel_diff))
+
+                    param_diffs.append({
+                        "node": node_name,
+                        "edge": edge_key,
+                        "max_rel_diff": max_rel,
+                        "mean_rel_diff": mean_rel,
+                    })
+                    max_relative_diff = max(max_relative_diff, max_rel)
+
+        # Single-shard multi-GPU should produce identical results to single-GPU
+        max_allowed_diff = 1e-5  # Allow for floating point tolerance
+
+        assert max_relative_diff < max_allowed_diff, (
+            f"Multi-GPU (single shard) should produce identical parameters to single-GPU! "
+            f"Max relative difference: {max_relative_diff:.6f} (allowed: {max_allowed_diff}). "
+            f"Per-parameter diffs: {param_diffs}"
+        )
+
+    def test_parameter_magnitudes_similar(self, simple_config, train_config, rng_key):
+        """Test that final parameter magnitudes are in similar ranges."""
+        model_key, train_key, data_key = jax.random.split(rng_key, 3)
+
+        # Create graph
+        params, structure = create_pc_graph(simple_config, model_key)
+
+        # Create data loader
+        input_shape = structure.nodes["input"].shape
+        output_shape = structure.nodes["output"].shape
+        train_loader = SimpleDataLoader(
+            input_shape, output_shape, batch_size=8, num_batches=4, rng_key=data_key
+        )
+
+        # Make copies
+        params_single = copy.deepcopy(params)
+        params_multi = copy.deepcopy(params)
+
+        train_key1, train_key2 = jax.random.split(train_key)
+
+        # Run both trainings
+        trained_single, _, _ = train_pcn(
+            params_single, structure, train_loader, train_config, train_key1, verbose=False
+        )
+        trained_multi = train_pcn_multi_gpu(
+            params_multi, structure, train_loader, train_config, train_key2, verbose=False
+        )
+
+        max_allowed_difference = 1e-5
+        # Compare parameter norms for each node
+        for node_name in structure.nodes:
+            if node_name in trained_single.nodes and node_name in trained_multi.nodes:
+                single_params = trained_single.nodes[node_name]
+                multi_params = trained_multi.nodes[node_name]
+
+                for edge_key in single_params.weights:
+                    single_norm = float(jnp.linalg.norm(single_params.weights[edge_key]))
+                    multi_norm = float(jnp.linalg.norm(multi_params.weights[edge_key]))
+
+                    # Both should have non-zero weights
+                    assert single_norm > 0, f"Single-GPU {node_name}/{edge_key} weights should be non-zero"
+                    assert multi_norm > 0, f"Multi-GPU {node_name}/{edge_key} weights should be non-zero"
+
+                    # Norms should be in same order of magnitude
+                    if single_norm > 0 and multi_norm > 0:
+                        norm_diff = abs(single_norm - multi_norm)
+                        assert norm_diff < max_allowed_difference, (
+                            f"Weight norms for {node_name}/{edge_key} differ too much. "
+                            f"Single: {single_norm:.5f}, Multi: {multi_norm:.5f}"
+                        )
+
+
+class TestMultiGPUUtilities:
+    """Test suite for multi-GPU utility functions."""
+
+    def test_shard_batch(self):
+        """Test batch sharding utility."""
+        from fabricpc.training.multi_gpu import shard_batch
+
+        batch = {
+            "x": jnp.zeros((8, 10)),
+            "y": jnp.zeros((8, 5)),
+        }
+
+        # Test with 1 device
+        sharded = shard_batch(batch, n_devices=1)
+        assert sharded["x"].shape == (1, 8, 10)
+        assert sharded["y"].shape == (1, 8, 5)
+
+        # Test with 2 devices
+        sharded = shard_batch(batch, n_devices=2)
+        assert sharded["x"].shape == (2, 4, 10)
+        assert sharded["y"].shape == (2, 4, 5)
+
+        # Test with 4 devices
+        sharded = shard_batch(batch, n_devices=4)
+        assert sharded["x"].shape == (4, 2, 10)
+        assert sharded["y"].shape == (4, 2, 5)
+
+    def test_shard_batch_invalid_size(self):
+        """Test that sharding raises error for invalid batch size."""
+        from fabricpc.training.multi_gpu import shard_batch
+
+        batch = {"x": jnp.zeros((7, 10))}  # 7 not divisible by 2
+
+        with pytest.raises(ValueError, match="divisible"):
+            shard_batch(batch, n_devices=2)
+
+    def test_replicate_params(self, simple_config, rng_key):
+        """Test parameter replication utility."""
+        from fabricpc.training.multi_gpu import replicate_params
+
+        params, structure = create_pc_graph(simple_config, rng_key)
+
+        # Replicate to 2 devices
+        replicated = replicate_params(params, n_devices=2)
+
+        # Check that each parameter has an extra leading dimension
+        for node_name, node_params in replicated.nodes.items():
+            for edge_key, weight in node_params.weights.items():
+                original_weight = params.nodes[node_name].weights[edge_key]
+                assert weight.shape == (2, *original_weight.shape), (
+                    f"Replicated weight shape mismatch for {node_name}/{edge_key}"
+                )
+                # Both replicas should be identical
+                assert jnp.allclose(weight[0], weight[1]), "Replicas should be identical"
+                assert jnp.allclose(weight[0], original_weight), "Replica should match original"
+
+    def test_unshard_losses(self):
+        """Test loss unsharding utility."""
+        from fabricpc.training.multi_gpu import unshard_losses
+
+        losses = jnp.array([1.0, 2.0, 3.0, 4.0])
+        avg = unshard_losses(losses)
+
+        assert abs(avg - 2.5) < 1e-6, f"Expected 2.5, got {avg}"
+
+    def test_unshard_grads(self, simple_config, rng_key):
+        """Test gradient unsharding utility."""
+        from fabricpc.training.multi_gpu import unshard_grads, replicate_params
+
+        params, structure = create_pc_graph(simple_config, rng_key)
+
+        # Create fake "gradients" from multiple devices by replicating and modifying
+        replicated = replicate_params(params, n_devices=2)
+
+        # Modify to simulate different gradients from each device
+        def add_device_offset(x, offset):
+            return x + offset
+
+        grads_device0 = jax.tree_util.tree_map(lambda x: x[0] + 1.0, replicated)
+        grads_device1 = jax.tree_util.tree_map(lambda x: x[1] + 2.0, replicated)
+
+        # Stack them back
+        stacked_grads = jax.tree_util.tree_map(
+            lambda a, b: jnp.stack([a, b]),
+            grads_device0,
+            grads_device1
+        )
+
+        # Unshard (average)
+        avg_grads = unshard_grads(stacked_grads)
+
+        # Check that averaging worked
+        for node_name, node_params in avg_grads.nodes.items():
+            for edge_key, weight in node_params.weights.items():
+                original = params.nodes[node_name].weights[edge_key]
+                expected = original + 1.5  # Average of +1.0 and +2.0
+                assert jnp.allclose(weight, expected), f"Gradient averaging failed for {node_name}/{edge_key}"

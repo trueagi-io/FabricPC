@@ -1,5 +1,9 @@
 # Changelog
 
+## [0.2.6] - 2026-01-06
+- Fixed multi-GPU training to correctly use graph state initializer from GraphStructure config.
+- Aligned gradient computation in multi-GPU training with single-GPU Hebbian learning.
+
 ## [0.2.5] - 2025-12-25
 - Added v1 TransformerBlockNode encapsulating multi-head attention, layer normalization, and feedforward networks using Rotary Position Embeddings (RoPE)
 - Refactored state initialization: renames "distribution" to "global", adds "node_distribution", and removes fallback configurations.

@@ -107,16 +107,16 @@ def train_step_pmap(
     opt_state: optax.OptState,
     batch: Dict[str, jnp.ndarray],
     structure: GraphStructure,
-    rng_key: jax.Array,  # Added: RNG key for this device
+    rng_key: jax.Array,
     optimizer: optax.GradientTransformation,
     infer_steps: int,
     eta_infer: float = 0.1,
-    state_init_config: Dict[str, Any] = None,
 ) -> Tuple[GraphParams, optax.OptState, jnp.ndarray, GraphState]:
     """
     Training step parallelized across devices using pmap.
 
-    This is the core pmap'ed training step that will be replicated across devices.
+    Uses local Hebbian learning (same as single-GPU training) via shared
+    get_graph_param_gradient function, then averages gradients across devices.
 
     Args:
         params: Replicated parameters (has device axis)
@@ -127,56 +127,27 @@ def train_step_pmap(
         optimizer: Optax optimizer
         infer_steps: Number of inference steps
         eta_infer: Inference learning rate
-        state_init_config: State initialization config (uses default if None)
 
     Returns:
-        Tuple of (updated_params, updated_opt_state, loss_per_device, state)
+        Tuple of (updated_params, updated_opt_state, energy_per_device, final_state)
     """
+    # Compute gradients using local Hebbian learning (shared code with single-GPU)
+    grads, energy, final_state = get_graph_param_gradient(
+        params, batch, structure, rng_key, infer_steps, eta_infer
+    )
 
-    def loss_fn(params: GraphParams) -> Tuple[float, GraphState]:
-        """Compute energy loss for the local batch shard."""
-        # Get batch size for this device shard
-        batch_size = next(iter(batch.values())).shape[0]
+    # Normalize energy by batch size for this shard
+    batch_size = next(iter(batch.values())).shape[0]
+    energy = energy / batch_size
 
-        # Map batch to clamps
-        clamps = {}
-        for task_name, task_value in batch.items():
-            if task_name in structure.task_map:
-                node_name = structure.task_map[task_name]
-                clamps[node_name] = task_value
-
-        # Initialize state
-        init_state = initialize_graph_state(
-            structure, batch_size, rng_key, clamps=clamps, state_init_config=state_init_config, params=params
-        )
-
-        # Run inference
-        final_state = run_inference(
-            params, init_state, clamps, structure, infer_steps, eta_infer
-        )
-
-        # Compute energy
-        energy = jnp.array(0.0)
-        for node_name, node_info in structure.nodes.items():
-            if node_info.in_degree > 0:
-                energy += jnp.sum(final_state.nodes[node_name].energy)
-
-        energy = energy / batch_size
-
-        return energy, final_state
-
-    # Compute loss and gradients on this device
-    (loss, state), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
-
-    # Average gradients across all devices (this is the key for data parallelism!)
+    # Average gradients across all devices (data parallelism)
     grads = jax.lax.pmean(grads, axis_name="devices")
 
     # Update parameters (each device now has same gradients)
     updates, opt_state = optimizer.update(grads, opt_state, params)
     params = cast(GraphParams, optax.apply_updates(params, updates))
-    # Note: optax.apply_updates preserves the structure but loses type info
 
-    return params, opt_state, loss, state
+    return params, opt_state, energy, final_state
 
 
 # Create pmap version of train_step
@@ -187,7 +158,6 @@ def create_pmap_train_step(
     optimizer: optax.GradientTransformation,
     infer_steps: int,
     eta_infer: float,
-    state_init_config: Dict[str, Any] = None,
 ):
     """
     Create a pmap'ed training step with static arguments captured in closure.
@@ -197,7 +167,6 @@ def create_pmap_train_step(
         optimizer: Optimizer (static)
         infer_steps: Number of inference steps (static)
         eta_infer: Inference learning rate (static)
-        state_init_config: State initialization config (static)
 
     Returns:
         Pmap'ed training step function
@@ -205,7 +174,7 @@ def create_pmap_train_step(
 
     def step_fn(params, opt_state, batch, rng_key):
         return train_step_pmap(
-            params, opt_state, batch, structure, rng_key, optimizer, infer_steps, eta_infer, state_init_config
+            params, opt_state, batch, structure, rng_key, optimizer, infer_steps, eta_infer
         )
 
     return jax.pmap(step_fn, axis_name="devices")
@@ -243,12 +212,10 @@ def train_pcn_multi_gpu(
     if verbose:
         print(f"Training on {n_devices} device(s): {jax.devices()}")
 
-    # Don't use fallback to cingle-gpu method. Create shard even for single gpu to ensure consistency.
-    # if n_devices == 1:
-    #     if verbose:
-    #         print("Only 1 device available, falling back to single-GPU training")
-    #     from fabricpc.training import train_pcn
-    #     return train_pcn(params, structure, train_loader, config, rng_key, verbose)
+    # Don't fallback to single-gpu method. Create shard even for single gpu to ensure consistency.
+    if n_devices == 1:
+        if verbose:
+            print("Only 1 device available, using multi-gpu training function with single device.")
 
     # Create optimizer
     optimizer = create_optimizer(config.get("optimizer", {"type": "adam", "lr": 1e-3}))
@@ -262,10 +229,9 @@ def train_pcn_multi_gpu(
     infer_steps = config.get("infer_steps", 20)
     eta_infer = config.get("eta_infer", 0.1)
     num_epochs = config.get("num_epochs", 10)
-    state_init_config = config.get("state_initialization", None)
 
-    # Create pmap'ed training step
-    pmap_train_step = create_pmap_train_step(structure, optimizer, infer_steps, eta_infer, state_init_config)
+    # Create pmap'ed training step (uses local Hebbian learning like single-GPU)
+    pmap_train_step = create_pmap_train_step(structure, optimizer, infer_steps, eta_infer)
 
     # Training loop
     for epoch in range(num_epochs):
@@ -360,7 +326,7 @@ def evaluate_pcn_multi_gpu(
 
     infer_steps = config.get("infer_steps", 20)
     eta_infer = config.get("eta_infer", 0.1)
-    state_init_config = config.get("state_initialization", None)
+    state_init_config = structure.config["graph_state_initializer"]
 
     # Estimate number of batches for key splitting
     num_batches = len(test_loader)
