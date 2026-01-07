@@ -31,6 +31,9 @@ There are various flavors of PC. FabricPC provides a graph-based implementation 
 # Install in editable mode (recommended for development, and running examples)
 pip install -e ".[dev,torch,viz]"
 
+# Install pre-commit hooks for code quality
+pre-commit install     
+
 # Run an example
 python examples/mnist_demo.py
 ```

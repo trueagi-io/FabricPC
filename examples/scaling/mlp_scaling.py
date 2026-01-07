@@ -18,9 +18,29 @@ How it works:
   - For each experiment, spawns python mlp_scaling.py --run-single --width X --depth Y ...
   - Subprocess gets fresh JAX memory pool, runs experiment, outputs JSON
   - Parent parses JSON and collects ScalingResult objects
+
+# TODO:
+Investigate node parallelization via vmap and pmap
+potential strategy during inference phase and weight learning update phase (independent over nodes):
+- vmap the nodes over batches within each device
+- pmap the nodes over multiple devices (if available)
+- potential strategy during initialization phase (sequential over layers):
+- pmap batch over multiple devices (if available) for data parallelism
+
+  Current Implementation:
+  - Nodes are processed sequentially in a Python for-loop (inference.py:63-84)
+  - No vmap/pmap at the node level
+  - Multi-GPU uses data parallelism via pmap on the entire training step
+  - Topological ordering is computed and stored (structure.node_order) but not actively exploited
+
+  Node Independence in Predictive Coding:
+  - Nodes within the same topological level are independent during forward pass
+  - Gradient accumulation phase has reduction dependencies (gradients flow backward)
+  - Source nodes (in_degree == 0) are always independent
 """
 
 import os
+
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("JAX_PLATFORMS", "cuda")
 
@@ -41,7 +61,7 @@ from fabricpc.training.train_backprop import train_step_backprop
 from fabricpc.training.optimizers import create_optimizer
 
 # Reproducibility
-jax.config.update('jax_default_prng_impl', 'threefry2x32')
+jax.config.update("jax_default_prng_impl", "threefry2x32")
 
 # =============================================================================
 # Configuration
@@ -61,9 +81,11 @@ INFER_STEPS = 10  # Reduced for faster iteration
 # Data Classes
 # =============================================================================
 
+
 @dataclass
 class ScalingResult:
     """Result from a single scaling experiment."""
+
     architecture: str
     training_mode: str
     width: int
@@ -79,7 +101,10 @@ class ScalingResult:
 # Utility Functions
 # =============================================================================
 
-def create_mlp_config(input_dim: int, hidden_width: int, num_layers: int, output_dim: int) -> dict:
+
+def create_mlp_config(
+    input_dim: int, hidden_width: int, num_layers: int, output_dim: int
+) -> dict:
     """
     Create MLP configuration with specified width and depth.
 
@@ -87,8 +112,12 @@ def create_mlp_config(input_dim: int, hidden_width: int, num_layers: int, output
     Uses LinearNode with sigmoid activations.
     """
     node_list = [
-        {"name": "input", "shape": (input_dim,), "type": "linear",
-         "activation": {"type": "identity"}},
+        {
+            "name": "input",
+            "shape": (input_dim,),
+            "type": "linear",
+            "activation": {"type": "identity"},
+        },
     ]
 
     edge_list = []
@@ -96,22 +125,28 @@ def create_mlp_config(input_dim: int, hidden_width: int, num_layers: int, output
 
     for i in range(num_layers):
         layer_name = f"hidden_{i}"
-        node_list.append({
-            "name": layer_name,
-            "shape": (hidden_width,),
-            "type": "linear",
-            "activation": {"type": "sigmoid"},
-        })
-        edge_list.append({"source_name": prev_name, "target_name": layer_name, "slot": "in"})
+        node_list.append(
+            {
+                "name": layer_name,
+                "shape": (hidden_width,),
+                "type": "linear",
+                "activation": {"type": "sigmoid"},
+            }
+        )
+        edge_list.append(
+            {"source_name": prev_name, "target_name": layer_name, "slot": "in"}
+        )
         prev_name = layer_name
 
     # Output layer
-    node_list.append({
-        "name": "output",
-        "shape": (output_dim,),
-        "type": "linear",
-        "activation": {"type": "sigmoid"},
-    })
+    node_list.append(
+        {
+            "name": "output",
+            "shape": (output_dim,),
+            "type": "linear",
+            "activation": {"type": "sigmoid"},
+        }
+    )
     edge_list.append({"source_name": prev_name, "target_name": "output", "slot": "in"})
 
     return {
@@ -126,15 +161,15 @@ def generate_synthetic_data(
     batch_size: int,
     input_dim: int,
     output_dim: int,
-    num_batches: int
+    num_batches: int,
 ) -> List[Dict[str, jnp.ndarray]]:
     """Generate random data batches for MLP training."""
     keys = jax.random.split(rng_key, num_batches * 2)
     batches = []
     for i in range(num_batches):
-        x = jax.random.normal(keys[2*i], (batch_size, input_dim))
+        x = jax.random.normal(keys[2 * i], (batch_size, input_dim))
         # One-hot encoded random labels
-        labels = jax.random.randint(keys[2*i+1], (batch_size,), 0, output_dim)
+        labels = jax.random.randint(keys[2 * i + 1], (batch_size,), 0, output_dim)
         y = jax.nn.one_hot(labels, output_dim)
         batches.append({"x": x, "y": y})
     return batches
@@ -149,10 +184,10 @@ def get_peak_memory_bytes() -> int:
     jax.block_until_ready(jnp.zeros(1))
 
     device = jax.local_devices()[0]
-    if hasattr(device, 'memory_stats'):
+    if hasattr(device, "memory_stats"):
         try:
             stats = device.memory_stats()
-            return stats.get('peak_bytes_in_use', 0)
+            return stats.get("peak_bytes_in_use", 0)
         except Exception:
             pass
     return 0  # Fallback for CPU or unavailable stats
@@ -168,14 +203,18 @@ def run_timed_training_pc(
     num_warmup: int,
 ) -> Tuple[float, int]:
     """Run PC training steps with timing, handling JIT warmup separately."""
-    optimizer = create_optimizer(train_config.get("optimizer", {"type": "adam", "lr": 1e-3}))
+    optimizer = create_optimizer(
+        train_config.get("optimizer", {"type": "adam", "lr": 1e-3})
+    )
     opt_state = optimizer.init(params)
     infer_steps = train_config.get("infer_steps", INFER_STEPS)
     eta_infer = train_config.get("eta_infer", 0.1)
 
     # JIT compile the training step
     jit_train_step = jax.jit(
-        lambda p, o, b, k: train_step(p, o, b, structure, optimizer, k, infer_steps, eta_infer)
+        lambda p, o, b, k: train_step(
+            p, o, b, structure, optimizer, k, infer_steps, eta_infer
+        )
     )
 
     keys = jax.random.split(rng_key, num_steps + num_warmup)
@@ -193,7 +232,9 @@ def run_timed_training_pc(
     start_time = time.perf_counter()
     for i in range(num_steps):
         batch = batches[(i + num_warmup) % len(batches)]
-        params, opt_state, _, _ = jit_train_step(params, opt_state, batch, keys[i + num_warmup])
+        params, opt_state, _, _ = jit_train_step(
+            params, opt_state, batch, keys[i + num_warmup]
+        )
     jax.block_until_ready(params)  # Ensure all computation complete
     end_time = time.perf_counter()
 
@@ -212,12 +253,16 @@ def run_timed_training_backprop(
     num_warmup: int,
 ) -> Tuple[float, int]:
     """Run backprop training steps with timing, handling JIT warmup separately."""
-    optimizer = create_optimizer(train_config.get("optimizer", {"type": "adam", "lr": 1e-3}))
+    optimizer = create_optimizer(
+        train_config.get("optimizer", {"type": "adam", "lr": 1e-3})
+    )
     opt_state = optimizer.init(params)
 
     # JIT compile the training step
     jit_train_step = jax.jit(
-        lambda p, o, b, k: train_step_backprop(p, o, b, structure, optimizer, k, "cross_entropy")
+        lambda p, o, b, k: train_step_backprop(
+            p, o, b, structure, optimizer, k, "cross_entropy"
+        )
     )
 
     keys = jax.random.split(rng_key, num_steps + num_warmup)
@@ -235,7 +280,9 @@ def run_timed_training_backprop(
     start_time = time.perf_counter()
     for i in range(num_steps):
         batch = batches[(i + num_warmup) % len(batches)]
-        params, opt_state, _ = jit_train_step(params, opt_state, batch, keys[i + num_warmup])
+        params, opt_state, _ = jit_train_step(
+            params, opt_state, batch, keys[i + num_warmup]
+        )
     jax.block_until_ready(params)  # Ensure all computation complete
     end_time = time.perf_counter()
 
@@ -252,6 +299,7 @@ def count_params(params) -> int:
 # =============================================================================
 # Experiment Runner (Subprocess-based for memory isolation)
 # =============================================================================
+
 
 def run_single_experiment(
     width: int,
@@ -279,8 +327,7 @@ def run_single_experiment(
 
     # Generate data
     batches = generate_synthetic_data(
-        data_key, batch_size, width, width,
-        num_steps + num_warmup
+        data_key, batch_size, width, width, num_steps + num_warmup
     )
 
     # Training config
@@ -293,13 +340,11 @@ def run_single_experiment(
     # Run timed training based on mode
     if mode == "pc":
         avg_time, peak_mem = run_timed_training_pc(
-            params, structure, batches, train_config, train_key,
-            num_steps, num_warmup
+            params, structure, batches, train_config, train_key, num_steps, num_warmup
         )
     else:
         avg_time, peak_mem = run_timed_training_backprop(
-            params, structure, batches, train_config, train_key,
-            num_steps, num_warmup
+            params, structure, batches, train_config, train_key, num_steps, num_warmup
         )
 
     return ScalingResult(
@@ -332,16 +377,25 @@ def run_experiment_subprocess(
     peak memory measurement per experiment.
     """
     cmd = [
-        sys.executable, os.path.abspath(__file__),
+        sys.executable,
+        os.path.abspath(__file__),
         "--run-single",
-        "--width", str(width),
-        "--depth", str(depth),
-        "--mode", mode,
-        "--seed", str(seed),
-        "--batch-size", str(batch_size),
-        "--num-steps", str(num_steps),
-        "--num-warmup", str(num_warmup),
-        "--infer-steps", str(infer_steps),
+        "--width",
+        str(width),
+        "--depth",
+        str(depth),
+        "--mode",
+        mode,
+        "--seed",
+        str(seed),
+        "--batch-size",
+        str(batch_size),
+        "--num-steps",
+        str(num_steps),
+        "--num-warmup",
+        str(num_warmup),
+        "--infer-steps",
+        str(infer_steps),
     ]
 
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -356,8 +410,8 @@ def run_experiment_subprocess(
             width=width,
             depth=depth,
             num_params=0,
-            avg_step_time_ms=float('nan'),
-            peak_memory_mb=float('nan'),
+            avg_step_time_ms=float("nan"),
+            peak_memory_mb=float("nan"),
             batch_size=batch_size,
             infer_steps=infer_steps,
         )
@@ -374,8 +428,8 @@ def run_experiment_subprocess(
             width=width,
             depth=depth,
             num_params=0,
-            avg_step_time_ms=float('nan'),
-            peak_memory_mb=float('nan'),
+            avg_step_time_ms=float("nan"),
+            peak_memory_mb=float("nan"),
             batch_size=batch_size,
             infer_steps=infer_steps,
         )
@@ -412,7 +466,11 @@ def run_all_experiments(
                 idx += 1
                 # Use different seed for each experiment
                 seed = base_seed + idx
-                print(f"  [{idx}/{total}] mode={mode}, depth={depth}, width={width}", end=" ", flush=True)
+                print(
+                    f"  [{idx}/{total}] mode={mode}, depth={depth}, width={width}",
+                    end=" ",
+                    flush=True,
+                )
 
                 result = run_experiment_subprocess(
                     width=width,
@@ -427,7 +485,9 @@ def run_all_experiments(
                 results.append(result)
 
                 if result.num_params > 0:
-                    print(f"params={result.num_params:,}, time={result.avg_step_time_ms:.2f}ms, mem={result.peak_memory_mb:.1f}MB")
+                    print(
+                        f"params={result.num_params:,}, time={result.avg_step_time_ms:.2f}ms, mem={result.peak_memory_mb:.1f}MB"
+                    )
 
     return results
 
@@ -435,10 +495,14 @@ def run_all_experiments(
 def parse_single_experiment_args() -> Optional[argparse.Namespace]:
     """Parse CLI arguments for single experiment mode."""
     parser = argparse.ArgumentParser(description="MLP Scaling Experiment")
-    parser.add_argument("--run-single", action="store_true", help="Run single experiment mode")
+    parser.add_argument(
+        "--run-single", action="store_true", help="Run single experiment mode"
+    )
     parser.add_argument("--width", type=int, help="Hidden layer width")
     parser.add_argument("--depth", type=int, help="Number of hidden layers")
-    parser.add_argument("--mode", type=str, choices=["pc", "backprop"], help="Training mode")
+    parser.add_argument(
+        "--mode", type=str, choices=["pc", "backprop"], help="Training mode"
+    )
     parser.add_argument("--seed", type=int, help="Random seed")
     parser.add_argument("--batch-size", type=int, help="Batch size")
     parser.add_argument("--num-steps", type=int, help="Number of training steps")
@@ -456,13 +520,24 @@ def parse_single_experiment_args() -> Optional[argparse.Namespace]:
 # Output Functions
 # =============================================================================
 
+
 def save_results_csv(results: List[ScalingResult], filename: str):
     """Save results to CSV file."""
-    with open(filename, 'w', newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=[
-            'architecture', 'training_mode', 'width', 'depth', 'num_params',
-            'avg_step_time_ms', 'peak_memory_mb', 'batch_size', 'infer_steps',
-        ])
+    with open(filename, "w", newline="") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "architecture",
+                "training_mode",
+                "width",
+                "depth",
+                "num_params",
+                "avg_step_time_ms",
+                "peak_memory_mb",
+                "batch_size",
+                "infer_steps",
+            ],
+        )
         writer.writeheader()
         for r in results:
             writer.writerow(asdict(r))
@@ -473,12 +548,16 @@ def print_summary_table(results: List[ScalingResult]):
     """Print a formatted summary table."""
     print("\nSummary Table:")
     print("-" * 95)
-    print(f"{'Mode':<10} | {'Width':<7} | {'Depth':<6} | {'Params':<12} | {'Time (ms)':<12} | {'Memory (MB)':<12}")
+    print(
+        f"{'Mode':<10} | {'Width':<7} | {'Depth':<6} | {'Params':<12} | {'Time (ms)':<12} | {'Memory (MB)':<12}"
+    )
     print("-" * 95)
 
     for r in results:
         if r.num_params > 0:  # Skip failed experiments
-            print(f"{r.training_mode:<10} | {r.width:<7} | {r.depth:<6} | {r.num_params:<12,} | {r.avg_step_time_ms:<12.2f} | {r.peak_memory_mb:<12.1f}")
+            print(
+                f"{r.training_mode:<10} | {r.width:<7} | {r.depth:<6} | {r.num_params:<12,} | {r.avg_step_time_ms:<12.2f} | {r.peak_memory_mb:<12.1f}"
+            )
     print("-" * 95)
 
 
@@ -498,121 +577,121 @@ def plot_results(results: List[ScalingResult], output_dir: str = "."):
         return
 
     # Create a combined label for legend grouping
-    df['mode_depth'] = df['training_mode'] + ', d=' + df['depth'].astype(str)
-    df['mode_width'] = df['training_mode'] + ', w=' + df['width'].astype(str)
+    df["mode_depth"] = df["training_mode"] + ", d=" + df["depth"].astype(str)
+    df["mode_width"] = df["training_mode"] + ", w=" + df["width"].astype(str)
 
     # Symbol mapping for training modes
-    symbol_map = {'pc': 'circle', 'backprop': 'square'}
+    symbol_map = {"pc": "circle", "backprop": "square"}
 
     # Plot 1: Training Time vs Width (by depth)
     fig1 = px.line(
         df,
-        x='width',
-        y='avg_step_time_ms',
-        color='depth',
-        symbol='training_mode',
+        x="width",
+        y="avg_step_time_ms",
+        color="depth",
+        symbol="training_mode",
         symbol_map=symbol_map,
         markers=True,
-        line_dash='training_mode',
-        line_dash_map={'pc': 'solid', 'backprop': 'dash'},
-        title='Training Time vs Width',
+        line_dash="training_mode",
+        line_dash_map={"pc": "solid", "backprop": "dash"},
+        title="Training Time vs Width",
         labels={
-            'width': 'Width (hidden units)',
-            'avg_step_time_ms': 'Step Time (ms)',
-            'depth': 'Depth',
-            'training_mode': 'Mode'
+            "width": "Width (hidden units)",
+            "avg_step_time_ms": "Step Time (ms)",
+            "depth": "Depth",
+            "training_mode": "Mode",
         },
         log_x=True,
     )
     fig1.update_layout(
         title_font_size=16,
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    fig1.update_xaxes(dtick=1, tickformat='d')
-    path1 = os.path.join(output_dir, 'mlp_scaling_time_vs_width.png')
+    fig1.update_xaxes(dtick=1, tickformat="d")
+    path1 = os.path.join(output_dir, "mlp_scaling_time_vs_width.png")
     fig1.write_image(path1, scale=2)
     print(f"Plot saved to: {path1}")
 
     # Plot 2: GPU Memory vs Width (by depth)
     fig2 = px.line(
         df,
-        x='width',
-        y='peak_memory_mb',
-        color='depth',
-        symbol='training_mode',
+        x="width",
+        y="peak_memory_mb",
+        color="depth",
+        symbol="training_mode",
         symbol_map=symbol_map,
         markers=True,
-        line_dash='training_mode',
-        line_dash_map={'pc': 'solid', 'backprop': 'dash'},
-        title='GPU Memory vs Width',
+        line_dash="training_mode",
+        line_dash_map={"pc": "solid", "backprop": "dash"},
+        title="GPU Memory vs Width",
         labels={
-            'width': 'Width (hidden units)',
-            'peak_memory_mb': 'Peak Memory (MB)',
-            'depth': 'Depth',
-            'training_mode': 'Mode'
+            "width": "Width (hidden units)",
+            "peak_memory_mb": "Peak Memory (MB)",
+            "depth": "Depth",
+            "training_mode": "Mode",
         },
         log_x=True,
     )
     fig2.update_layout(
         title_font_size=16,
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    fig2.update_xaxes(dtick=1, tickformat='d')
-    path2 = os.path.join(output_dir, 'mlp_scaling_memory_vs_width.png')
+    fig2.update_xaxes(dtick=1, tickformat="d")
+    path2 = os.path.join(output_dir, "mlp_scaling_memory_vs_width.png")
     fig2.write_image(path2, scale=2)
     print(f"Plot saved to: {path2}")
 
     # Plot 3: Training Time vs Depth (by width)
     fig3 = px.line(
         df,
-        x='depth',
-        y='avg_step_time_ms',
-        color='width',
-        symbol='training_mode',
+        x="depth",
+        y="avg_step_time_ms",
+        color="width",
+        symbol="training_mode",
         symbol_map=symbol_map,
         markers=True,
-        line_dash='training_mode',
-        line_dash_map={'pc': 'solid', 'backprop': 'dash'},
-        title='Training Time vs Depth',
+        line_dash="training_mode",
+        line_dash_map={"pc": "solid", "backprop": "dash"},
+        title="Training Time vs Depth",
         labels={
-            'depth': 'Depth (layers)',
-            'avg_step_time_ms': 'Step Time (ms)',
-            'width': 'Width',
-            'training_mode': 'Mode'
+            "depth": "Depth (layers)",
+            "avg_step_time_ms": "Step Time (ms)",
+            "width": "Width",
+            "training_mode": "Mode",
         },
     )
     fig3.update_layout(
         title_font_size=16,
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    path3 = os.path.join(output_dir, 'mlp_scaling_time_vs_depth.png')
+    path3 = os.path.join(output_dir, "mlp_scaling_time_vs_depth.png")
     fig3.write_image(path3, scale=2)
     print(f"Plot saved to: {path3}")
 
     # Plot 4: GPU Memory vs Depth (by width)
     fig4 = px.line(
         df,
-        x='depth',
-        y='peak_memory_mb',
-        color='width',
-        symbol='training_mode',
+        x="depth",
+        y="peak_memory_mb",
+        color="width",
+        symbol="training_mode",
         symbol_map=symbol_map,
         markers=True,
-        line_dash='training_mode',
-        line_dash_map={'pc': 'solid', 'backprop': 'dash'},
-        title='GPU Memory vs Depth',
+        line_dash="training_mode",
+        line_dash_map={"pc": "solid", "backprop": "dash"},
+        title="GPU Memory vs Depth",
         labels={
-            'depth': 'Depth (layers)',
-            'peak_memory_mb': 'Peak Memory (MB)',
-            'width': 'Width',
-            'training_mode': 'Mode'
+            "depth": "Depth (layers)",
+            "peak_memory_mb": "Peak Memory (MB)",
+            "width": "Width",
+            "training_mode": "Mode",
         },
     )
     fig4.update_layout(
         title_font_size=16,
-        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
     )
-    path4 = os.path.join(output_dir, 'mlp_scaling_memory_vs_depth.png')
+    path4 = os.path.join(output_dir, "mlp_scaling_memory_vs_depth.png")
     fig4.write_image(path4, scale=2)
     print(f"Plot saved to: {path4}")
 
@@ -620,6 +699,7 @@ def plot_results(results: List[ScalingResult], output_dir: str = "."):
 # =============================================================================
 # Main
 # =============================================================================
+
 
 def main():
     """Run all scaling experiments using subprocess isolation."""
@@ -640,7 +720,9 @@ def main():
     print(f"Training steps: {NUM_TRAINING_STEPS} (+ {NUM_WARMUP_STEPS} warmup)")
     print(f"PC inference steps: {INFER_STEPS}")
     print()
-    print("Note: Each experiment runs in isolated subprocess for accurate memory measurement.")
+    print(
+        "Note: Each experiment runs in isolated subprocess for accurate memory measurement."
+    )
 
     # Run all experiments via subprocesses
     all_results = run_all_experiments(
