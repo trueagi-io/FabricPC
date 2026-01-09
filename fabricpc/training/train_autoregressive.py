@@ -31,22 +31,23 @@ def create_causal_mask(seq_len: int) -> jnp.ndarray:
 
     Returns:
         Mask of shape (seq_len, seq_len) where mask[i,j] = 1 if j <= i else 0
-        This ensures position i can only attend to positions 0..i
+        This ensures position i can only attend to positions 0...i
     """
     return jnp.tril(jnp.ones((seq_len, seq_len)))
 
+
 def compute_loss(
-        final_state: GraphState,
-        targets: jnp.ndarray,
-        output_node: str,
-        loss_type: str = "cross_entropy",
+    final_state: GraphState,
+    targets: jnp.ndarray,
+    output_node: str,
+    loss_type: str = "cross_entropy",
 ) -> jnp.ndarray:
     """
     Compute differentiable loss
 
     Args:
         final_state: Final graph state after forward pass
-        targets: Target values for output node, expects one-hot for cross-entropy
+        targets: Target values (labels) for output node, expects one-hot for cross-entropy
         output_node: Name of the output node
         loss_type: Loss function type: "cross_entropy" or "mse"
 
@@ -69,6 +70,7 @@ def compute_loss(
         raise ValueError(f"Unknown loss_type: {loss_type}")
 
     return loss
+
 
 def compute_local_weight_gradients_ar(
     params: GraphParams,
@@ -104,7 +106,7 @@ def compute_local_weight_gradients_ar(
             params.nodes[node_name],
             in_edges_data,
             final_state.nodes[node_name],
-            node_info
+            node_info,
         )
 
         gradients[node_name] = grad_params
@@ -176,10 +178,12 @@ def train_step_autoregressive(
 
     # Initialize state
     init_state = initialize_graph_state(
-        structure, batch_size, rng_key,
+        structure,
+        batch_size,
+        rng_key,
         clamps=clamps,
         state_init_config=structure.config["graph_state_initializer"],
-        params=params
+        params=params,
     )
 
     # Run inference
@@ -207,7 +211,13 @@ def train_step_autoregressive(
         final_state, batch["y"], structure.task_map["y"], loss_type="cross_entropy"
     )
 
-    return params, opt_state, avg_energy.astype(float), output_cross_entropy.astype(float), final_state
+    return (
+        params,
+        opt_state,
+        avg_energy.astype(float),
+        output_cross_entropy.astype(float),
+        final_state,
+    )
 
 
 def train_autoregressive(
@@ -318,7 +328,9 @@ def train_autoregressive(
 
         if verbose:
             perplexity = float(jnp.exp(avg_ce_loss))
-            print(f"Train Epoch {epoch_idx + 1}/{num_epochs}, Energy: {avg_energy:.4f}, Loss: {avg_ce_loss:.4f}, Perplexity: {perplexity:.2f}")
+            print(
+                f"Train Epoch {epoch_idx + 1}/{num_epochs}, Energy: {avg_energy:.4f}, Loss: {avg_ce_loss:.4f}, Perplexity: {perplexity:.2f}"
+            )
 
     return params, iter_results, epoch_results
 
@@ -367,13 +379,17 @@ def _generation_step(
 
     # Initialize and run inference
     state = initialize_graph_state(
-        structure, batch_size, init_key,
+        structure,
+        batch_size,
+        init_key,
         clamps=clamps,
         state_init_config=structure.config["graph_state_initializer"],
-        params=params
+        params=params,
     )
     if infer_steps > 0:
-        final_state = run_inference(params, state, clamps, structure, infer_steps, eta_infer)
+        final_state = run_inference(
+            params, state, clamps, structure, infer_steps, eta_infer
+        )
     else:
         final_state = state
 
@@ -395,10 +411,10 @@ def _generation_step(
     effective_top_k = top_k if top_k is not None else vocab_size
     top_k_logits, top_k_indices = jax.lax.top_k(logits, effective_top_k)
     # Set non-top-k logits to -inf
-    neg_inf_mask = jnp.full_like(logits, float('-inf'))
-    logits = neg_inf_mask.at[
-        jnp.arange(batch_size)[:, None], top_k_indices
-    ].set(top_k_logits)
+    neg_inf_mask = jnp.full_like(logits, float("-inf"))
+    logits = neg_inf_mask.at[jnp.arange(batch_size)[:, None], top_k_indices].set(
+        top_k_logits
+    )
 
     # Apply top-p (nucleus) filtering
     if top_p is not None:
@@ -409,11 +425,10 @@ def _generation_step(
         # Find cutoff
         cutoff_mask = cumsum_probs > top_p
         # Shift mask to keep at least one token
-        cutoff_mask = jnp.concatenate([
-            jnp.zeros((batch_size, 1), dtype=bool),
-            cutoff_mask[:, :-1]
-        ], axis=-1)
-        sorted_logits = jnp.where(cutoff_mask, float('-inf'), sorted_logits)
+        cutoff_mask = jnp.concatenate(
+            [jnp.zeros((batch_size, 1), dtype=bool), cutoff_mask[:, :-1]], axis=-1
+        )
+        sorted_logits = jnp.where(cutoff_mask, float("-inf"), sorted_logits)
         # Unsort
         unsort_indices = jnp.argsort(sorted_indices, axis=-1)
         logits = jnp.take_along_axis(sorted_logits, unsort_indices, axis=-1)
@@ -422,10 +437,7 @@ def _generation_step(
     next_token = jax.random.categorical(sample_key, logits, axis=-1)  # (batch,)
 
     # Update context window: shift left and append new token
-    new_context = jnp.concatenate([
-        context_window[:, 1:],
-        next_token[:, None]
-    ], axis=1)
+    new_context = jnp.concatenate([context_window[:, 1:], next_token[:, None]], axis=1)
 
     # Write to output buffer at current step index
     new_output_buffer = output_buffer.at[:, step_idx].set(next_token)
@@ -499,7 +511,8 @@ def generate_autoregressive(
 
         def scan_fn(carry, step_idx):
             return _generation_step(
-                carry, step_idx,
+                carry,
+                step_idx,
                 params=params,
                 structure=structure,
                 input_node=input_node,
@@ -520,9 +533,7 @@ def generate_autoregressive(
         # Run the generation loop
         init_carry = (context, output_buffer, rng)
         (_, final_output_buffer, _), _ = jax.lax.scan(
-            scan_fn,
-            init_carry,
-            jnp.arange(max_new_tokens)
+            scan_fn, init_carry, jnp.arange(max_new_tokens)
         )
 
         return final_output_buffer
@@ -537,6 +548,7 @@ def generate_autoregressive(
         result = result[0]  # Remove batch dimension
 
     return result
+
 
 def _eval_step_autoregressive(
     params: GraphParams,
@@ -577,22 +589,29 @@ def _eval_step_autoregressive(
 
     # Initialize and run inference
     state = initialize_graph_state(
-        structure, batch_size, rng_key,
+        structure,
+        batch_size,
+        rng_key,
         clamps=clamps,
         state_init_config=structure.config["graph_state_initializer"],
-        params=params
+        params=params,
     )
     if infer_steps > 0:
-        final_state = run_inference(params, state, clamps, structure, infer_steps, eta_infer)
+        final_state = run_inference(
+            params, state, clamps, structure, infer_steps, eta_infer
+        )
     else:
         final_state = state
 
     # Compute loss and get predictions
     output_node = structure.task_map["y"]
-    output_cross_entropy = compute_loss(final_state, batch["y"], output_node, loss_type="cross_entropy")  # For perplexity metric
+    output_cross_entropy = compute_loss(
+        final_state, batch["y"], output_node, loss_type="cross_entropy"
+    )  # For perplexity metric
     predictions = final_state.nodes[output_node].z_mu
 
     return output_cross_entropy, predictions
+
 
 def evaluate_autoregressive(
     params: GraphParams,
@@ -673,14 +692,24 @@ def evaluate_autoregressive(
             # Check individual loss components
             log_preds = jnp.log(predictions + 1e-10)
             per_token_loss = -jnp.sum(tgt * log_preds, axis=-1)  # (batch, seq_len)
-            print(f"  [DEBUG] per-token CE loss: min={float(jnp.min(per_token_loss)):.4f}, max={float(jnp.max(per_token_loss)):.4f}, mean={float(jnp.mean(per_token_loss)):.4f}")
+            print(
+                f"  [DEBUG] per-token CE loss: min={float(jnp.min(per_token_loss)):.4f}, max={float(jnp.max(per_token_loss)):.4f}, mean={float(jnp.mean(per_token_loss)):.4f}"
+            )
 
-            token_intrinsic_perplexity = jnp.exp(-jnp.sum(predictions * log_preds, axis=-1))  # (batch, seq_len)
-            print(f"  [DEBUG] per-token intrinsic perplexity: min={float(jnp.min(token_intrinsic_perplexity)):.4f}, max={float(jnp.max(token_intrinsic_perplexity)):.4f}, mean={float(jnp.mean(token_intrinsic_perplexity)):.4f}")
+            token_intrinsic_perplexity = jnp.exp(
+                -jnp.sum(predictions * log_preds, axis=-1)
+            )  # (batch, seq_len)
+            print(
+                f"  [DEBUG] per-token intrinsic perplexity: min={float(jnp.min(token_intrinsic_perplexity)):.4f}, max={float(jnp.max(token_intrinsic_perplexity)):.4f}, mean={float(jnp.mean(token_intrinsic_perplexity)):.4f}"
+            )
 
             # Check if there are extreme values
-            correct_probs = jnp.sum(tgt * predictions, axis=-1)  # prob assigned to correct class
-            print(f"  [DEBUG] prob of correct token: min={float(jnp.min(correct_probs)):.6f}, max={float(jnp.max(correct_probs)):.6f}, mean={float(jnp.mean(correct_probs)):.6f}")
+            correct_probs = jnp.sum(
+                tgt * predictions, axis=-1
+            )  # prob assigned to correct class
+            print(
+                f"  [DEBUG] prob of correct token: min={float(jnp.min(correct_probs)):.6f}, max={float(jnp.max(correct_probs)):.6f}, mean={float(jnp.mean(correct_probs)):.6f}"
+            )
 
             print(f"  [DEBUG] batch loss: {float(loss):.4f}")
 

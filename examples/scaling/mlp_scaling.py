@@ -176,9 +176,11 @@ def generate_synthetic_data(
 
 
 def get_peak_memory_bytes() -> int:
-    """Get peak GPU memory usage in bytes.
+    """Get current GPU memory usage in bytes.
 
-    Accurate when run in isolated subprocess with fresh JAX memory pool.
+    Note: We use bytes_in_use (current) instead of peak_bytes_in_use because
+    peak includes temporary XLA compilation buffers that don't reflect
+    actual runtime memory usage and can vary unpredictably with model size.
     """
     # Force synchronization
     jax.block_until_ready(jnp.zeros(1))
@@ -187,7 +189,7 @@ def get_peak_memory_bytes() -> int:
     if hasattr(device, "memory_stats"):
         try:
             stats = device.memory_stats()
-            return stats.get("peak_bytes_in_use", 0)
+            return stats.get("bytes_in_use", 0)
         except Exception:
             pass
     return 0  # Fallback for CPU or unavailable stats

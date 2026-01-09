@@ -20,18 +20,32 @@ import jax
 import jax.numpy as jnp
 import optax
 
+from fabricpc.core import GraphState
 from fabricpc.core.types import GraphParams, GraphStructure
 from fabricpc.graph.state_initializer import initialize_graph_state
 from fabricpc.training.train_autoregressive import create_causal_mask, compute_loss
 
 
+def validate_feedforward_init(structure: GraphStructure):
+    """
+    Validate that the graph state initializer is feedforward type.
+
+    Raises:
+        ValueError if incompatible.
+    """
+    initializer_type = structure.config["graph_state_initializer"].get("type", "")
+    if initializer_type != "feedforward":
+        raise ValueError(
+            f"GraphState initializer must be 'feedforward' for backprop training, got '{initializer_type}'"
+        )
+
+
 def compute_forward_pass(
-        params: GraphParams,
-        structure: GraphStructure,
-        batch: Dict[str, jnp.ndarray],
-        rng_key: jax.Array,
-        loss_type: str = "cross_entropy",
-    ) -> jnp.ndarray:
+    params: GraphParams,
+    structure: GraphStructure,
+    batch: Dict[str, jnp.ndarray],
+    rng_key: jax.Array,
+) -> GraphState:
     """
     Compute forward pass for backpropagation training.
 
@@ -43,11 +57,13 @@ def compute_forward_pass(
         structure: Graph structure
         batch: Batch data with keys matching task_map (e.g., 'x', 'y')
         rng_key: JAX random key for state initialization
-        loss_type: Loss function type: "cross_entropy" or "mse"
 
     Returns:
-        Output predictions from the output node
+        graph state after feedforward pass
     """
+
+    validate_feedforward_init(structure)
+
     batch_size = batch["x"].shape[0]
 
     # Clamp ONLY input node (not output!) - key difference from PC
@@ -57,15 +73,14 @@ def compute_forward_pass(
 
     # Single forward pass via initialize_state with feedforward init
     state = initialize_graph_state(
-        structure, batch_size, rng_key,
+        structure,
+        batch_size,
+        rng_key,
         clamps=clamps,
         state_init_config=structure.config["graph_state_initializer"],
-        params=params
+        params=params,
     )
-    output_node = structure.task_map["y"]
-    targets = batch["y"]
-
-    return compute_loss(state, targets, output_node, loss_type)
+    return state
 
 
 def train_step_backprop(
@@ -92,8 +107,10 @@ def train_step_backprop(
     Returns:
         Tuple of (updated_params, updated_opt_state, loss_value)
     """
+
     def loss_fn(p):
-        return compute_loss(p, structure, batch, rng_key, loss_type)
+        state = compute_forward_pass(p, structure, batch, rng_key)
+        return compute_loss(state, batch["y"], structure.task_map["y"], loss_type)
 
     loss, grads = jax.value_and_grad(loss_fn)(params)
     updates, opt_state = optimizer.update(grads, opt_state, params)
@@ -146,6 +163,8 @@ def train_backprop(
         ... )
     """
     from fabricpc.training.optimizers import create_optimizer
+
+    validate_feedforward_init(structure)
 
     # Create optimizer
     optimizer = create_optimizer(config.get("optimizer", {"type": "adam", "lr": 1e-3}))
@@ -261,10 +280,12 @@ def compute_loss_autoregressive(
 
     # Single forward pass
     state = initialize_graph_state(
-        structure, batch_size, rng_key,
+        structure,
+        batch_size,
+        rng_key,
         clamps=clamps,
         state_init_config=structure.config["graph_state_initializer"],
-        params=params
+        params=params,
     )
 
     # Cross-entropy over all positions
@@ -301,8 +322,11 @@ def train_step_backprop_autoregressive(
     Returns:
         Tuple of (updated_params, updated_opt_state, loss_value, predictions)
     """
+
     def loss_fn(p):
-        return compute_loss_autoregressive(p, structure, batch, rng_key, use_causal_mask)
+        return compute_loss_autoregressive(
+            p, structure, batch, rng_key, use_causal_mask
+        )
 
     # has_aux=True: loss_fn returns (loss, aux), grads computed w.r.t. loss only
     (loss, predictions), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
@@ -345,6 +369,8 @@ def train_backprop_autoregressive(
         Tuple of (trained_params, loss_history, epoch_results)
     """
     from fabricpc.training.optimizers import create_optimizer
+
+    validate_feedforward_init(structure)
 
     # Create optimizer
     optimizer = create_optimizer(config.get("optimizer", {"type": "adam", "lr": 1e-3}))
@@ -414,7 +440,9 @@ def train_backprop_autoregressive(
 
         if verbose:
             perplexity = float(jnp.exp(avg_loss))
-            print(f"Epoch {epoch_idx + 1}/{num_epochs}, Loss: {avg_loss:.4f}, Perplexity: {perplexity:.2f}")
+            print(
+                f"Epoch {epoch_idx + 1}/{num_epochs}, Loss: {avg_loss:.4f}, Perplexity: {perplexity:.2f}"
+            )
 
     return params, iter_results, epoch_results
 
@@ -439,16 +467,8 @@ def eval_step_backprop(
     Returns:
         Tuple of (loss, correct_predictions, batch_size)
     """
-    batch_size = batch["x"].shape[0]
 
-    # Forward pass (input only clamped)
-    clamps = {structure.task_map["x"]: batch["x"]}
-    state = initialize_graph_state(
-        structure, batch_size, rng_key,
-        clamps=clamps,
-        state_init_config=structure.config["graph_state_initializer"],
-        params=params
-    )
+    state = compute_forward_pass(params, structure, batch, rng_key)
 
     # Get predictions
     output_node = structure.task_map["y"]
@@ -467,7 +487,7 @@ def eval_step_backprop(
     # Handle sequence vs non-sequence
     correct = jnp.sum(pred_labels == true_labels)
 
-    return float(loss), int(correct), int(jnp.prod(jnp.array(pred_labels.shape)))
+    return loss, correct, jnp.prod(jnp.array(pred_labels.shape))
 
 
 def evaluate_backprop(
@@ -492,6 +512,8 @@ def evaluate_backprop(
     """
     if rng_key is None:
         rng_key = jax.random.PRNGKey(0)
+
+    validate_feedforward_init(structure)
 
     loss_type = config.get("loss_type", "cross_entropy")
 
@@ -568,6 +590,9 @@ def evaluate_backprop_autoregressive(
     Returns:
         Dictionary with loss, perplexity, and accuracy
     """
+
+    validate_feedforward_init(structure)
+
     use_causal_mask = config.get("use_causal_mask", True)
 
     try:
@@ -609,14 +634,24 @@ def evaluate_backprop_autoregressive(
             # Check individual loss components
             log_preds = jnp.log(predictions + 1e-10)
             per_token_loss = -jnp.sum(tgt * log_preds, axis=-1)  # (batch, seq_len)
-            print(f"  [DEBUG] per-token CE loss: min={float(jnp.min(per_token_loss)):.4f}, max={float(jnp.max(per_token_loss)):.4f}, mean={float(jnp.mean(per_token_loss)):.4f}")
+            print(
+                f"  [DEBUG] per-token CE loss: min={float(jnp.min(per_token_loss)):.4f}, max={float(jnp.max(per_token_loss)):.4f}, mean={float(jnp.mean(per_token_loss)):.4f}"
+            )
 
-            token_intrinsic_perplexity = jnp.exp(-jnp.sum(predictions * log_preds, axis=-1))  # (batch, seq_len)
-            print(f"  [DEBUG] per-token intrinsic perplexity: min={float(jnp.min(token_intrinsic_perplexity)):.4f}, max={float(jnp.max(token_intrinsic_perplexity)):.4f}, mean={float(jnp.mean(token_intrinsic_perplexity)):.4f}")
+            token_intrinsic_perplexity = jnp.exp(
+                -jnp.sum(predictions * log_preds, axis=-1)
+            )  # (batch, seq_len)
+            print(
+                f"  [DEBUG] per-token intrinsic perplexity: min={float(jnp.min(token_intrinsic_perplexity)):.4f}, max={float(jnp.max(token_intrinsic_perplexity)):.4f}, mean={float(jnp.mean(token_intrinsic_perplexity)):.4f}"
+            )
 
             # Check if there are extreme values
-            correct_probs = jnp.sum(tgt * predictions, axis=-1)  # prob assigned to correct class
-            print(f"  [DEBUG] prob of correct token: min={float(jnp.min(correct_probs)):.6f}, max={float(jnp.max(correct_probs)):.6f}, mean={float(jnp.mean(correct_probs)):.6f}")
+            correct_probs = jnp.sum(
+                tgt * predictions, axis=-1
+            )  # prob assigned to correct class
+            print(
+                f"  [DEBUG] prob of correct token: min={float(jnp.min(correct_probs)):.6f}, max={float(jnp.max(correct_probs)):.6f}, mean={float(jnp.mean(correct_probs)):.6f}"
+            )
 
             print(f"  [DEBUG] batch loss: {float(loss):.4f}")
 

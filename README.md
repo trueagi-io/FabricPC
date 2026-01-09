@@ -50,7 +50,8 @@ Contributions are welcome! Please open issues or pull requests on the GitHub rep
 - Develop on a branch using convention "feature/your_feature_name"
 - All demos must match baseline results and test suites must pass before merging new code.
 - Write unit tests and docstrings for new code
-- Follow PEP8 style guidelines
+- Use pre-commit hooks for PEP8 style and code quality (run `pre-commit install` once after cloning!)
+- Follow the rebase instructions in `docs/rebasing_feature_branch.md` before merging to main.
 
 This is a research-first project.
 - APIs may change frequently until v1.0 release.

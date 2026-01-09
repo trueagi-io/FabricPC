@@ -1,4 +1,4 @@
-# Aim Integration for FabricPC
+# Aim How-to Guide for TensorBoards with FabricPC
 
 FabricPC integrates with [Aim](https://aimstack.io/) for comprehensive experiment tracking and visualization. This enables detailed monitoring of training quality, batch-level debugging, and hyperparameter tuning for predictive coding networks.
 
