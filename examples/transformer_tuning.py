@@ -166,11 +166,10 @@ if __name__ == "__main__":
     print("Loading tiny_shakespeare...")
     data, vocab_size, _, _ = load_data()
 
-    use_frac = 0.05
-    N = int(len(data) * use_frac)
-    data = data[:N]
-    print(f"Using {N} characters ({use_frac*100:.0f}%) of the dataset for fast tuning")
+    N = len(data)
 
+    print(f"Using all {N} characters ({100}%) of the dataset")
+    
     train_data, val_data = split_data(data)
 
     seq_len = 32
