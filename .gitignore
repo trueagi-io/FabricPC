@@ -55,6 +55,9 @@ log_dir/
 outputs/
 runs/
 
+# Aim experiment data logger
+.aim/
+
 # Data, checkpoints, and large artifacts
 data/
 datasets/

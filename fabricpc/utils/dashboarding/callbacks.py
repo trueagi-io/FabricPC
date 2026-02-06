@@ -16,21 +16,21 @@ def create_iter_callback(
     tracker: AimExperimentTracker,
     batch_size: Optional[int] = None,
 ) -> Callable[[int, int, float], float]:
-    """Create an iter_callback for train_pcn that tracks batch loss.
+    """Create an iter_callback for train_pcn that tracks batch energy.
 
     Args:
         tracker: AimExperimentTracker instance.
         batch_size: Optional batch size for normalization.
 
     Returns:
-        Callback function: (epoch_idx, batch_idx, loss) -> normalized_loss
+        Callback function: (epoch_idx, batch_idx, energy) -> normalized_energy
     """
 
-    def iter_callback(epoch_idx: int, batch_idx: int, loss: float) -> float:
-        # Normalize loss by batch size if provided
-        normalized_loss = loss / batch_size if batch_size else loss
-        tracker.track_batch_loss(normalized_loss, epoch=epoch_idx, batch=batch_idx)
-        return normalized_loss
+    def iter_callback(epoch_idx: int, batch_idx: int, energy: float) -> float:
+        # Normalize energy by batch size if provided
+        normalized_energy = energy / batch_size if batch_size else energy
+        tracker.track_batch_energy(normalized_energy, epoch=epoch_idx, batch=batch_idx)
+        return normalized_energy
 
     return iter_callback
 
@@ -99,7 +99,7 @@ def create_tracking_callbacks(
         eval_loader: Optional evaluation data loader.
         eval_config: Optional evaluation config.
         hparams: Optional hyperparameters to log.
-        batch_size: Optional batch size for loss normalization.
+        batch_size: Optional batch size for energy normalization.
         repo: Optional path to Aim repository.
 
     Returns:
@@ -156,20 +156,20 @@ def create_detailed_iter_callback(
         batch_size: Optional batch size for normalization.
 
     Returns:
-        Callback function: (epoch_idx, batch_idx, loss, final_state) -> normalized_loss
+        Callback function: (epoch_idx, batch_idx, energy, final_state) -> normalized_energy
     """
     from fabricpc.core.types import GraphState
 
     def detailed_iter_callback(
         epoch_idx: int,
         batch_idx: int,
-        loss: float,
+        energy: float,
         final_state: GraphState,
     ) -> float:
-        normalized_loss = loss / batch_size if batch_size else loss
+        normalized_energy = energy / batch_size if batch_size else energy
 
-        # Track batch loss
-        tracker.track_batch_loss(normalized_loss, epoch=epoch_idx, batch=batch_idx)
+        # Track batch energy
+        tracker.track_batch_energy(normalized_energy, epoch=epoch_idx, batch=batch_idx)
 
         # Track per-node energy
         tracker.track_batch_energy_per_node(
@@ -181,6 +181,6 @@ def create_detailed_iter_callback(
             final_state, epoch=epoch_idx, batch=batch_idx
         )
 
-        return normalized_loss
+        return normalized_energy
 
     return detailed_iter_callback

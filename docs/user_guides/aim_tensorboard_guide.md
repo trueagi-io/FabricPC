@@ -28,7 +28,7 @@ from fabricpc.training import train_pcn, evaluate_pcn
 tracking_config = TrackingConfig(
     experiment_name="my_experiment",
     track_weight_distributions=True,
-    track_batch_loss=True,
+    track_batch_energy=True,
 )
 
 # Create callbacks for train_pcn
@@ -56,6 +56,9 @@ Then launch the Aim UI:
 ```bash
 aim up
 ```
+Click on the link returned in the console to explore the dashboard.
+
+Be sure to run the python script and start aim from the same working directory to ensure the tracking data in folder .aim/ is correctly linked.
 
 ## TrackingConfig Options
 
@@ -63,11 +66,11 @@ aim up
 @dataclass
 class TrackingConfig:
     # Batch-level tracking
-    track_batch_loss: bool = True
+    track_batch_energy: bool = True
     track_batch_energy_per_node: bool = False
 
     # Epoch-level tracking
-    track_epoch_loss: bool = True
+    track_epoch_energy: bool = True
     track_epoch_accuracy: bool = True
     track_weight_distributions: bool = True
     track_latent_distributions: bool = False
@@ -163,12 +166,12 @@ jit_train_step = jax.jit(
 
 for epoch in range(num_epochs):
     for batch_idx, batch in enumerate(train_loader):
-        params, opt_state, loss, final_state, inference_history = jit_train_step(
+        params, opt_state, energy, final_state, inference_history = jit_train_step(
             params, opt_state, batch, rng_key
         )
 
         # Track batch metrics
-        tracker.track_batch_loss(loss / batch_size, epoch, batch_idx)
+        tracker.track_batch_energy(energy / batch_size, epoch, batch_idx)
         tracker.track_batch_energy_per_node(final_state, structure, epoch, batch_idx)
 
         # Analyze inference convergence
@@ -232,7 +235,7 @@ else:
 
 See `examples/mnist_aim_tracking.py` for a complete example that tracks:
 
-- Batch-level loss and per-node energy
+- Batch-level system energy and per-node energy
 - Epoch-level accuracy and weight distributions
 - Latent and pre-activation distributions
 - Inference dynamics (energy convergence per step)

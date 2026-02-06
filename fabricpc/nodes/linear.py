@@ -44,19 +44,19 @@ class LinearNode(FlattenInputMixin, NodeBase):
         "weight_init": {
             "type": dict,
             "default": {"type": "normal", "mean": 0.0, "std": 0.05},
-            "description": "Weight initialization config"
+            "description": "Weight initialization config",
         },
         "use_bias": {
             "type": bool,
             "default": True,
-            "description": "Whether to use bias"
+            "description": "Whether to use bias",
         },
         "flatten_input": {
             "type": bool,
             "default": False,
             "description": "If True, flatten all input dimensions for dense/fully-connected behavior and reshape the output to the node's shape tuple. "
-                          "If False (default), apply matmul on last axis only (standard for embeddings)."
-        }
+            "If False (default), apply matmul on last axis only (standard for embeddings).",
+        },
     }
 
     DEFAULT_ENERGY_CONFIG = {"type": "gaussian"}
@@ -69,16 +69,14 @@ class LinearNode(FlattenInputMixin, NodeBase):
         Returns:
             Dictionary with one slot "in" that accepts multiple inputs
         """
-        return {
-            "in": SlotSpec(name="in", is_multi_input=True)
-        }
+        return {"in": SlotSpec(name="in", is_multi_input=True)}
 
     @staticmethod
     def initialize_params(
         key: jax.Array,  # from jax.random.PRNGKey
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
-        config: Dict[str, Any]
+        config: Dict[str, Any],
     ) -> NodeParams:
         """
         Initialize weight matrix and bias vector.
@@ -110,11 +108,15 @@ class LinearNode(FlattenInputMixin, NodeBase):
         # Initialize weight matrix for each incoming edge
         # this node class uses multi-input "in" slot
         weights_dict = {}
-        rand_key_w = dict(zip(input_shapes.keys(), jax.random.split(key_w, len(input_shapes))))
+        rand_key_w = dict(
+            zip(input_shapes.keys(), jax.random.split(key_w, len(input_shapes)))
+        )
 
         for edge_key, in_shape in input_shapes.items():
             if ":in" not in edge_key:
-                raise ValueError(f"linear node requires 'in' slot dimension. got edge key {edge_key}")
+                raise ValueError(
+                    f"linear node requires 'in' slot dimension. got edge key {edge_key}"
+                )
 
             if flatten_input:
                 # Dense/fully-connected: flatten all dimensions
@@ -128,7 +130,7 @@ class LinearNode(FlattenInputMixin, NodeBase):
                 weight_shape = (in_features, out_features)
 
             weights_dict[edge_key] = initialize(
-               rand_key_w[edge_key], weight_shape, weight_init_config
+                rand_key_w[edge_key], weight_shape, weight_init_config
             )
 
         # Initialize bias (usually zeros)
@@ -138,17 +140,14 @@ class LinearNode(FlattenInputMixin, NodeBase):
             bias_shape = (1,) + node_shape
             b = jnp.zeros(bias_shape)
 
-        return NodeParams(
-            weights=weights_dict,
-            biases={"b": b} if use_bias else {}
-        )
+        return NodeParams(weights=weights_dict, biases={"b": b} if use_bias else {})
 
     @staticmethod
     def forward(
-            params: NodeParams,
-            inputs: Dict[str, jnp.ndarray],  # EdgeInfo.key -> inputs data
-            state: NodeState,  # state object for the present node
-            node_info: NodeInfo,
+        params: NodeParams,
+        inputs: Dict[str, jnp.ndarray],  # EdgeInfo.key -> inputs data
+        state: NodeState,  # state object for the present node
+        node_info: NodeInfo,
     ) -> tuple[jax.Array, NodeState]:
         """
         Linear transformation with activation.
@@ -172,6 +171,7 @@ class LinearNode(FlattenInputMixin, NodeBase):
                 - NodeState: updated node state (z_mu, pre_activation, etc.)
         """
         from fabricpc.nodes import get_node_class
+
         node_class = get_node_class(node_info.node_type)
 
         # Get batch size and output shape
@@ -198,7 +198,9 @@ class LinearNode(FlattenInputMixin, NodeBase):
                 pre_activation = jnp.zeros((batch_size,) + out_shape)
                 for edge_key, x in inputs.items():
                     # jnp.matmul broadcasts over leading dimensions
-                    pre_activation = pre_activation + jnp.matmul(x, params.weights[edge_key])
+                    pre_activation = pre_activation + jnp.matmul(
+                        x, params.weights[edge_key]
+                    )
 
             # Add bias if present (bias already has shape (1, *out_shape))
             if "b" in params.biases and params.biases["b"].size > 0:
@@ -212,10 +214,7 @@ class LinearNode(FlattenInputMixin, NodeBase):
             error = state.z_latent - z_mu
 
         # Update node state
-        state = state._replace(
-            pre_activation=pre_activation,
-            z_mu=z_mu,
-            error=error)
+        state = state._replace(pre_activation=pre_activation, z_mu=z_mu, error=error)
 
         # Compute energy, accumulate the self-latent gradient
         state = node_class.energy_functional(state, node_info)
@@ -227,7 +226,8 @@ class LinearNode(FlattenInputMixin, NodeBase):
 @register_node("linear_explicit_grad")
 class LinearExplicitGrad(LinearNode):
     """
-    Linear node that overrides NodeBase's autodiff-based gradient computation.
+    Linear node that demonstrates overriding NodeBase's autodiff-based gradient computation.
+    Don't write explicit gradients for your node classes unless you have a specific reason to do so (e.g., symbolic functions or deliberately non-differentiable nodes).
 
     This class extends LinearNode to define explicit gradient computations
     for both inference and learning phases. Use as an example of manual gradient.
@@ -264,6 +264,7 @@ class LinearExplicitGrad(LinearNode):
                 - gradient_wrt_inputs: dictionary of gradients w.r.t. each input edge
         """
         from fabricpc.nodes import get_node_class
+
         node_class = get_node_class(node_info.node_type)
 
         # Forward pass to get new state
@@ -275,7 +276,9 @@ class LinearExplicitGrad(LinearNode):
 
         # Determine the energy functional to use for the node from its config
         energy_functional = node_info.node_config.get("energy", {}).get("type", None)
-        latent_is_preactivation = node_info.node_config.get("latent_type") == "preactivation"
+        latent_is_preactivation = (
+            node_info.node_config.get("latent_type") == "preactivation"
+        )
         flatten_input = node_info.node_config["flatten_input"]
         input_grads = {}
 
@@ -287,21 +290,34 @@ class LinearExplicitGrad(LinearNode):
 
             if energy_functional == "gaussian":
                 if latent_is_preactivation:
-                    raise NotImplementedError("pre-activation latent type not implemented for LinearExplicitGrad with Gaussian energy.")
+                    raise NotImplementedError(
+                        "pre-activation latent type not implemented for LinearExplicitGrad with Gaussian energy."
+                    )
                 else:
                     if flatten_input:
                         # Flatten gain_mod_error and compute gradient in flat space
-                        gain_mod_error_flat = FlattenInputMixin.flatten_input(state.substructure["gain_mod_error"])
-                        grad_flat = -jnp.matmul(gain_mod_error_flat, params.weights[edge_key].T)
-                        grad_contribution = FlattenInputMixin.reshape_output(grad_flat, source_shape)
+                        gain_mod_error_flat = FlattenInputMixin.flatten_input(
+                            state.substructure["gain_mod_error"]
+                        )
+                        grad_flat = -jnp.matmul(
+                            gain_mod_error_flat, params.weights[edge_key].T
+                        )
+                        grad_contribution = FlattenInputMixin.reshape_output(
+                            grad_flat, source_shape
+                        )
                     else:
                         # Per-position: matmul on last axis (broadcasts over leading dims)
                         # gain_mod_error: (batch, ..., out_features)
                         # weights: (in_features, out_features)
                         # grad: (batch, ..., in_features)
-                        grad_contribution = -jnp.matmul(state.substructure["gain_mod_error"], params.weights[edge_key].T)
+                        grad_contribution = -jnp.matmul(
+                            state.substructure["gain_mod_error"],
+                            params.weights[edge_key].T,
+                        )
             else:
-                raise NotImplementedError(f"energy functional '{energy_functional}' not implemented in LinearExplicitGrad.")
+                raise NotImplementedError(
+                    f"energy functional '{energy_functional}' not implemented in LinearExplicitGrad."
+                )
 
             input_grads[edge_key] = grad_contribution
 
@@ -312,7 +328,7 @@ class LinearExplicitGrad(LinearNode):
         params: NodeParams,
         inputs: Dict[str, jnp.ndarray],
         state: NodeState,  # state object for the present node
-        node_info: NodeInfo
+        node_info: NodeInfo,
     ) -> Tuple[NodeState, NodeParams]:
         """
         Forward pass: update state and compute gradients of weights for local learning.
@@ -333,6 +349,7 @@ class LinearExplicitGrad(LinearNode):
                 - params_grad: NodeParams containing weight and bias gradients
         """
         from fabricpc.nodes import get_node_class
+
         node_class = get_node_class(node_info.node_type)
 
         # Forward pass to get new state
@@ -350,7 +367,9 @@ class LinearExplicitGrad(LinearNode):
             if flatten_input:
                 # Flatten inputs and errors for dense gradient computation
                 in_flat = FlattenInputMixin.flatten_input(in_tensor)
-                gain_mod_error_flat = FlattenInputMixin.flatten_input(state.substructure["gain_mod_error"])
+                gain_mod_error_flat = FlattenInputMixin.flatten_input(
+                    state.substructure["gain_mod_error"]
+                )
                 # Compute gradient: (in_numel, batch) @ (batch, out_numel) -> (in_numel, out_numel)
                 grad_w = -jnp.matmul(in_flat.T, gain_mod_error_flat)
             else:
@@ -361,24 +380,27 @@ class LinearExplicitGrad(LinearNode):
                 # Reshape to (batch*positions, features) for efficient matmul
                 in_shape = in_tensor.shape
                 err_shape = state.substructure["gain_mod_error"].shape
-                in_flat = in_tensor.reshape(-1, in_shape[-1])  # (batch*pos, in_features)
-                err_flat = state.substructure["gain_mod_error"].reshape(-1, err_shape[-1])  # (batch*pos, out_features)
+                in_flat = in_tensor.reshape(
+                    -1, in_shape[-1]
+                )  # (batch*pos, in_features)
+                err_flat = state.substructure["gain_mod_error"].reshape(
+                    -1, err_shape[-1]
+                )  # (batch*pos, out_features)
                 grad_w = -jnp.matmul(in_flat.T, err_flat)  # (in_features, out_features)
             weight_grads[edge_key] = grad_w
 
         # Bias gradient - sum over batch, keep shape (1, *out_shape)
         if "b" in params.biases:
             # Sum over batch (axis=0), keepdims to get (1, *out_shape)
-            grad_b = -jnp.sum(state.substructure["gain_mod_error"], axis=0, keepdims=True)
+            grad_b = -jnp.sum(
+                state.substructure["gain_mod_error"], axis=0, keepdims=True
+            )
             bias_grads["b"] = grad_b
 
         return state, NodeParams(weights=weight_grads, biases=bias_grads)
 
     @staticmethod
-    def compute_gain_mod_error(
-        state: NodeState,
-        node_info: NodeInfo
-    ) -> NodeState:
+    def compute_gain_mod_error(state: NodeState, node_info: NodeInfo) -> NodeState:
         """
         Compute gain-modulated error for this node.
 
@@ -389,7 +411,9 @@ class LinearExplicitGrad(LinearNode):
         _, activation_deriv = get_activation(node_info.node_config["activation"])
 
         # Gain-modulated error computation
-        f_prime = activation_deriv(state.pre_activation)  # shape (batch_size, *out_shape)
+        f_prime = activation_deriv(
+            state.pre_activation
+        )  # shape (batch_size, *out_shape)
         gain_mod_error = state.error * f_prime  # element-wise multiplication
 
         state = state._replace(substructure={"gain_mod_error": gain_mod_error})

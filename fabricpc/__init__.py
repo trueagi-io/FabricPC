@@ -12,36 +12,40 @@ Key Features:
 - XLA optimization for maximum performance
 
 Example:
-    >>> from fabricpc.graph import create_pc_graph
-    >>> from fabricpc.training import train_pcn
+    >>> from fabricpc import create_pc_graph, train_pcn, evaluate_pcn
     >>>
-    >>> params, structure = create_pc_graph(config)
-    >>> params = train_pcn(params, structure, train_loader, config)
+    >>> params, structure = create_pc_graph(config, rng_key)
+    >>> trained_params, history, _ = train_pcn(params, structure, train_loader, config)
+    >>> metrics = evaluate_pcn(trained_params, structure, test_loader, config)
 """
 
 from importlib.metadata import version
 
 __version__ = version("fabricpc")
 
-from fabricpc import core, graph, nodes, training
-from fabricpc.core import types, activations, inference, initialization
-from fabricpc.graph import graph_net
-from fabricpc.nodes import base, linear
-from fabricpc.training import train, optimizers, multi_gpu
+# Submodules (for advanced use)
+from fabricpc import core, graph, nodes, training, utils
+
+# Core API - what most users need
+from fabricpc.graph import create_pc_graph
+from fabricpc.training import train_pcn, evaluate_pcn
+
+# Types - for type hints
+from fabricpc.core.types import GraphParams, GraphState, GraphStructure
 
 __all__ = [
+    # Core API (common use)
+    "create_pc_graph",
+    "train_pcn",
+    "evaluate_pcn",
+    # Types (for type hints)
+    "GraphParams",
+    "GraphState",
+    "GraphStructure",
+    # Submodules (advanced use)
     "core",
-    "models",
+    "graph",
     "nodes",
     "training",
-    "types",
-    "activations",
-    "inference",
-    "initialization",
-    "graph_net",
-    "base",
-    "linear",
-    "train",
-    "optimizers",
-    "multi_gpu",
+    "utils",
 ]

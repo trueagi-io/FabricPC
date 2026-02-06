@@ -29,6 +29,7 @@ from fabricpc.nodes.base import NodeBase, SlotSpec
 from fabricpc.nodes.registry import register_node
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.activations import get_activation
+from fabricpc.core.initializers import initialize
 from fabricpc.graph import create_pc_graph
 from fabricpc.training import train_pcn, evaluate_pcn
 
@@ -92,22 +93,26 @@ class Conv2DNode(NodeBase):
         kernel_size = config["kernel_size"]
         out_channels = node_shape[-1]  # Last dim is channels (NHWC)
 
+        # Get weight initialization config
+        default_cfg = {"type": "normal", "mean": 0.0, "std": 0.05}
+        weight_init_config = config.get("weight_init", default_cfg)
+
         weights_dict = {}
         keys = jax.random.split(key, len(input_shapes) + 1)
 
         for i, (edge_key, in_shape) in enumerate(input_shapes.items()):
             in_channels = in_shape[-1]  # Input channels from source
 
-            # Initialize kernel with small values for stability
-            # TODO: use fabricpc.core.initializers import initialize
-            std = 0.01  # Small init for predictive coding stability
-            kernel = (
-                jax.random.normal(
-                    keys[i], (kernel_size[0], kernel_size[1], in_channels, out_channels)
-                )
-                * std
+            kernel_param_shape = (
+                kernel_size[0],
+                kernel_size[1],
+                in_channels,
+                out_channels,
             )
-            weights_dict[edge_key] = kernel
+
+            weights_dict[edge_key] = initialize(
+                keys[i], kernel_param_shape, weight_init_config
+            )
 
         # Initialize bias
         use_bias = config.get("use_bias", True)

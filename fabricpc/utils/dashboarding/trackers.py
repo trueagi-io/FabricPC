@@ -4,6 +4,7 @@ This module provides the main tracking interface for experiment monitoring
 with Aim. All tracking is designed to be optional and lazy-loaded.
 """
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
@@ -22,9 +23,9 @@ class TrackingConfig:
     """Configuration for what to track and when.
 
     Attributes:
-        track_batch_loss: Track loss at batch level.
+        track_batch_energy: Track energy at batch level.
         track_batch_energy_per_node: Track per-node energy at batch level.
-        track_epoch_loss: Track average loss at epoch level.
+        track_epoch_energy: Track average system energy at epoch level.
         track_epoch_accuracy: Track accuracy at epoch level.
         track_weight_distributions: Track weight distribution histograms.
         track_latent_distributions: Track latent state distributions.
@@ -40,11 +41,11 @@ class TrackingConfig:
     """
 
     # Batch-level tracking
-    track_batch_loss: bool = True
+    track_batch_energy: bool = True
     track_batch_energy_per_node: bool = False
 
     # Epoch-level tracking
-    track_epoch_loss: bool = True
+    track_epoch_energy: bool = True
     track_epoch_accuracy: bool = True
     track_weight_distributions: bool = True
     track_latent_distributions: bool = False
@@ -79,7 +80,7 @@ class AimExperimentTracker:
         tracker.log_hyperparams(train_config)
 
         # In training loop:
-        tracker.track_batch_loss(loss, epoch=epoch, batch=batch_idx)
+        tracker.track_batch_energy(energy, epoch=epoch, batch=batch_idx)
         tracker.track_epoch_metrics({"accuracy": acc}, epoch=epoch)
         tracker.track_weight_distributions(params, structure, epoch=epoch)
 
@@ -131,6 +132,7 @@ class AimExperimentTracker:
             return True
         except Exception:
             self._run = None
+            logging.getLogger(__name__).warning("Failed to initialize Aim Run.")
             return False
 
     @property
@@ -173,22 +175,22 @@ class AimExperimentTracker:
             },
         }
 
-    def track_batch_loss(
+    def track_batch_energy(
         self,
-        loss: float,
+        energy: float,
         epoch: int,
         batch: int,
         context: Optional[Dict[str, str]] = None,
     ) -> None:
-        """Track batch-level loss.
+        """Track batch-level energy.
 
         Args:
-            loss: Loss value.
+            energy: energy value.
             epoch: Current epoch.
             batch: Current batch index.
             context: Optional additional context.
         """
-        if not self.config.track_batch_loss:
+        if not self.config.track_batch_energy:
             return
         if not self._ensure_initialized():
             return
@@ -198,8 +200,8 @@ class AimExperimentTracker:
             ctx.update(context)
 
         self._run.track(
-            loss,
-            name="loss",
+            energy,
+            name="energy",
             step=self._global_step,
             epoch=epoch,
             context=ctx,
@@ -256,9 +258,9 @@ class AimExperimentTracker:
 
         for name, value in metrics.items():
             should_track = (
-                (name == "loss" and self.config.track_epoch_loss)
+                (name == "energy" and self.config.track_epoch_energy)
                 or (name == "accuracy" and self.config.track_epoch_accuracy)
-                or (name not in ["loss", "accuracy"])  # Track other metrics always
+                or (name not in ["energy", "accuracy"])  # Track other metrics always
             )
             if should_track:
                 self._run.track(

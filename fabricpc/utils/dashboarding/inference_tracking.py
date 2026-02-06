@@ -172,7 +172,7 @@ def train_step_with_history(
     This is a modified version of train_step that uses run_inference_with_history.
     Use this when you need to track inference dynamics.
 
-    Note: This function is designed to be JIT-compiled. The returned loss and
+    Note: This function is designed to be JIT-compiled. The returned energy and
     inference_history are JAX arrays. Use unstack_inference_history() to convert
     the stacked metrics to a list of per-step dicts after the JIT call.
 

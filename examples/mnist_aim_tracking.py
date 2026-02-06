@@ -5,7 +5,7 @@ MNIST with Aim Experiment Tracking
 This example demonstrates comprehensive experiment tracking for predictive
 coding networks using Aim. It tracks:
 
-1. Batch and epoch-level loss/accuracy metrics
+1. Batch and epoch-level energy/accuracy metrics
 2. Weight distributions per layer per epoch
 3. Latent state distributions (z_latent, z_mu, pre_activation)
 4. Per-node energy values
@@ -15,6 +15,9 @@ This provides deep insights for debugging and tuning predictive coding models.
 
 After running, launch the Aim UI with:
     aim up
+
+Click on the link returned in the console to explore the dashboard.
+Be sure to run the python script and start aim from the same working directory to ensure the tracking data is correctly linked.
 
 Requirements:
     pip install fabricpc[viz]  # Includes aim
@@ -99,7 +102,6 @@ config = {
     "task_map": {"x": "pixels", "y": "class"},
     "graph_state_initializer": {
         "type": "feedforward",
-        "fallback": {"type": "normal", "mean": 0.0, "std": 0.05},
     },
 }
 
@@ -109,7 +111,7 @@ train_config = {
     "optimizer": {"type": "adam", "lr": 0.001, "weight_decay": 0.001},
 }
 batch_size = 200
-num_epochs = 5
+num_epochs = 1
 
 # ==============================================================================
 # CREATE MODEL
@@ -154,10 +156,10 @@ if TRACKING_ENABLED:
         experiment_name="mnist_pcn_tracking",
         run_name=f"5layer_lr{train_config['optimizer']['lr']}_infer{train_config['infer_steps']}",
         # Batch-level tracking
-        track_batch_loss=True,
+        track_batch_energy=True,  # TODO replace related references to "loss" with "energy" for clarity
         track_batch_energy_per_node=True,
         # Epoch-level tracking
-        track_epoch_loss=True,
+        track_epoch_energy=True,  # TODO replace related references to "loss" with "energy" for clarity
         track_epoch_accuracy=True,
         track_weight_distributions=True,
         track_latent_distributions=True,
@@ -239,26 +241,27 @@ all_rng_keys = all_rng_keys.reshape((num_epochs, num_batches, 2))
 
 for epoch in range(num_epochs):
     epoch_start = time.time()
-    epoch_losses = []
+    epoch_energies = []
 
     for batch_idx, (x, y) in enumerate(train_loader):
         batch = {"x": jnp.array(x), "y": y}
 
+        energy = 0
         # Training step with inference history (returns stacked metrics)
-        params, opt_state, loss, final_state, stacked_history = jit_train_step(
+        params, opt_state, energy, final_state, stacked_history = jit_train_step(
             params, opt_state, batch, all_rng_keys[epoch, batch_idx]
         )
 
         # Unstack inference history outside of JIT (converts JAX arrays to Python floats)
         inference_history = unstack_inference_history(stacked_history, collect_every=5)
 
-        normalized_loss = float(loss) / batch_size
-        epoch_losses.append(normalized_loss)
+        normalized_energy = float(energy) / batch_size
+        epoch_energies.append(normalized_energy)
 
         # Track with Aim
         if tracker is not None:
-            # Batch loss
-            tracker.track_batch_loss(normalized_loss, epoch=epoch, batch=batch_idx)
+            # Batch energy
+            tracker.track_batch_energy(normalized_energy, epoch=epoch, batch=batch_idx)
 
             # Per-node energy
             tracker.track_batch_energy_per_node(
@@ -302,8 +305,8 @@ for epoch in range(num_epochs):
         # Progress update
         n_batch_update = 100
         if (batch_idx + 1) % n_batch_update == 0:
-            avg_loss = sum(epoch_losses[-n_batch_update:]) / len(
-                epoch_losses[-n_batch_update:]
+            avg_energy = sum(epoch_energies[-n_batch_update:]) / len(
+                epoch_energies[-n_batch_update:]
             )
             # Summarize inference convergence
             convergence = summarize_inference_convergence(inference_history)
@@ -311,12 +314,12 @@ for epoch in range(num_epochs):
             print(
                 f"  Epoch {epoch+1}/{num_epochs}, "
                 f"Batch {batch_idx+1}/{len(train_loader)}, "
-                f"Loss: {avg_loss:.4f}, "
+                f"energy: {avg_energy:.4f}, "
                 f"h1 Energy: {h1_final:.4f}"
             )
 
     epoch_time = time.time() - epoch_start
-    avg_loss = sum(epoch_losses) / len(epoch_losses)
+    avg_energy = sum(epoch_energies) / len(epoch_energies)
 
     # Track weight distributions at end of epoch
     if tracker is not None:
@@ -330,7 +333,7 @@ for epoch in range(num_epochs):
     # Track epoch metrics
     if tracker is not None:
         tracker.track_epoch_metrics(
-            {"loss": avg_loss, "accuracy": accuracy / 100},
+            {"energy": avg_energy, "accuracy": accuracy / 100},
             epoch=epoch,
             subset="val",
         )
@@ -343,7 +346,7 @@ for epoch in range(num_epochs):
 
     print(
         f"  Epoch {epoch+1}/{num_epochs} - "
-        f"Loss: {avg_loss:.4f}, "
+        f"energy: {avg_energy:.4f}, "
         f"Accuracy: {accuracy:.2f}%, "
         f"Time: {epoch_time:.1f}s"
     )
@@ -351,7 +354,7 @@ for epoch in range(num_epochs):
     training_history.append(
         {
             "epoch": epoch + 1,
-            "loss": avg_loss,
+            "energy": avg_energy,
             "accuracy": accuracy,
             "time": epoch_time,
         }
@@ -377,8 +380,8 @@ if tracker is not None:
     print("\n[Experiment Tracking Complete]")
     print("  Run 'aim up' to view the dashboard")
     print("  Tracked metrics:")
-    print("    - Batch-level: loss, per-node energy")
-    print("    - Epoch-level: loss, accuracy, weight distributions")
+    print("    - Batch-level: energy, per-node energy")
+    print("    - Epoch-level: energy, accuracy, weight distributions")
     print("    - Distributions: z_latent, z_mu, pre_activation per node")
     print("    - Inference dynamics: energy convergence per step")
 

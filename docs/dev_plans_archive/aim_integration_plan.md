@@ -56,11 +56,11 @@ Pure functions for JAX-compatible metric extraction:
 @dataclass
 class TrackingConfig:
     # Batch-level
-    track_batch_loss: bool = True
+    track_batch_energy: bool = True
     track_batch_energy_per_node: bool = False
 
     # Epoch-level
-    track_epoch_loss: bool = True
+    track_epoch_energy: bool = True
     track_epoch_accuracy: bool = True
     track_weight_distributions: bool = True
     track_latent_distributions: bool = False
@@ -81,7 +81,7 @@ class TrackingConfig:
 **AimExperimentTracker class:**
 - `log_hyperparams(hparams)` - Log hyperparameters
 - `log_graph_structure(structure)` - Log graph topology
-- `track_batch_loss(loss, epoch, batch)` - Batch-level loss
+- `track_batch_energy(energy, epoch, batch)` - Batch-level energy
 - `track_batch_energy_per_node(state, structure, epoch, batch)` - Per-node energy
 - `track_epoch_metrics(metrics, epoch, subset)` - Epoch metrics
 - `track_weight_distributions(params, structure, epoch)` - Weight histograms
@@ -142,7 +142,7 @@ tracker.close()
 
 **`train_step_with_history(...)`**
 - Modified train_step using `run_inference_with_history`
-- Returns `(params, opt_state, loss, final_state, state_history)`
+- Returns `(params, opt_state, energy, final_state, state_history)`
 
 ### 4.2 Tracked Inference Metrics
 For each inference step:
@@ -162,7 +162,7 @@ Create a new dedicated example file (keep mnist_advanced.py unchanged).
 1. Import dashboarding utilities
 2. Create same 5-layer network as mnist_advanced
 3. Create TrackingConfig with:
-   - `track_batch_loss=True`
+   - `track_batch_energy=True`
    - `track_weight_distributions=True`
    - `track_latent_distributions=True` (every 100 batches)
    - `track_inference_dynamics=True` (include full debugging)
