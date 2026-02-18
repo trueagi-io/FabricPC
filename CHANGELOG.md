@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.7] - 2026-02-18
+Add JAX-compatible MNIST data loader. Removed pytorch dependency from project.
+Enhanced documentation and comments across multiple files for clarity. Refactored inference to ignore energy of nodes that do not have energy (e.g. terminal input nodes).
+Added Aim integration for comprehensive experiment tracking and visualization. docs/user_guides/aim_tensorboard_guide.md provides instructions for setting up Aim and using it with FabricPC.
+
 ## [0.2.6] - 2026-01-06
 - Fixed multi-GPU training to correctly use graph state initializer from GraphStructure config.
 - Aligned gradient computation in multi-GPU training with single-GPU Hebbian learning.

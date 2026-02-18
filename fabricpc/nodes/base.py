@@ -395,6 +395,7 @@ class NodeBase(ABC):
     def energy_functional(state: NodeState, node_info: NodeInfo) -> NodeState:
         """
         Compute the energy and the derivative with respect to the node's latent state.
+        # Don't override this method. Instead, extend base class EnergyFunctional and specify your class in the node config. This method will look up the energy functional from the registry and apply it.
 
         The energy functional to use is determined by node_info.node_config["energy"].
         If not specified, the node class's DEFAULT_ENERGY_CONFIG is used during
@@ -467,6 +468,7 @@ class NodeBase(ABC):
     ) -> NodeInfo:
         """
         Validate config and construct node components.
+        # Don't override this method. Instead, implement get_slots() and set DEFAULT_ENERGY_CONFIG, DEFAULT_ACTIVATION_CONFIG, and DEFAULT_LATENT_INIT as needed.
 
         This method centralizes node construction logic, delegating subnode
         construction (slots, energy, activation) to the object's class.
