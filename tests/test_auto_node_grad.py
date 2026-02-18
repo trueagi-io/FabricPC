@@ -6,6 +6,7 @@ numerically equivalent gradients to LinearNode (using manual formulas).
 """
 
 import os
+
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("JAX_TRACEBACK_FILTERING", "off")
 
@@ -17,9 +18,16 @@ from fabricpc.core.types import NodeState, NodeParams, NodeInfo
 from fabricpc.graph.graph_net import create_pc_graph
 from fabricpc.graph.state_initializer import initialize_graph_state
 from fabricpc.core.inference import run_inference, gather_inputs
-from fabricpc.nodes import get_node_class, LinearNode, LinearExplicitGrad, validate_node_config
+from fabricpc.nodes import (
+    get_node_class,
+    LinearNode,
+    LinearExplicitGrad,
+    validate_node_config,
+)
 
-jax.config.update("jax_platform_name", "cpu")  # using cuda causes larger numerical differences because of TF32 precision
+jax.config.update(
+    "jax_platform_name", "cpu"
+)  # using cuda causes larger numerical differences because of TF32 precision
 
 
 def make_node_config(node_type: str, activation: str) -> dict:
@@ -49,10 +57,12 @@ def rng_key():
     """Fixture to provide a JAX random key."""
     return jax.random.PRNGKey(42)
 
+
 @pytest.fixture
 def grad_tolerance():
     """Fixture to provide gradient comparison tolerance."""
     return 1e-5
+
 
 def create_config(node_type: str):
     """Create a small network config with specified node type."""
@@ -99,8 +109,11 @@ class TestLinearAutoGradNode:
 
         edge_key = "src->dst:in"
         params = NodeParams(
-            weights={edge_key: jax.random.normal(rngkey_weights, (input_dim, output_dim)) * 0.1},
-            biases={"b": jnp.zeros((1, output_dim))}
+            weights={
+                edge_key: jax.random.normal(rngkey_weights, (input_dim, output_dim))
+                * 0.1
+            },
+            biases={"b": jnp.zeros((1, output_dim))},
         )
         inputs = {edge_key: jax.random.normal(rngkey_inputs, (batch_size, input_dim))}
 
@@ -144,20 +157,29 @@ class TestLinearAutoGradNode:
         )
 
         # Compare forward_inference results
-        state_linear, grads_linear = LinearNode.forward_inference(params, inputs, node_state, node_info)
-        state_autograd, grads_autograd = LinearExplicitGrad.forward_inference(params, inputs, node_state, node_info_explicit)
+        state_linear, grads_linear = LinearNode.forward_inference(
+            params, inputs, node_state, node_info, is_clamped=True
+        )
+        state_autograd, grads_autograd = LinearExplicitGrad.forward_inference(
+            params, inputs, node_state, node_info_explicit, is_clamped=True
+        )
 
         # Compare input gradients
         for edge_key in grads_linear:
-            max_diff = jnp.max(jnp.abs(grads_linear[edge_key] - grads_autograd[edge_key]))
-            assert max_diff < grad_tolerance, \
-                f"Input gradient mismatch for activation={activation}, edge={edge_key}: max diff = {max_diff}"
+            max_diff = jnp.max(
+                jnp.abs(grads_linear[edge_key] - grads_autograd[edge_key])
+            )
+            assert (
+                max_diff < grad_tolerance
+            ), f"Input gradient mismatch for activation={activation}, edge={edge_key}: max diff = {max_diff}"
 
         # Compare state values
-        assert jnp.allclose(state_linear.z_mu, state_autograd.z_mu, atol=grad_tolerance), \
-            f"z_mu mismatch for activation={activation}"
-        assert jnp.allclose(state_linear.error, state_autograd.error, atol=grad_tolerance), \
-            f"error mismatch for activation={activation}"
+        assert jnp.allclose(
+            state_linear.z_mu, state_autograd.z_mu, atol=grad_tolerance
+        ), f"z_mu mismatch for activation={activation}"
+        assert jnp.allclose(
+            state_linear.error, state_autograd.error, atol=grad_tolerance
+        ), f"error mismatch for activation={activation}"
 
     @pytest.mark.parametrize("activation", ["identity", "relu", "tanh", "sigmoid"])
     def test_forward_learning_equivalence(self, rng_key, activation, grad_tolerance):
@@ -170,8 +192,11 @@ class TestLinearAutoGradNode:
 
         edge_key = "src->dst:in"
         params = NodeParams(
-            weights={edge_key: jax.random.normal(rngkey_weights, (input_dim, output_dim)) * 0.1},
-            biases={"b": jnp.zeros((1, output_dim))}
+            weights={
+                edge_key: jax.random.normal(rngkey_weights, (input_dim, output_dim))
+                * 0.1
+            },
+            biases={"b": jnp.zeros((1, output_dim))},
         )
         inputs = {edge_key: jax.random.normal(rngkey_inputs, (batch_size, input_dim))}
 
@@ -215,20 +240,32 @@ class TestLinearAutoGradNode:
         )
 
         # Compare forward_learning results
-        state_linear, grads_linear = LinearNode.forward_learning(params, inputs, node_state, node_info)
-        state_autograd, grads_autograd = LinearExplicitGrad.forward_learning(params, inputs, node_state, node_info_explicit)
+        state_linear, grads_linear = LinearNode.forward_learning(
+            params, inputs, node_state, node_info
+        )
+        state_autograd, grads_autograd = LinearExplicitGrad.forward_learning(
+            params, inputs, node_state, node_info_explicit
+        )
 
         # Compare weight gradients
         for edge_key in grads_linear.weights:
-            max_diff = jnp.max(jnp.abs(grads_linear.weights[edge_key] - grads_autograd.weights[edge_key]))
-            assert max_diff < grad_tolerance, \
-                f"Weight gradient mismatch for activation={activation}, edge={edge_key}: max diff = {max_diff}"
+            max_diff = jnp.max(
+                jnp.abs(
+                    grads_linear.weights[edge_key] - grads_autograd.weights[edge_key]
+                )
+            )
+            assert (
+                max_diff < grad_tolerance
+            ), f"Weight gradient mismatch for activation={activation}, edge={edge_key}: max diff = {max_diff}"
 
         # Compare bias gradients
         for bias_key in grads_linear.biases:
-            max_diff = jnp.max(jnp.abs(grads_linear.biases[bias_key] - grads_autograd.biases[bias_key]))
-            assert max_diff < grad_tolerance, \
-                f"Bias gradient mismatch for activation={activation}, bias={bias_key}: max diff = {max_diff}"
+            max_diff = jnp.max(
+                jnp.abs(grads_linear.biases[bias_key] - grads_autograd.biases[bias_key])
+            )
+            assert (
+                max_diff < grad_tolerance
+            ), f"Bias gradient mismatch for activation={activation}, bias={bias_key}: max diff = {max_diff}"
 
     def test_gradient_equivalence_full_network(self, rng_key, grad_tolerance):
         """Test gradient equivalence across a full network with inference."""
@@ -247,8 +284,9 @@ class TestLinearAutoGradNode:
             for edge_key in params_linear.nodes[node_name].weights:
                 w_linear = params_linear.nodes[node_name].weights[edge_key]
                 w_autograd = params_autograd.nodes[node_name].weights[edge_key]
-                assert jnp.allclose(w_linear, w_autograd), \
-                    f"Params differ for {node_name}/{edge_key}"
+                assert jnp.allclose(
+                    w_linear, w_autograd
+                ), f"Params differ for {node_name}/{edge_key}"
 
         # Create identical input/output data
         rngkey_x, rngkey_y, rngkey_state = jax.random.split(rng_key, 3)
@@ -258,22 +296,46 @@ class TestLinearAutoGradNode:
 
         # Initialize states identically
         state_linear = initialize_graph_state(
-            structure_linear, batch_size, rngkey_state, clamps=clamps, params=params_linear
+            structure_linear,
+            batch_size,
+            rngkey_state,
+            clamps=clamps,
+            params=params_linear,
         )
         state_autograd = initialize_graph_state(
-            structure_autograd, batch_size, rngkey_state, clamps=clamps, params=params_autograd
+            structure_autograd,
+            batch_size,
+            rngkey_state,
+            clamps=clamps,
+            params=params_autograd,
         )
 
         # Run inference
-        state_linear = run_inference(params_linear, state_linear, clamps, structure_linear, infer_steps=5, eta_infer=0.1)
-        state_autograd = run_inference(params_autograd, state_autograd, clamps, structure_autograd, infer_steps=5, eta_infer=0.1)
+        state_linear = run_inference(
+            params_linear,
+            state_linear,
+            clamps,
+            structure_linear,
+            infer_steps=5,
+            eta_infer=0.1,
+        )
+        state_autograd = run_inference(
+            params_autograd,
+            state_autograd,
+            clamps,
+            structure_autograd,
+            infer_steps=5,
+            eta_infer=0.1,
+        )
 
         # Compare gradients for each non-input node using forward_inference
         for node_name in ["hidden", "output"]:
             node_info = structure_linear.nodes[node_name]
             # Override node_type for autograd version
             info_fields = node_info.__dict__.copy()
-            node_info_explicit = NodeInfo(**{**info_fields, "node_type": "linear_explicit_grad"})
+            node_info_explicit = NodeInfo(
+                **{**info_fields, "node_type": "linear_explicit_grad"}
+            )
 
             # Gather inputs for gradient computation
             inputs = gather_inputs(node_info, structure_linear, state_linear)
@@ -283,20 +345,26 @@ class TestLinearAutoGradNode:
                 params_linear.nodes[node_name],
                 inputs,
                 state_linear.nodes[node_name],
-                node_info
+                node_info,
+                is_clamped=(node_name == "output"),  # Clamp output node
             )
             _, grads_autograd = LinearExplicitGrad.forward_inference(
                 params_autograd.nodes[node_name],
                 inputs,
                 state_autograd.nodes[node_name],
-                node_info_explicit
+                node_info_explicit,
+                is_clamped=(node_name == "output"),  # Clamp output node
             )
 
             # Compare
             for edge_key in grads_linear:
-                max_diff = jnp.max(jnp.abs(grads_linear[edge_key] - grads_autograd[edge_key]))
-                assert max_diff < grad_tolerance, \
-                    f"Input gradient mismatch at {node_name} for {edge_key}: max diff = {max_diff}"
+                max_diff = jnp.max(
+                    jnp.abs(grads_linear[edge_key] - grads_autograd[edge_key])
+                )
+                assert (
+                    max_diff < grad_tolerance
+                ), f"Input gradient mismatch at {node_name} for {edge_key}: max diff = {max_diff}"
+
 
 class TestLinearAutoGradNodeRegistration:
     """Test that LinearExplicitGrad is properly registered."""
@@ -312,4 +380,7 @@ class TestLinearAutoGradNodeRegistration:
         params, structure = create_pc_graph(config, rng_key)
 
         assert len(structure.nodes) == 3
-        assert all(info.node_type == "linear_explicit_grad" for info in structure.nodes.values())
+        assert all(
+            info.node_type == "linear_explicit_grad"
+            for info in structure.nodes.values()
+        )

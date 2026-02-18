@@ -45,6 +45,22 @@ Evaluating...
 Test Accuracy: 98.05%
 ```
 
+### `PC_backprop_compare.py`
+**Description**: Compare accuracy and training time of Predictive Coding vs Backpropagation on MNIST.
+PC:       97.99 +/- 0.03%  (mean +/- SE, SD=0.11%)
+Backprop: 97.81 +/- 0.05%  (mean +/- SE, SD=0.23%)
+
+--- Paired t-test ---
+Mean difference (PC - BP): +0.18%
+t-statistic: 3.6474
+p-value: 0.0017, N = 20
+Significant at p<0.05: YES
+--- Training Time per Epoch ---
+PC:       1.211 +/- 0.011s
+Backprop: 0.761 +/- 0.008s
+Ratio:    PC is 1.59x backprop time
+
+
 ### transformer_demo.py
 
 Using Backpropagation training method (6-block Transformer on Shakespeare dataset)

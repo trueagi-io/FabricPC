@@ -7,6 +7,7 @@ in the JAX version, ensuring feature parity and comprehensive testing.
 """
 
 import os
+
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.9")
 os.environ.setdefault("JAX_TRACEBACK_FILTERING", "off")
@@ -130,21 +131,27 @@ class TestShapeConsistency:
         clamps = {"a": x_data, "b": y_data}
 
         # Initialize state
-        state = initialize_graph_state(structure, batch_size, rng_key, clamps=clamps, params=params)
+        state = initialize_graph_state(
+            structure, batch_size, rng_key, clamps=clamps, params=params
+        )
 
         # Check shapes for each node
         for node_name, node_info in structure.nodes.items():
             node_state = state.nodes[node_name]
             expected_shape = (batch_size, *node_info.shape)
 
-            assert node_state.z_latent.shape == expected_shape, \
-                f"z_latent shape mismatch for {node_name}"
-            assert node_state.error.shape == expected_shape, \
-                f"error shape mismatch for {node_name}"
-            assert node_state.z_mu.shape == expected_shape, \
-                f"z_mu shape mismatch for {node_name}"
-            assert node_state.pre_activation.shape == expected_shape, \
-                f"pre_activation shape mismatch for {node_name}"
+            assert (
+                node_state.z_latent.shape == expected_shape
+            ), f"z_latent shape mismatch for {node_name}"
+            assert (
+                node_state.error.shape == expected_shape
+            ), f"error shape mismatch for {node_name}"
+            assert (
+                node_state.z_mu.shape == expected_shape
+            ), f"z_mu shape mismatch for {node_name}"
+            assert (
+                node_state.pre_activation.shape == expected_shape
+            ), f"pre_activation shape mismatch for {node_name}"
 
     def test_projection_shapes_match(self, simple_chain_config):
         """Test that projections maintain correct shapes."""
@@ -157,12 +164,18 @@ class TestShapeConsistency:
         clamps = {"a": x, "b": y}
 
         # Initialize and run one inference step
-        state = initialize_graph_state(structure, batch_size, rng_key, clamps=clamps, params=params)
-        state = run_inference(params, state, clamps, structure, infer_steps=1, eta_infer=0.1)
+        state = initialize_graph_state(
+            structure, batch_size, rng_key, clamps=clamps, params=params
+        )
+        state = run_inference(
+            params, state, clamps, structure, infer_steps=1, eta_infer=0.1
+        )
 
         # After projection, z_mu for node b should be (batch_size, 3)
-        assert state.nodes["b"].z_mu.shape == (batch_size, 3), \
-            "z_mu shape incorrect after projection"
+        assert state.nodes["b"].z_mu.shape == (
+            batch_size,
+            3,
+        ), "z_mu shape incorrect after projection"
 
 
 class TestPropertyBased:
@@ -206,7 +219,9 @@ class TestPropertyBased:
         clamps = {"a": x_data, "b": y_data}
 
         # Initialize state
-        state = initialize_graph_state(structure, batch_size, rng_key, clamps=clamps, params=params)
+        state = initialize_graph_state(
+            structure, batch_size, rng_key, clamps=clamps, params=params
+        )
 
         # Verify shapes
         for node_name, node_info in structure.nodes.items():
@@ -245,7 +260,9 @@ class TestPropertyBased:
         clamps = {"input": x, "output": y}
 
         # Initialize state
-        initial_state = initialize_graph_state(structure, batch_size, rng_key, clamps=clamps, params=params)
+        initial_state = initialize_graph_state(
+            structure, batch_size, rng_key, clamps=clamps, params=params
+        )
 
         # Run inference - should not raise
         final_state = run_inference(
@@ -254,7 +271,7 @@ class TestPropertyBased:
 
         # Verify state is valid
         assert final_state is not None
-        assert not jnp.any(jnp.isnan(final_state.nodes["output"].z_latent))
+        assert not jnp.any(jnp.isnan(final_state.nodes["output"].z_mu))
 
 
 class TestComplexGraphs:
@@ -265,8 +282,18 @@ class TestComplexGraphs:
         config = {
             "node_list": [
                 {"name": "input", "shape": (10,), "type": "linear"},
-                {"name": "h1", "shape": (20,), "type": "linear", "activation": {"type": "relu"}},
-                {"name": "h2", "shape": (15,), "type": "linear", "activation": {"type": "relu"}},
+                {
+                    "name": "h1",
+                    "shape": (20,),
+                    "type": "linear",
+                    "activation": {"type": "relu"},
+                },
+                {
+                    "name": "h2",
+                    "shape": (15,),
+                    "type": "linear",
+                    "activation": {"type": "relu"},
+                },
                 {"name": "output", "shape": (5,), "type": "linear"},
             ],
             "edge_list": [
@@ -284,7 +311,9 @@ class TestComplexGraphs:
 
         # Verify skip connection exists
         output_edges = structure.nodes["output"].in_edges
-        assert len(output_edges) == 2, "Output should have 2 incoming edges (including skip)"
+        assert (
+            len(output_edges) == 2
+        ), "Output should have 2 incoming edges (including skip)"
 
         # Test inference runs without issues
         batch_size = 8
@@ -293,13 +322,21 @@ class TestComplexGraphs:
         clamps = {"input": x, "output": y}
 
         state = initialize_graph_state(
-            structure, batch_size, rng_key, clamps=clamps,
-            state_init_config=structure.config["graph_state_initializer"], params=params
+            structure,
+            batch_size,
+            rng_key,
+            clamps=clamps,
+            state_init_config=structure.config["graph_state_initializer"],
+            params=params,
         )
 
         # Run 1 step to get initial energy (energy is computed during inference)
-        state_after_1_step = run_inference(params, state, clamps, structure, infer_steps=1, eta_infer=0.1)
-        final_state = run_inference(params, state, clamps, structure, infer_steps=10, eta_infer=0.1)
+        state_after_1_step = run_inference(
+            params, state, clamps, structure, infer_steps=1, eta_infer=0.1
+        )
+        final_state = run_inference(
+            params, state, clamps, structure, infer_steps=10, eta_infer=0.1
+        )
 
         # Verify convergence (comparing 1 step vs 10 steps)
         initial_energy = sum(
@@ -351,7 +388,12 @@ class TestEnergyDynamics:
         return {
             "node_list": [
                 {"name": "x", "shape": (5,), "type": "linear"},
-                {"name": "h", "shape": (10,), "type": "linear", "activation": {"type": "tanh"}},
+                {
+                    "name": "h",
+                    "shape": (10,),
+                    "type": "linear",
+                    "activation": {"type": "tanh"},
+                },
                 {"name": "y", "shape": (3,), "type": "linear"},
             ],
             "edge_list": [
@@ -371,7 +413,9 @@ class TestEnergyDynamics:
         y = jax.random.normal(rng_key, (batch_size, 3))
         clamps = {"x": x, "y": y}
 
-        state = initialize_graph_state(structure, batch_size, rng_key, clamps=clamps, params=params)
+        state = initialize_graph_state(
+            structure, batch_size, rng_key, clamps=clamps, params=params
+        )
 
         # Track energy over multiple inference steps
         energies = []
@@ -391,11 +435,14 @@ class TestEnergyDynamics:
         # Energy should generally decrease (allowing small fluctuations)
         for i in range(1, len(energies)):
             # Allow small increase due to numerical precision
-            assert energies[i] <= energies[i-1] * 1.01, \
-                f"Energy increased significantly at step {i}: {energies[i-1]} -> {energies[i]}"
+            assert (
+                energies[i] <= energies[i - 1] * 1.01
+            ), f"Energy increased significantly at step {i}: {energies[i-1]} -> {energies[i]}"
 
 
-@pytest.mark.parametrize("node_type", ["linear"])  # Add more types as they're implemented
+@pytest.mark.parametrize(
+    "node_type", ["linear"]
+)  # Add more types as they're implemented
 def test_different_node_types(node_type):
     """Test graph construction with different node types."""
     config = {
@@ -437,8 +484,12 @@ def test_various_batch_sizes(batch_size):
     y = jax.random.normal(rng_key, (batch_size, 3))
     clamps = {"input": x, "output": y}
 
-    state = initialize_graph_state(structure, batch_size, rng_key, clamps=clamps, params=params)
-    final_state = run_inference(params, state, clamps, structure, infer_steps=5, eta_infer=0.1)
+    state = initialize_graph_state(
+        structure, batch_size, rng_key, clamps=clamps, params=params
+    )
+    final_state = run_inference(
+        params, state, clamps, structure, infer_steps=5, eta_infer=0.1
+    )
 
     # Verify shapes are maintained
     assert final_state.nodes["input"].z_latent.shape[0] == batch_size

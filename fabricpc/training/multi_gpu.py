@@ -54,7 +54,9 @@ def replicate_opt_state(opt_state: optax.OptState, n_devices: int) -> optax.OptS
     return jax.tree_util.tree_map(lambda x: jnp.stack([x] * n_devices), opt_state)
 
 
-def shard_batch(batch: Dict[str, jnp.ndarray], n_devices: int) -> Dict[str, jnp.ndarray]:
+def shard_batch(
+    batch: Dict[str, jnp.ndarray], n_devices: int
+) -> Dict[str, jnp.ndarray]:
     """
     Shard a batch across devices for pmap.
 
@@ -73,6 +75,7 @@ def shard_batch(batch: Dict[str, jnp.ndarray], n_devices: int) -> Dict[str, jnp.
         >>> sharded['x'].shape
         (4, 32, 784)
     """
+
     def shard_array(x):
         batch_size = x.shape[0]
         if batch_size % n_devices != 0:
@@ -170,10 +173,18 @@ def create_pmap_train_step(
 
     def step_fn(params, opt_state, batch, rng_key):
         return train_step_pmap(
-            params, opt_state, batch, structure, rng_key, optimizer, infer_steps, eta_infer
+            params,
+            opt_state,
+            batch,
+            structure,
+            rng_key,
+            optimizer,
+            infer_steps,
+            eta_infer,
         )
 
     return jax.pmap(step_fn, axis_name="devices")
+
 
 def train_pcn_multi_gpu(
     params: GraphParams,
@@ -211,7 +222,9 @@ def train_pcn_multi_gpu(
     # Create shard even for single gpu to ensure consistency. Don't fallback to single-gpu method.
     if n_devices == 1:
         if verbose:
-            print("Only 1 device available, using multi-gpu training function with single device.")
+            print(
+                "Only 1 device available, using multi-gpu training function with single device."
+            )
 
     # Create optimizer
     optimizer = create_optimizer(config.get("optimizer", {"type": "adam", "lr": 1e-3}))
@@ -227,7 +240,9 @@ def train_pcn_multi_gpu(
     num_epochs = config.get("num_epochs", 10)
 
     # Create pmap'ed training step (uses local Hebbian learning like single-GPU)
-    pmap_train_step = create_pmap_train_step(structure, optimizer, infer_steps, eta_infer)
+    pmap_train_step = create_pmap_train_step(
+        structure, optimizer, infer_steps, eta_infer
+    )
 
     # Training loop
     for epoch in range(num_epochs):
@@ -245,9 +260,9 @@ def train_pcn_multi_gpu(
         num_batches = len(train_loader)
 
         # Create keys for all batches (split on each device)
-        batch_keys_per_device = jax.vmap(
-            lambda k: jax.random.split(k, num_batches)
-        )(device_keys)
+        batch_keys_per_device = jax.vmap(lambda k: jax.random.split(k, num_batches))(
+            device_keys
+        )
 
         for batch_idx, batch_data in enumerate(train_loader):
             batch_key_for_step = batch_keys_per_device[:, batch_idx]
@@ -268,7 +283,9 @@ def train_pcn_multi_gpu(
                 batch_sharded = shard_batch(batch, n_devices)
             except ValueError as e:
                 if verbose and batch_idx == 0:
-                    print(f"Warning: Skipping batch (size not divisible by {n_devices}): {e}")
+                    print(
+                        f"Warning: Skipping batch (size not divisible by {n_devices}): {e}"
+                    )
                 continue
 
             # Training step (parallelized across devices)
@@ -281,7 +298,9 @@ def train_pcn_multi_gpu(
             epoch_energies.append(avg_energy)
 
         # Compute average energy for epoch
-        avg_energy = sum(epoch_energies) / len(epoch_energies) if epoch_energies else 0.0
+        avg_energy = (
+            sum(epoch_energies) / len(epoch_energies) if epoch_energies else 0.0
+        )
 
         if verbose:
             print(f"Epoch {epoch + 1}/{num_epochs}, Energy: {avg_energy:.4f}")
@@ -334,12 +353,16 @@ def evaluate_pcn_multi_gpu(
     num_batches = len(test_loader)
 
     # Create keys for all batches (split on each device)
-    batch_keys_per_device = jax.vmap(
-        lambda k: jax.random.split(k, num_batches)
-    )(device_keys)
+    batch_keys_per_device = jax.vmap(lambda k: jax.random.split(k, num_batches))(
+        device_keys
+    )
 
     # Create pmap'ed inference function
-    def inference_fn(params_obj: GraphParams, sharded_batch: Dict[str, jnp.ndarray], randgen_key: jax.Array) -> GraphState:
+    def inference_fn(
+        params_obj: GraphParams,
+        sharded_batch: Dict[str, jnp.ndarray],
+        randgen_key: jax.Array,
+    ) -> GraphState:
         batch_size_ = next(iter(sharded_batch.values())).shape[0]
         clamps = {}
         for task_name, task_value in sharded_batch.items():
@@ -348,9 +371,16 @@ def evaluate_pcn_multi_gpu(
                 clamps[node_name] = task_value
 
         state = initialize_graph_state(
-            structure, batch_size_, randgen_key, clamps=clamps, state_init_config=state_init_config, params=params_obj
+            structure,
+            batch_size_,
+            randgen_key,
+            clamps=clamps,
+            state_init_config=state_init_config,
+            params=params_obj,
         )
-        final_state = run_inference(params_obj, state, clamps, structure, infer_steps, eta_infer)
+        final_state = run_inference(
+            params_obj, state, clamps, structure, infer_steps, eta_infer
+        )
         return final_state
 
     pmap_inference = jax.pmap(inference_fn, axis_name="devices")
@@ -385,7 +415,9 @@ def evaluate_pcn_multi_gpu(
         if "y" in structure.task_map:
             y_node = structure.task_map["y"]
             # Access via .nodes attribute (GraphState is a NamedTuple, not a dict)
-            predictions = final_states.nodes[y_node].z_latent  # (n_devices, batch_per_device, *shape)
+            predictions = final_states.nodes[
+                y_node
+            ].z_mu  # (n_devices, batch_per_device, *shape)
             predictions = predictions.reshape(batch_size, -1)
             targets = batch["y"]
 

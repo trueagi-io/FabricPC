@@ -314,7 +314,7 @@ def eval_step(
     correct = 0
     if "y" in structure.task_map:
         y_node = structure.task_map["y"]
-        predictions = final_state.nodes[y_node].z_latent
+        predictions = final_state.nodes[y_node].z_mu
         pred_labels = jnp.argmax(predictions, axis=1)
         true_labels = jnp.argmax(batch["y"], axis=1)
         correct = jnp.sum(pred_labels == true_labels)

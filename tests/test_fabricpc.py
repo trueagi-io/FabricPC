@@ -11,10 +11,13 @@ This test suite verifies:
 """
 
 import os
+
 # Configure JAX to avoid preallocating all device memory (helps memory monitors)
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.9")
-os.environ.setdefault("JAX_TRACEBACK_FILTERING", "off")  # set filtering to "off" for better error messages in traceback
+os.environ.setdefault(
+    "JAX_TRACEBACK_FILTERING", "off"
+)  # set filtering to "off" for better error messages in traceback
 
 import numpy as np
 import pytest
@@ -22,7 +25,11 @@ import jax
 import jax.numpy as jnp
 
 from fabricpc.core.types import NodeState, NodeParams, GraphState
-from fabricpc.graph.graph_net import create_pc_graph, build_graph_structure, compute_local_weight_gradients
+from fabricpc.graph.graph_net import (
+    create_pc_graph,
+    build_graph_structure,
+    compute_local_weight_gradients,
+)
 from fabricpc.graph.state_initializer import initialize_graph_state
 from fabricpc.core.inference import run_inference
 from fabricpc.training import train_step
@@ -102,7 +109,9 @@ class TestGraphConstruction:
         # Check slots
         hidden1_node = structure.nodes["hidden1"]
         assert "in" in hidden1_node.slots, "hidden1 should have 'in' slot"
-        assert hidden1_node.slots["in"].is_multi_input, "Linear node slots should be multi-input"
+        assert hidden1_node.slots[
+            "in"
+        ].is_multi_input, "Linear node slots should be multi-input"
 
         # Check that output node has two incoming connections
         output_node = structure.nodes["output"]
@@ -111,10 +120,14 @@ class TestGraphConstruction:
         # Verify node-based parameters
         assert "hidden1" in params.nodes, "Params should be organized by node"
         node_params = params.nodes["hidden1"]
-        assert isinstance(node_params, NodeParams), "Node params should be NodeParams object"
+        assert isinstance(
+            node_params, NodeParams
+        ), "Node params should be NodeParams object"
         assert "weights" in node_params._fields, "NodeParams should have weights field"
         assert "biases" in node_params._fields, "NodeParams should have biases field"
-        assert "input->hidden1:in" in node_params.weights, "Linear node should have weight matrix named by edge key"
+        assert (
+            "input->hidden1:in" in node_params.weights
+        ), "Linear node should have weight matrix named by edge key"
 
     def test_invalid_slot_rejection(self):
         """Test that invalid slot connections are rejected."""
@@ -164,7 +177,7 @@ class TestInference:
             "clamps": clamps,
             "state_key": state_key,
             "x_data": x_data,
-            "y_data": y_data
+            "y_data": y_data,
         }
 
     def test_inference_with_local_gradients(self, inference_data):
@@ -177,8 +190,12 @@ class TestInference:
 
         # Initialize state with feedforward initialization
         initial_state = initialize_graph_state(
-            structure, batch_size, state_key, clamps=clamps,
-            state_init_config=structure.config["graph_state_initializer"], params=params
+            structure,
+            batch_size,
+            state_key,
+            clamps=clamps,
+            state_init_config=structure.config["graph_state_initializer"],
+            params=params,
         )
 
         # Verify that energy field exists and is initialized
@@ -193,13 +210,23 @@ class TestInference:
 
         # Run more steps for final state
         final_state = run_inference(
-            params, initial_state, clamps, structure, infer_steps=20, eta_infer=eta_infer
+            params,
+            initial_state,
+            clamps,
+            structure,
+            infer_steps=20,
+            eta_infer=eta_infer,
         )
 
         # Verify that latent gradients were computed
         assert "hidden1" in final_state.nodes, "Should have node hidden1"
-        assert "latent_grad" in final_state.nodes["hidden1"]._fields, "Should have latent gradients"
-        assert final_state.nodes["hidden1"].latent_grad.shape == (batch_size, 20), "Gradient shape mismatch"
+        assert (
+            "latent_grad" in final_state.nodes["hidden1"]._fields
+        ), "Should have latent gradients"
+        assert final_state.nodes["hidden1"].latent_grad.shape == (
+            batch_size,
+            20,
+        ), "Gradient shape mismatch"
 
         # Check that energy decreased (comparing 1 step vs 20 steps)
         initial_energy = sum(
@@ -227,8 +254,12 @@ class TestInference:
 
         # Initialize and run inference
         initial_state = initialize_graph_state(
-            structure, batch_size, state_key, clamps=clamps,
-            state_init_config=structure.config["graph_state_initializer"], params=params
+            structure,
+            batch_size,
+            state_key,
+            clamps=clamps,
+            state_init_config=structure.config["graph_state_initializer"],
+            params=params,
         )
         final_state = run_inference(
             params, initial_state, clamps, structure, infer_steps=10, eta_infer=0.1
@@ -239,7 +270,9 @@ class TestInference:
 
         # Verify gradient structure matches params
         assert grads.nodes.keys() == params.nodes.keys(), "Gradient structure mismatch"
-        assert grads.nodes.keys() == structure.nodes.keys(), "Gradient structure mismatch"
+        assert (
+            grads.nodes.keys() == structure.nodes.keys()
+        ), "Gradient structure mismatch"
 
         # Check that gradients are computed for non-source nodes
         for node_name, node_info in structure.nodes.items():
@@ -247,16 +280,22 @@ class TestInference:
                 node_grads = grads.nodes[node_name]
 
                 # Check if node_grads is a NodeParams
-                assert isinstance(node_grads, NodeParams), f"Expected NodeParams for {node_name}"
+                assert isinstance(
+                    node_grads, NodeParams
+                ), f"Expected NodeParams for {node_name}"
 
                 # Each key in params should also exist in gradients
                 for edge_key in params.nodes[node_name].weights.keys():
-                    assert edge_key in node_grads.weights.keys(), f"Missing gradient for {edge_key} in {node_name}"
+                    assert (
+                        edge_key in node_grads.weights.keys()
+                    ), f"Missing gradient for {edge_key} in {node_name}"
                     weight_grad = node_grads.weights[edge_key]
 
                     # Verify gradient shape
                     w = params.nodes[node_name].weights[edge_key]
-                    assert weight_grad.shape == w.shape, f"Gradient shape mismatch for {node_name} edge {edge_key}"
+                    assert (
+                        weight_grad.shape == w.shape
+                    ), f"Gradient shape mismatch for {node_name} edge {edge_key}"
 
 
 class TestTraining:
@@ -286,12 +325,21 @@ class TestTraining:
         infer_steps = 10
         eta_infer = 0.1
         new_params, new_opt_state, energy, final_state = train_step(
-            params, opt_state, batch, structure, optimizer, rng_key, infer_steps, eta_infer
+            params,
+            opt_state,
+            batch,
+            structure,
+            optimizer,
+            rng_key,
+            infer_steps,
+            eta_infer,
         )
 
         # Verify parameters were updated
         for node_name in ["hidden1", "hidden2", "output"]:
-            edge_key = next(iter(structure.nodes[node_name].in_edges))  # Get one incoming edge
+            edge_key = next(
+                iter(structure.nodes[node_name].in_edges)
+            )  # Get one incoming edge
             w_old = params.nodes[node_name].weights[edge_key]
             w_new = new_params.nodes[node_name].weights[edge_key]
             diff = jnp.max(jnp.abs(w_new - w_old))
@@ -326,7 +374,7 @@ class TestForwardMethods:
                 error=jnp.zeros(full_shape),
                 energy=jnp.zeros((batch_size,)),
                 pre_activation=jnp.zeros(full_shape),
-                substructure={}
+                substructure={},
             )
 
         # Create dummy GraphState
@@ -351,22 +399,29 @@ class TestForwardMethods:
 
                 # Run forward_inference
                 new_state, input_grads = node_class.forward_inference(
-                    params.nodes[node_name], edge_inputs, node_state, node_info
+                    params.nodes[node_name],
+                    edge_inputs,
+                    node_state,
+                    node_info,
+                    is_clamped=False,
                 )
 
                 # Verify state shapes
-                assert new_state.z_mu.shape == node_state.z_latent.shape, \
-                    f"z_mu shape mismatch for {node_name}"
-                assert new_state.error.shape == node_state.z_latent.shape, \
-                    f"error shape mismatch for {node_name}"
+                assert (
+                    new_state.z_mu.shape == node_state.z_latent.shape
+                ), f"z_mu shape mismatch for {node_name}"
+                assert (
+                    new_state.error.shape == node_state.z_latent.shape
+                ), f"error shape mismatch for {node_name}"
 
                 # Verify input gradient shapes
                 for edge_key in node_info.in_edges:
                     edge_info = structure.edges[edge_key]
                     source_shape = structure.nodes[edge_info.source].shape
                     expected_shape = (state.batch_size, *source_shape)
-                    assert input_grads[edge_key].shape == expected_shape, \
-                        f"Input gradient shape mismatch for {edge_key}"
+                    assert (
+                        input_grads[edge_key].shape == expected_shape
+                    ), f"Input gradient shape mismatch for {edge_key}"
 
     def test_forward_learning_shapes(self, forward_setup):
         """Test that forward_learning returns correct shapes."""
@@ -391,12 +446,16 @@ class TestForwardMethods:
 
                 # Verify param gradient shapes match original params
                 for edge_key in node_params.weights:
-                    assert param_grads.weights[edge_key].shape == node_params.weights[edge_key].shape, \
-                        f"Weight gradient shape mismatch for {edge_key}"
+                    assert (
+                        param_grads.weights[edge_key].shape
+                        == node_params.weights[edge_key].shape
+                    ), f"Weight gradient shape mismatch for {edge_key}"
 
                 for bias_key in node_params.biases:
-                    assert param_grads.biases[bias_key].shape == node_params.biases[bias_key].shape, \
-                        f"Bias gradient shape mismatch for {bias_key}"
+                    assert (
+                        param_grads.biases[bias_key].shape
+                        == node_params.biases[bias_key].shape
+                    ), f"Bias gradient shape mismatch for {bias_key}"
 
 
 @pytest.mark.parametrize("activation_type", ["identity", "relu", "tanh", "sigmoid"])
@@ -404,9 +463,24 @@ def test_different_activations(activation_type, rng_key):
     """Test graph construction with different activation functions."""
     config = {
         "node_list": [
-            {"name": "input", "shape": (10,), "type": "linear", "activation": {"type": "identity"}},
-            {"name": "hidden", "shape": (20,), "type": "linear", "activation": {"type": activation_type}},
-            {"name": "output", "shape": (5,), "type": "linear", "activation": {"type": "identity"}},
+            {
+                "name": "input",
+                "shape": (10,),
+                "type": "linear",
+                "activation": {"type": "identity"},
+            },
+            {
+                "name": "hidden",
+                "shape": (20,),
+                "type": "linear",
+                "activation": {"type": activation_type},
+            },
+            {
+                "name": "output",
+                "shape": (5,),
+                "type": "linear",
+                "activation": {"type": "identity"},
+            },
         ],
         "edge_list": [
             {"source_name": "input", "target_name": "hidden", "slot": "in"},
@@ -416,7 +490,9 @@ def test_different_activations(activation_type, rng_key):
     }
 
     params, structure = create_pc_graph(config, rng_key)
-    assert structure.nodes["hidden"].node_config["activation"]["type"] == activation_type
+    assert (
+        structure.nodes["hidden"].node_config["activation"]["type"] == activation_type
+    )
 
 
 @pytest.mark.parametrize("weight_init_type", ["uniform", "normal", "xavier", "kaiming"])
@@ -429,7 +505,7 @@ def test_different_weight_initializations(weight_init_type, rng_key):
                 "name": "hidden",
                 "shape": (20,),
                 "type": "linear",
-                "weight_init": {"type": weight_init_type}
+                "weight_init": {"type": weight_init_type},
             },
             {"name": "output", "shape": (5,), "type": "linear"},
         ],
@@ -444,5 +520,9 @@ def test_different_weight_initializations(weight_init_type, rng_key):
 
     # Check that weights are initialized (not zero or NaN)
     for edge_key, weight in params.nodes["hidden"].weights.items():
-        assert not jnp.allclose(weight, 0), f"Weights should not be all zeros for {weight_init_type}"
-        assert not jnp.any(jnp.isnan(weight)), f"Weights should not contain NaN for {weight_init_type}"
+        assert not jnp.allclose(
+            weight, 0
+        ), f"Weights should not be all zeros for {weight_init_type}"
+        assert not jnp.any(
+            jnp.isnan(weight)
+        ), f"Weights should not contain NaN for {weight_init_type}"

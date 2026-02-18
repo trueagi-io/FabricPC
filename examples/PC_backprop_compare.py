@@ -113,8 +113,8 @@ def run_single_trial(method, trial_seed, verbose=False):
         # Modify the config to use ReLU activations for backprop training (since sigmoid can cause vanishing gradients).
         # If we want to validate the same architecture, we can keep sigmoid activations for both methods, but it may degrade backprop performance.
         for node in trial_config["node_list"]:
-            if node["activation"]["type"] == "sigmoid":
-                node["activation"]["type"] = "relu"
+            if node["activation"] == "sigmoid":
+                node["activation"] = "relu"
 
         params, structure = create_pc_graph(trial_config, graph_key)
         t0 = time.time()
@@ -254,7 +254,7 @@ def main():
         print("--- Paired t-test ---")
         print(f"Mean difference (PC - BP): {np.mean(differences)*100:+.2f}%")
         print(f"t-statistic: {t_stat:.4f}")
-        print(f"p-value: {p_value:.6f}")
+        print(f"p-value: {p_value:.4f}, N = {n_trials}")
         print(f"Significant at p<0.05: {'YES' if p_value < 0.05 else 'NO'}")
 
         # ================================================================
@@ -299,31 +299,21 @@ def main():
     pc_epoch_times = pc_train_times / num_epochs
     bp_epoch_times = bp_train_times / num_epochs
 
-    # Skip trial 0 for timing stats — it includes JIT compilation overhead
-    if n_trials > 1:
-        pc_epoch_steady = pc_epoch_times[1:]
-        bp_epoch_steady = bp_epoch_times[1:]
-        jit_note = " (excluding trial 1 JIT compilation)"
-    else:
-        pc_epoch_steady = pc_epoch_times
-        bp_epoch_steady = bp_epoch_times
-        jit_note = ""
-
-    pc_t_mean = np.mean(pc_epoch_steady)
-    bp_t_mean = np.mean(bp_epoch_steady)
+    pc_t_mean = np.mean(pc_epoch_times)
+    bp_t_mean = np.mean(bp_epoch_times)
     pc_t_se = (
-        np.std(pc_epoch_steady, ddof=1) / np.sqrt(len(pc_epoch_steady))
-        if len(pc_epoch_steady) > 1
+        np.std(pc_epoch_times, ddof=1) / np.sqrt(len(pc_epoch_times))
+        if len(pc_epoch_times) > 1
         else 0.0
     )
     bp_t_se = (
-        np.std(bp_epoch_steady, ddof=1) / np.sqrt(len(bp_epoch_steady))
-        if len(bp_epoch_steady) > 1
+        np.std(bp_epoch_times, ddof=1) / np.sqrt(len(bp_epoch_times))
+        if len(bp_epoch_times) > 1
         else 0.0
     )
 
     print()
-    print(f"--- Training Time per Epoch{jit_note} ---")
+    print(f"--- Training Time per Epoch ---")
     print(f"PC:       {pc_t_mean:.3f} +/- {pc_t_se:.3f}s")
     print(f"Backprop: {bp_t_mean:.3f} +/- {bp_t_se:.3f}s")
     if bp_t_mean > 0:
