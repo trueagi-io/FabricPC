@@ -82,6 +82,8 @@ config = create_deep_transformer(
     mlp_dim=128,
     seq_len=seq_len,
     vocab_size=vocab_size,
+    activation="gelu",
+    weight_init={"type": "normal", "std": 0.02},
 )
 
 # ----------------------------------------------------------------------

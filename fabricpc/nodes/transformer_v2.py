@@ -17,6 +17,7 @@ from fabricpc.nodes.registry import register_node
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.initializers import initialize
 from fabricpc.core.positional import precompute_freqs_cis, apply_rotary_emb
+from fabricpc.core.activations import get_activation
 
 # ==============================================================================
 # EMBEDDING NODE
@@ -167,6 +168,11 @@ class TransformerBlockNode(NodeBase):
             "description": "For precomputing RoPE",
         },
         "dropout_rate": {"type": float, "default": 0.0},
+        "weight_init": {
+            "type": dict,
+            "default": {"type": "normal", "std": 0.02},
+            "description": "Initialization config for weights",
+        },
     }
 
     @staticmethod
@@ -188,8 +194,10 @@ class TransformerBlockNode(NodeBase):
         keys = jax.random.split(key, 10)
 
         # Initialize weights
+        weight_init = config.get("weight_init", {"type": "normal", "std": 0.02})
+
         def init_w(k, shape):
-            return initialize(k, shape, {"type": "xavier"})
+            return initialize(k, shape, weight_init)
 
         weights = {
             # Attention Projections
@@ -271,6 +279,7 @@ class TransformerBlockNode(NodeBase):
         scores = jnp.matmul(wq, jnp.swapaxes(wk, -1, -2)) / jnp.sqrt(head_dim)
 
         # Causal Mask
+        # Optimize: ensure mask is broadcastable and matches current seq_len
         mask = jnp.tril(jnp.ones((seq_len, seq_len)))
         scores = jnp.where(mask == 0, -1e9, scores)
 
@@ -295,7 +304,10 @@ class TransformerBlockNode(NodeBase):
 
         # MLP
         mlp_hidden = jnp.dot(ln2, params.weights["mlp_in"]) + params.biases["mlp_in"]
-        mlp_hidden = nn.gelu(mlp_hidden)
+
+        # Apply activation
+        activation_fn, _ = get_activation(node_info.node_config["activation"])
+        mlp_hidden = activation_fn(mlp_hidden)
         mlp_out = (
             jnp.dot(mlp_hidden, params.weights["mlp_out"]) + params.biases["mlp_out"]
         )
@@ -334,7 +346,11 @@ def create_deep_transformer(
     mlp_dim: int,
     seq_len: int = 10,
     vocab_size: int = None,
+    activation: str = "gelu",
+    weight_init: Dict[str, Any] = None,
 ):
+    if weight_init is None:
+        weight_init = {"type": "normal", "std": 0.02}
     nodes = []
     edges = []
 
@@ -376,6 +392,8 @@ def create_deep_transformer(
                 "embed_dim": embed_dim,
                 "num_heads": num_heads,
                 "mlp_dim": mlp_dim,
+                "activation": activation,
+                "weight_init": weight_init,
                 "use_rope": True,
             }
         )
