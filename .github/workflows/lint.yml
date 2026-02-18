@@ -9,4 +9,5 @@ jobs:
       - uses: actions/checkout@v4
       - uses: psf/black@stable
         with:
+          version: "26.1.0"
           src: "./fabricpc ./tests ./examples"
