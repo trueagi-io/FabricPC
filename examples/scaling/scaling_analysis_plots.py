@@ -842,8 +842,7 @@ def analyze_pc_bp_ratios(pc_df, bp_df, widths, depths, batch_size=256, infer_ste
 
     # Theoretical memory breakdown
     print("\n--- Theoretical Memory Breakdown ---")
-    print(
-        """
+    print("""
     PC memory per node (5 tensors):
       - z_latent:      (batch, width) - inferred latent states
       - z_mu:          (batch, width) - predicted expectations
@@ -855,13 +854,11 @@ def analyze_pc_bp_ratios(pc_df, bp_df, widths, depths, batch_size=256, infer_ste
 
     Parameters scale as O(width²) per layer, dominating at large widths.
     This explains why memory ratio → 1 as width increases.
-    """
-    )
+    """)
 
     # Theoretical time breakdown
     print("--- Theoretical Time Breakdown ---")
-    print(
-        f"""
+    print(f"""
     PC per training step ({infer_steps} inference iterations):
       For each inference step:
         1. Forward pass:  D matmuls (W @ x for each layer)
@@ -898,8 +895,7 @@ def analyze_pc_bp_ratios(pc_df, bp_df, widths, depths, batch_size=256, infer_ste
       - Memory bandwidth limits throughput at large widths
       - PC's local per-node autodiff has smaller computation graphs than
         BP's global backward pass
-    """
-    )
+    """)
 
     # Specific example calculations
 
