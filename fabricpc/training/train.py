@@ -343,6 +343,8 @@ def evaluate_pcn(
 
     Returns:
         Dictionary of evaluation metrics {"energy": avg_energy, "accuracy": accuracy}
+        Note: energy is not a meaningful metric for evaluation, but we include internal node energy for completeness. Focus on accuracy or other task-specific metrics.
+        Note: Energy will be zero in evaluation mode for graphs that are feed-forward in topology (no cycles) and use feed-forward initialization.
     """
     infer_steps = config.get("infer_steps", 20)
     eta_infer = config.get("eta_infer", 0.1)

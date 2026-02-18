@@ -13,9 +13,7 @@ Total code: ~60 lines. That's it!
 import os  # Set environment variables before importing JAX
 
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-os.environ.setdefault(
-    "JAX_PLATFORMS", "cuda"
-)  # options: "cpu", "cuda" or "tpu" if available
+os.environ.setdefault("JAX_PLATFORMS", "cuda")  # "cpu", "cuda" or "tpu"
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Suppress XLA warnings
 
 import jax
@@ -38,10 +36,10 @@ jax.config.update(
 config = {
     # Define nodes (layers)
     "node_list": [
-        {"name": "pixels",  "shape": (784,), "type": "linear", "activation": {"type": "identity"}},
-        {"name": "hidden1", "shape": (256,), "type": "linear", "activation": {"type": "sigmoid"}},
-        {"name": "hidden2", "shape": (64,),  "type": "linear", "activation": {"type": "sigmoid"}},
-        {"name": "class",   "shape": (10,),  "type": "linear", "activation": {"type": "sigmoid"}},  # TODO change activation to {"type": "softmax"}, "energy": {"type": "cross_entropy"}},
+        {"name": "pixels",  "shape": (784,), "type": "linear", "activation": "identity"},
+        {"name": "hidden1", "shape": (256,), "type": "linear", "activation": "sigmoid"},
+        {"name": "hidden2", "shape": (64,),  "type": "linear", "activation": "sigmoid"},
+        {"name": "class",   "shape": (10,),  "type": "linear", "activation": "softmax", "energy": "cross_entropy"},
     ],
 
     # Connect nodes with edges.
@@ -119,7 +117,9 @@ if __name__ == "__main__":
         trained_params, structure, test_loader, train_config, eval_key
     )
     print(f"Test Accuracy: {metrics['accuracy'] * 100:.2f}%")
-    print(f"Test energy: {metrics['energy']:.4f}")
+    print(
+        f"Test energy: {metrics['energy']:.4f} Note: Energy will be zero in evaluation mode for graphs that are feed-forward in topology (no cycles) and use feed-forward initialization."
+    )
 
     print(
         f"Model created: {len(config['node_list'])} nodes, {len(config['edge_list'])} edges"

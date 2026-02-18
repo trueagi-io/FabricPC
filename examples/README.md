@@ -31,19 +31,18 @@ python examples/mnist_demo.py
 
 **Expected Results**:
 ```
-Epoch 1/20, energy: 0.4528
-Epoch 2/20, energy: 0.1913
-Epoch 3/20, energy: 0.0760
-Epoch 4/20, energy: 0.0480
+Epoch 1/20, energy: 0.7254
+Epoch 2/20, energy: 0.1355
+Epoch 3/20, energy: 0.0688
+Epoch 4/20, energy: 0.0420
 ...
-Epoch 18/20, energy: 0.0052
-Epoch 19/20, energy: 0.0046
-Epoch 20/20, energy: 0.0044
-Avg Training time: 1.33 seconds per epoch
+Epoch 18/20, energy: 0.0029
+Epoch 19/20, energy: 0.0027
+Epoch 20/20, energy: 0.0026
+Avg Training time: 1.37 seconds per epoch
 
 Evaluating...
-Test Accuracy: 98.03%
-Test energy: 0.0349
+Test Accuracy: 98.05%
 ```
 
 ### transformer_demo.py
