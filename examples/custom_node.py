@@ -33,7 +33,6 @@ from fabricpc.core.initializers import initialize
 from fabricpc.graph import create_pc_graph
 from fabricpc.training import train_pcn, evaluate_pcn
 
-
 # ==============================================================================
 # CUSTOM NODE DEFINITION
 # ==============================================================================

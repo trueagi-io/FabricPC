@@ -13,7 +13,6 @@ from fabricpc.core.activations import get_activation
 from fabricpc.core.types import NodeState, NodeInfo
 from typing import Dict, Tuple, Any
 
-
 # =============================================================================
 # Rotary Position Embeddings (RoPE)
 # =============================================================================

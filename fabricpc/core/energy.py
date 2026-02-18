@@ -55,7 +55,6 @@ import jax.numpy as jnp
 
 from fabricpc.core.registry import Registry, RegistrationError, validate_config_schema
 
-
 # =============================================================================
 # Energy Functional Base Class
 # =============================================================================

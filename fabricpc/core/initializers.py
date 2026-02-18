@@ -48,7 +48,6 @@ import jax.numpy as jnp
 
 from fabricpc.core.registry import Registry, RegistrationError, validate_config_schema
 
-
 # =============================================================================
 # Initializer Base Class
 # =============================================================================

@@ -17,7 +17,6 @@ from jax import nn
 
 from fabricpc.core.registry import Registry, RegistrationError, validate_config_schema
 
-
 # =============================================================================
 # Activation Base Class
 # =============================================================================

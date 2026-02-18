@@ -28,7 +28,6 @@ from fabricpc.training.train_backprop import (
     evaluate_backprop_autoregressive,
 )
 
-
 __all__ = [
     # Predictive coding training
     "train_step",
