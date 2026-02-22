@@ -14,6 +14,10 @@ This test suite verifies:
 6. Multi-dimensional input shapes
 """
 
+"""
+adding enough so as to invoke pre-commit checks which got skipped
+"""
+
 import os
 
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
@@ -32,7 +36,6 @@ from fabricpc.core.types import NodeParams, NodeState, NodeInfo, GraphState
 from fabricpc.graph.graph_net import create_pc_graph
 from fabricpc.graph.state_initializer import initialize_graph_state
 from fabricpc.core.inference import run_inference
-
 
 jax.config.update("jax_platform_name", "cpu")
 
@@ -267,7 +270,9 @@ class TestIdentityNodeForward:
         assert not jnp.isnan(energy), "Energy should not be NaN"
         assert jnp.isfinite(energy), "Energy should be finite"
         # Energy per sample should also be valid
-        assert not jnp.any(jnp.isnan(new_state.energy)), "Per-sample energy should not be NaN"
+        assert not jnp.any(
+            jnp.isnan(new_state.energy)
+        ), "Per-sample energy should not be NaN"
 
 
 class TestIdentityNodeMultipleInputs:
