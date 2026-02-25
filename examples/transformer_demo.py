@@ -29,7 +29,8 @@ import jax.numpy as jnp
 import numpy as np
 import time
 import urllib.request
-from typing import Tuple, Iterator, Dict, List
+from typing import Tuple, Iterator, Dict, List, Optional, Any
+from tqdm.auto import tqdm
 
 from fabricpc.nodes import Linear, TransformerBlock
 from fabricpc.builder import Edge, TaskMap, graph
@@ -358,6 +359,46 @@ def generate_text(
 # ==============================================================================
 
 
+class TrainingProgressBar:
+    """Manage per-epoch tqdm bars during training."""
+
+    def __init__(self, total_batches: int, num_epochs: int, mode_label: str):
+        self.total_batches = total_batches
+        self.num_epochs = num_epochs
+        self.mode_label = mode_label
+        self.current_epoch: Optional[int] = None
+        self._bar: Optional[Any] = None
+
+    def _open_epoch_bar(self, epoch_idx: int):
+        self.close()
+        self.current_epoch = epoch_idx
+        self._bar = tqdm(
+            total=self.total_batches,
+            desc=f"{self.mode_label} Epoch {epoch_idx + 1}/{self.num_epochs}",
+            dynamic_ncols=True,
+            leave=False,
+        )
+
+    def update(self, epoch_idx: int, metrics: Dict[str, float]):
+        if self.current_epoch != epoch_idx:
+            self._open_epoch_bar(epoch_idx)
+
+        if self._bar is None:
+            return
+
+        self._bar.update(1)
+        formatted_metrics = {
+            key: f"{value:.2f}" if key == "ppl" else f"{value:.4f}"
+            for key, value in metrics.items()
+        }
+        self._bar.set_postfix(formatted_metrics, refresh=False)
+
+    def close(self):
+        if self._bar is not None:
+            self._bar.close()
+            self._bar = None
+
+
 def main():
     print("=" * 70)
     print("Transformer Predictive Coding Demo")
@@ -464,7 +505,7 @@ def main():
                     eval_rng,
                     debug=(epoch_idx == 0),  # Debug first epoch only
                 )
-                print(
+                tqdm.write(
                     f"  Test - Loss: {metrics['loss']:.4f}, Perplexity: {metrics['perplexity']:.2f}, Acc: {metrics['accuracy']:.4f}"
                 )
                 return metrics
@@ -482,7 +523,7 @@ def main():
                     eval_rng,
                     debug=(epoch_idx == 0),  # Debug first epoch only
                 )
-                print(
+                tqdm.write(
                     f"  Test - Loss: {metrics['loss']:.4f}, Perplexity: {metrics['perplexity']:.2f}, Acc: {metrics['accuracy']:.4f}"
                 )
                 return metrics
@@ -490,6 +531,33 @@ def main():
         return eval_callback
 
     eval_callback = create_eval_callback(use_pcn)
+    progress_bar = TrainingProgressBar(
+        total_batches=len(train_loader),
+        num_epochs=NUM_EPOCHS,
+        mode_label="PC" if use_pcn else "BP",
+    )
+
+    def create_iter_callback(use_pc: bool):
+        if use_pc:
+
+            def iter_callback(epoch_idx, batch_idx, energy):
+                del batch_idx
+                energy_value = float(energy)
+                progress_bar.update(epoch_idx, {"energy": energy_value})
+                return energy_value
+
+        else:
+
+            def iter_callback(epoch_idx, batch_idx, loss):
+                del batch_idx
+                loss_value = float(loss)
+                perplexity = float(np.exp(loss_value))
+                progress_bar.update(epoch_idx, {"loss": loss_value, "ppl": perplexity})
+                return loss_value
+
+        return iter_callback
+
+    iter_callback = create_iter_callback(use_pcn)
 
     # Train using autoregressive trainer
     print(
@@ -503,31 +571,39 @@ def main():
     start_time = time.time()
 
     ### Choose one of the training methods below
-    if use_pcn:
-        # Train with predictive coding (autoregressive)
-        trained_params, energy_history, eval_results = train_autoregressive(
-            params=params,
-            structure=structure,
-            train_loader=train_loader,
-            config=train_config,
-            rng_key=train_key,
-            verbose=True,
-            epoch_callback=eval_callback,
-        )
-    else:
-        # Backprop (autoregressive)
-        trained_params, energy_history, eval_results = train_backprop_autoregressive(
-            params,
-            structure,
-            train_loader,
-            {
-                "num_epochs": NUM_EPOCHS,
-                "optimizer": {"type": "adam", "lr": 1e-3},
-                "use_causal_mask": True,
-            },
-            train_key,
-            epoch_callback=eval_callback,
-        )
+    try:
+        if use_pcn:
+            # Train with predictive coding (autoregressive)
+            trained_params, energy_history, eval_results = train_autoregressive(
+                params=params,
+                structure=structure,
+                train_loader=train_loader,
+                config=train_config,
+                rng_key=train_key,
+                verbose=True,
+                epoch_callback=eval_callback,
+                iter_callback=iter_callback,
+            )
+        else:
+            # Backprop (autoregressive)
+            trained_params, energy_history, eval_results = (
+                train_backprop_autoregressive(
+                    params,
+                    structure,
+                    train_loader,
+                    {
+                        "num_epochs": NUM_EPOCHS,
+                        "optimizer": {"type": "adam", "lr": 1e-3},
+                        "use_causal_mask": True,
+                    },
+                    train_key,
+                    verbose=True,
+                    epoch_callback=eval_callback,
+                    iter_callback=iter_callback,
+                )
+            )
+    finally:
+        progress_bar.close()
 
     train_time = time.time() - start_time
 
