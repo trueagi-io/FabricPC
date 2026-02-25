@@ -20,11 +20,14 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from fabricpc.graph.graph_net import create_pc_graph
+from fabricpc.nodes import Linear
+from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.graph import initialize_params
 from fabricpc.graph.state_initializer import initialize_graph_state
 from fabricpc.core.inference import run_inference
 from fabricpc.training import train_step
 from fabricpc.training.optimizers import create_optimizer
+from fabricpc.core.activations import ReLUActivation, TanhActivation, SigmoidActivation
 
 jax.config.update("jax_platform_name", "cpu")
 
@@ -40,30 +43,24 @@ class TestNDimShapes:
 
     def test_1d_shape(self, rng_key):
         """Test node with 1D shape: shape=(784,) - standard vector output."""
-        config = {
-            "node_list": [
-                {"name": "input", "shape": (784,), "type": "linear"},
-                {
-                    "name": "hidden",
-                    "shape": (256,),
-                    "type": "linear",
-                    "activation": {"type": "relu"},
-                },
-                {"name": "output", "shape": (10,), "type": "linear"},
-            ],
-            "edge_list": [
-                {"source_name": "input", "target_name": "hidden", "slot": "in"},
-                {"source_name": "hidden", "target_name": "output", "slot": "in"},
-            ],
-            "task_map": {"x": "input", "y": "output"},
-        }
+        node_input = Linear(shape=(784,), name="input")
+        node_hidden = Linear(shape=(256,), activation=ReLUActivation(), name="hidden")
+        node_output = Linear(shape=(10,), name="output")
 
-        params, structure = create_pc_graph(config, rng_key)
+        structure = graph(
+            nodes=[node_input, node_hidden, node_output],
+            edges=[
+                Edge(source=node_input, target=node_hidden.slot("in")),
+                Edge(source=node_hidden, target=node_output.slot("in")),
+            ],
+            task_map=TaskMap(x=node_input, y=node_output),
+        )
+        params = initialize_params(structure, rng_key)
 
         # Verify shapes
-        assert structure.nodes["input"].shape == (784,)
-        assert structure.nodes["hidden"].shape == (256,)
-        assert structure.nodes["output"].shape == (10,)
+        assert structure.nodes["input"].node_info.shape == (784,)
+        assert structure.nodes["hidden"].node_info.shape == (256,)
+        assert structure.nodes["output"].node_info.shape == (10,)
 
         # Verify weight shapes (flattened for linear)
         hidden_weights = params.nodes["hidden"].weights["input->hidden:in"]
@@ -97,30 +94,25 @@ class TestNDimShapes:
 
     def test_2d_shape(self, rng_key):
         """Test node with 2D shape: shape=(28, 28) - image without channels."""
-        config = {
-            "node_list": [
-                {"name": "image", "shape": (28, 28), "type": "linear"},
-                {
-                    "name": "hidden",
-                    "shape": (128,),
-                    "type": "linear",
-                    "flatten_input": True,
-                    "activation": {"type": "relu"},
-                },
-                {"name": "output", "shape": (10,), "type": "linear"},
-            ],
-            "edge_list": [
-                {"source_name": "image", "target_name": "hidden", "slot": "in"},
-                {"source_name": "hidden", "target_name": "output", "slot": "in"},
-            ],
-            "task_map": {"x": "image", "y": "output"},
-        }
+        node_image = Linear(shape=(28, 28), name="image")
+        node_hidden = Linear(
+            shape=(128,), activation=ReLUActivation(), flatten_input=True, name="hidden"
+        )
+        node_output = Linear(shape=(10,), name="output")
 
-        params, structure = create_pc_graph(config, rng_key)
+        structure = graph(
+            nodes=[node_image, node_hidden, node_output],
+            edges=[
+                Edge(source=node_image, target=node_hidden.slot("in")),
+                Edge(source=node_hidden, target=node_output.slot("in")),
+            ],
+            task_map=TaskMap(x=node_image, y=node_output),
+        )
+        params = initialize_params(structure, rng_key)
 
         # Verify shapes
-        assert structure.nodes["image"].shape == (28, 28)
-        assert structure.nodes["hidden"].shape == (128,)
+        assert structure.nodes["image"].node_info.shape == (28, 28)
+        assert structure.nodes["hidden"].node_info.shape == (128,)
 
         # Verify weight shapes - input is flattened (28*28=784)
         hidden_weights = params.nodes["hidden"].weights["image->hidden:in"]
@@ -157,29 +149,24 @@ class TestNDimShapes:
 
     def test_3d_shape(self, rng_key):
         """Test node with 3D shape: shape=(28, 28, 1) - image with channels (NHWC)."""
-        config = {
-            "node_list": [
-                {"name": "image", "shape": (28, 28, 1), "type": "linear"},
-                {
-                    "name": "hidden",
-                    "shape": (64,),
-                    "type": "linear",
-                    "flatten_input": True,
-                    "activation": {"type": "tanh"},
-                },
-                {"name": "output", "shape": (10,), "type": "linear"},
-            ],
-            "edge_list": [
-                {"source_name": "image", "target_name": "hidden", "slot": "in"},
-                {"source_name": "hidden", "target_name": "output", "slot": "in"},
-            ],
-            "task_map": {"x": "image", "y": "output"},
-        }
+        node_image = Linear(shape=(28, 28, 1), name="image")
+        node_hidden = Linear(
+            shape=(64,), activation=TanhActivation(), flatten_input=True, name="hidden"
+        )
+        node_output = Linear(shape=(10,), name="output")
 
-        params, structure = create_pc_graph(config, rng_key)
+        structure = graph(
+            nodes=[node_image, node_hidden, node_output],
+            edges=[
+                Edge(source=node_image, target=node_hidden.slot("in")),
+                Edge(source=node_hidden, target=node_output.slot("in")),
+            ],
+            task_map=TaskMap(x=node_image, y=node_output),
+        )
+        params = initialize_params(structure, rng_key)
 
         # Verify shapes
-        assert structure.nodes["image"].shape == (28, 28, 1)
+        assert structure.nodes["image"].node_info.shape == (28, 28, 1)
 
         # Verify weight shapes - input is flattened (28*28*1=784)
         hidden_weights = params.nodes["hidden"].weights["image->hidden:in"]
@@ -207,29 +194,27 @@ class TestNDimShapes:
 
     def test_3d_shape_multichannel(self, rng_key):
         """Test node with 3D shape: shape=(32, 32, 3) - RGB image."""
-        config = {
-            "node_list": [
-                {"name": "rgb_image", "shape": (32, 32, 3), "type": "linear"},
-                {
-                    "name": "hidden",
-                    "shape": (256,),
-                    "type": "linear",
-                    "flatten_input": True,
-                    "activation": {"type": "relu"},
-                },
-                {"name": "output", "shape": (100,), "type": "linear"},
-            ],
-            "edge_list": [
-                {"source_name": "rgb_image", "target_name": "hidden", "slot": "in"},
-                {"source_name": "hidden", "target_name": "output", "slot": "in"},
-            ],
-            "task_map": {"x": "rgb_image", "y": "output"},
-        }
+        node_rgb_image = Linear(shape=(32, 32, 3), name="rgb_image")
+        node_hidden = Linear(
+            shape=(256,),
+            activation=ReLUActivation(),
+            flatten_input=True,
+            name="hidden",
+        )
+        node_output = Linear(shape=(100,), name="output")
 
-        params, structure = create_pc_graph(config, rng_key)
+        structure = graph(
+            nodes=[node_rgb_image, node_hidden, node_output],
+            edges=[
+                Edge(source=node_rgb_image, target=node_hidden.slot("in")),
+                Edge(source=node_hidden, target=node_output.slot("in")),
+            ],
+            task_map=TaskMap(x=node_rgb_image, y=node_output),
+        )
+        params = initialize_params(structure, rng_key)
 
         # Verify shapes
-        assert structure.nodes["rgb_image"].shape == (32, 32, 3)
+        assert structure.nodes["rgb_image"].node_info.shape == (32, 32, 3)
 
         # Verify weight shapes - input is flattened (32*32*3=3072)
         hidden_weights = params.nodes["hidden"].weights["rgb_image->hidden:in"]
@@ -255,33 +240,26 @@ class TestNDimShapes:
 
     def test_mixed_shapes_in_graph(self, rng_key):
         """Test mixed shapes: 2D input -> 1D hidden -> 1D output."""
-        config = {
-            "node_list": [
-                {"name": "image", "shape": (28, 28), "type": "linear"},
-                {
-                    "name": "hidden1",
-                    "shape": (256,),
-                    "type": "linear",
-                    "flatten_input": True,
-                    "activation": {"type": "relu"},
-                },
-                {
-                    "name": "hidden2",
-                    "shape": (128,),
-                    "type": "linear",
-                    "activation": {"type": "relu"},
-                },
-                {"name": "output", "shape": (10,), "type": "linear"},
-            ],
-            "edge_list": [
-                {"source_name": "image", "target_name": "hidden1", "slot": "in"},
-                {"source_name": "hidden1", "target_name": "hidden2", "slot": "in"},
-                {"source_name": "hidden2", "target_name": "output", "slot": "in"},
-            ],
-            "task_map": {"x": "image", "y": "output"},
-        }
+        node_image = Linear(shape=(28, 28), name="image")
+        node_hidden1 = Linear(
+            shape=(256,),
+            activation=ReLUActivation(),
+            flatten_input=True,
+            name="hidden1",
+        )
+        node_hidden2 = Linear(shape=(128,), activation=ReLUActivation(), name="hidden2")
+        node_output = Linear(shape=(10,), name="output")
 
-        params, structure = create_pc_graph(config, rng_key)
+        structure = graph(
+            nodes=[node_image, node_hidden1, node_hidden2, node_output],
+            edges=[
+                Edge(source=node_image, target=node_hidden1.slot("in")),
+                Edge(source=node_hidden1, target=node_hidden2.slot("in")),
+                Edge(source=node_hidden2, target=node_output.slot("in")),
+            ],
+            task_map=TaskMap(x=node_image, y=node_output),
+        )
+        params = initialize_params(structure, rng_key)
 
         # Verify weight shapes for each transition
         # image (28, 28) -> hidden1 (256): weights (784, 256)
@@ -321,26 +299,21 @@ class TestSameParamsDifferentBatchSizes:
 
     def test_same_params_multiple_batch_sizes(self, rng_key):
         """Verify same params work with batch_size=1, 32, 128."""
-        config = {
-            "node_list": [
-                {"name": "input", "shape": (784,), "type": "linear"},
-                {
-                    "name": "hidden",
-                    "shape": (128,),
-                    "type": "linear",
-                    "activation": {"type": "relu"},
-                },
-                {"name": "output", "shape": (10,), "type": "linear"},
+        node_input = Linear(shape=(784,), name="input")
+        node_hidden = Linear(shape=(128,), activation=ReLUActivation(), name="hidden")
+        node_output = Linear(shape=(10,), name="output")
+
+        structure = graph(
+            nodes=[node_input, node_hidden, node_output],
+            edges=[
+                Edge(source=node_input, target=node_hidden.slot("in")),
+                Edge(source=node_hidden, target=node_output.slot("in")),
             ],
-            "edge_list": [
-                {"source_name": "input", "target_name": "hidden", "slot": "in"},
-                {"source_name": "hidden", "target_name": "output", "slot": "in"},
-            ],
-            "task_map": {"x": "input", "y": "output"},
-        }
+            task_map=TaskMap(x=node_input, y=node_output),
+        )
 
         # Create params ONCE
-        params, structure = create_pc_graph(config, rng_key)
+        params = initialize_params(structure, rng_key)
 
         # Test with different batch sizes using the SAME params
         for batch_size in [1, 32, 128]:
@@ -380,27 +353,23 @@ class TestSameParamsDifferentBatchSizes:
 
     def test_same_params_2d_input_multiple_batch_sizes(self, rng_key):
         """Verify same params work with 2D inputs and different batch sizes."""
-        config = {
-            "node_list": [
-                {"name": "image", "shape": (28, 28), "type": "linear"},
-                {
-                    "name": "hidden",
-                    "shape": (64,),
-                    "type": "linear",
-                    "flatten_input": True,
-                    "activation": {"type": "tanh"},
-                },
-                {"name": "output", "shape": (10,), "type": "linear"},
+        node_image = Linear(shape=(28, 28), name="image")
+        node_hidden = Linear(
+            shape=(64,), activation=TanhActivation(), flatten_input=True, name="hidden"
+        )
+        node_output = Linear(shape=(10,), name="output")
+
+        structure = graph(
+            nodes=[node_image, node_hidden, node_output],
+            edges=[
+                Edge(source=node_image, target=node_hidden.slot("in")),
+                Edge(source=node_hidden, target=node_output.slot("in")),
             ],
-            "edge_list": [
-                {"source_name": "image", "target_name": "hidden", "slot": "in"},
-                {"source_name": "hidden", "target_name": "output", "slot": "in"},
-            ],
-            "task_map": {"x": "image", "y": "output"},
-        }
+            task_map=TaskMap(x=node_image, y=node_output),
+        )
 
         # Create params ONCE
-        params, structure = create_pc_graph(config, rng_key)
+        params = initialize_params(structure, rng_key)
 
         # Test with different batch sizes
         for batch_size in [1, 16, 64]:
@@ -427,26 +396,24 @@ class TestNDimTraining:
 
     def test_training_with_2d_input(self, rng_key):
         """Test complete training step with 2D image input."""
-        config = {
-            "node_list": [
-                {"name": "image", "shape": (28, 28), "type": "linear"},
-                {
-                    "name": "hidden",
-                    "shape": (64,),
-                    "type": "linear",
-                    "flatten_input": True,
-                    "activation": {"type": "sigmoid"},
-                },
-                {"name": "output", "shape": (10,), "type": "linear"},
-            ],
-            "edge_list": [
-                {"source_name": "image", "target_name": "hidden", "slot": "in"},
-                {"source_name": "hidden", "target_name": "output", "slot": "in"},
-            ],
-            "task_map": {"x": "image", "y": "output"},
-        }
+        node_image = Linear(shape=(28, 28), name="image")
+        node_hidden = Linear(
+            shape=(64,),
+            activation=SigmoidActivation(),
+            flatten_input=True,
+            name="hidden",
+        )
+        node_output = Linear(shape=(10,), name="output")
 
-        params, structure = create_pc_graph(config, rng_key)
+        structure = graph(
+            nodes=[node_image, node_hidden, node_output],
+            edges=[
+                Edge(source=node_image, target=node_hidden.slot("in")),
+                Edge(source=node_hidden, target=node_output.slot("in")),
+            ],
+            task_map=TaskMap(x=node_image, y=node_output),
+        )
+        params = initialize_params(structure, rng_key)
 
         # Create optimizer
         optimizer = create_optimizer({"type": "adam", "lr": 0.01})
@@ -482,26 +449,22 @@ class TestNDimTraining:
 
     def test_training_with_3d_input(self, rng_key):
         """Test complete training step with 3D image input (NHWC)."""
-        config = {
-            "node_list": [
-                {"name": "image", "shape": (16, 16, 3), "type": "linear"},
-                {
-                    "name": "hidden",
-                    "shape": (32,),
-                    "type": "linear",
-                    "flatten_input": True,
-                    "activation": {"type": "relu"},
-                },
-                {"name": "output", "shape": (5,), "type": "linear"},
-            ],
-            "edge_list": [
-                {"source_name": "image", "target_name": "hidden", "slot": "in"},
-                {"source_name": "hidden", "target_name": "output", "slot": "in"},
-            ],
-            "task_map": {"x": "image", "y": "output"},
-        }
+        node_image = Linear(shape=(16, 16, 3), name="image")
+        node_hidden = Linear(
+            shape=(32,), activation=ReLUActivation(), flatten_input=True, name="hidden"
+        )
+        node_output = Linear(shape=(5,), name="output")
 
-        params, structure = create_pc_graph(config, rng_key)
+        structure = graph(
+            nodes=[node_image, node_hidden, node_output],
+            edges=[
+                Edge(source=node_image, target=node_hidden.slot("in")),
+                Edge(source=node_hidden, target=node_output.slot("in")),
+            ],
+            task_map=TaskMap(x=node_image, y=node_output),
+        )
+        params = initialize_params(structure, rng_key)
+
         optimizer = create_optimizer({"type": "sgd", "lr": 0.01})
         opt_state = optimizer.init(params)
 
@@ -531,26 +494,21 @@ class TestEnergyWithNDimShapes:
 
     def test_energy_decreases_2d_input(self, rng_key):
         """Test that energy decreases during inference with 2D input."""
-        config = {
-            "node_list": [
-                {"name": "image", "shape": (14, 14), "type": "linear"},
-                {
-                    "name": "hidden",
-                    "shape": (32,),
-                    "type": "linear",
-                    "flatten_input": True,
-                    "activation": {"type": "tanh"},
-                },
-                {"name": "output", "shape": (5,), "type": "linear"},
-            ],
-            "edge_list": [
-                {"source_name": "image", "target_name": "hidden", "slot": "in"},
-                {"source_name": "hidden", "target_name": "output", "slot": "in"},
-            ],
-            "task_map": {"x": "image", "y": "output"},
-        }
+        node_image = Linear(shape=(14, 14), name="image")
+        node_hidden = Linear(
+            shape=(32,), activation=TanhActivation(), flatten_input=True, name="hidden"
+        )
+        node_output = Linear(shape=(5,), name="output")
 
-        params, structure = create_pc_graph(config, rng_key)
+        structure = graph(
+            nodes=[node_image, node_hidden, node_output],
+            edges=[
+                Edge(source=node_image, target=node_hidden.slot("in")),
+                Edge(source=node_hidden, target=node_output.slot("in")),
+            ],
+            task_map=TaskMap(x=node_image, y=node_output),
+        )
+        params = initialize_params(structure, rng_key)
 
         batch_size = 8
         x = jax.random.normal(rng_key, (batch_size, 14, 14))
@@ -568,7 +526,7 @@ class TestEnergyWithNDimShapes:
         initial_energy = sum(
             jnp.sum(initial_state.nodes[name].energy)
             for name in structure.nodes
-            if structure.nodes[name].in_degree > 0
+            if structure.nodes[name].node_info.in_degree > 0
         )
 
         # Run more inference steps
@@ -580,7 +538,7 @@ class TestEnergyWithNDimShapes:
         final_energy = sum(
             jnp.sum(final_state.nodes[name].energy)
             for name in structure.nodes
-            if structure.nodes[name].in_degree > 0
+            if structure.nodes[name].node_info.in_degree > 0
         )
 
         assert (

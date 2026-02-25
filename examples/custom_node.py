@@ -3,9 +3,9 @@ Example: Custom Conv2D Node
 =====================================
 
 This example demonstrates:
-1. Creating a custom node type using @register_node
+1. Creating a custom node type using _register_node_class
 2. Implementing forward pass using JAX's lax.conv
-3. Using CONFIG_SCHEMA for node-specific parameters
+3. Using the new object-oriented API for node configuration
 4. Training on MNIST using the standard train_pcn/evaluate_pcn methods
 
 Run with: python examples/custom_node.py
@@ -25,12 +25,18 @@ import jax
 import jax.numpy as jnp
 from fabricpc.utils.data.dataloader import MnistLoader
 
-from fabricpc.nodes.base import NodeBase, SlotSpec
-from fabricpc.nodes.registry import register_node
+from fabricpc.nodes import Linear
+from fabricpc.nodes.base import NodeBase, SlotSpec, _register_node_class
+from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.graph import initialize_params
+from fabricpc.core.activations import (
+    IdentityActivation,
+    ReLUActivation,
+    SigmoidActivation,
+)
+from fabricpc.core.energy import GaussianEnergy
+from fabricpc.core.initializers import NormalInitializer, initialize
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
-from fabricpc.core.activations import get_activation
-from fabricpc.core.initializers import initialize
-from fabricpc.graph import create_pc_graph
 from fabricpc.training import train_pcn, evaluate_pcn
 
 # ==============================================================================
@@ -38,7 +44,6 @@ from fabricpc.training import train_pcn, evaluate_pcn
 # ==============================================================================
 
 
-@register_node("conv2d")
 class Conv2DNode(NodeBase):
     """
     2D Convolutional node using JAX's lax.conv_general_dilated.
@@ -46,30 +51,33 @@ class Conv2DNode(NodeBase):
     Expects inputs in NHWC format (batch, height, width, channels).
     Output shape should be specified as (H_out, W_out, C_out).
 
-    Config parameters:
+    Parameters:
         kernel_size: Tuple[int, int] - Kernel dimensions (kH, kW)
         stride: Tuple[int, int] - Stride (default: (1, 1))
         padding: str - "VALID" or "SAME" (default: "SAME")
     """
 
-    CONFIG_SCHEMA = {
-        "kernel_size": {
-            "type": tuple,
-            "required": True,
-            "description": "Convolution kernel size (kH, kW)",
-        },
-        "stride": {
-            "type": tuple,
-            "default": (1, 1),
-            "description": "Stride for convolution",
-        },
-        "padding": {
-            "type": str,
-            "default": "SAME",
-            "choices": ["SAME", "VALID"],
-            "description": "Padding mode",
-        },
-    }
+    DEFAULT_ACTIVATION = ReLUActivation
+    DEFAULT_ENERGY = GaussianEnergy
+    DEFAULT_LATENT_INIT = NormalInitializer
+
+    def __init__(
+        self,
+        shape,
+        name,
+        kernel_size,
+        stride=(1, 1),
+        padding="SAME",
+        **kwargs,
+    ):
+        super().__init__(
+            shape=shape,
+            name=name,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            **kwargs,
+        )
 
     @staticmethod
     def get_slots() -> Dict[str, SlotSpec]:
@@ -89,7 +97,7 @@ class Conv2DNode(NodeBase):
         Kernel shape: (kH, kW, C_in, C_out)
         Bias shape: (1, 1, 1, C_out) for NHWC broadcasting
         """
-        kernel_size = config["kernel_size"]
+        kernel_size = config.get("kernel_size")
         out_channels = node_shape[-1]  # Last dim is channels (NHWC)
 
         # Get weight initialization config
@@ -134,10 +142,6 @@ class Conv2DNode(NodeBase):
 
         Computes: conv2d(x, kernel) + bias -> activation -> error -> energy
         """
-        from fabricpc.nodes import get_node_class
-
-        node_class = get_node_class(node_info.node_type)
-
         config = node_info.node_config
         stride = config.get("stride", (1, 1))
         padding = config.get("padding", "SAME")
@@ -171,10 +175,8 @@ class Conv2DNode(NodeBase):
                 pre_activation = pre_activation + params.biases["b"]
 
             # Apply activation
-            activation_fn, activation_deriv = get_activation(
-                node_info.node_config["activation"]
-            )
-            z_mu = activation_fn(pre_activation)
+            activation = node_info.activation  # ActivationBase instance
+            z_mu = type(activation).forward(pre_activation, activation.config)
 
             # Compute error
             error = state.z_latent - z_mu
@@ -193,12 +195,16 @@ class Conv2DNode(NodeBase):
         return total_energy, state
 
 
+# Register the custom node class
+_register_node_class(Conv2DNode)
+
+
 # ==============================================================================
 # NETWORK CONFIGURATION
 # ==============================================================================
 
 
-def create_conv_mnist_config():
+def create_conv_mnist_structure():
     """
     Create a convolutional MNIST classifier using Conv2D and Linear nodes.
 
@@ -210,47 +216,43 @@ def create_conv_mnist_config():
 
     Note: Using smaller channel counts for faster training in this demo.
     """
-    return {
-        "node_list": [
-            {
-                "name": "input",
-                "shape": (28, 28, 1),
-                "type": "linear",  # Input node, identity
-                "activation": {"type": "identity"},
-            },
-            {
-                "name": "conv1",
-                "shape": (26, 26, 16),  # VALID padding: 28-3+1=26
-                "type": "conv2d",
-                "kernel_size": (3, 3),
-                "stride": (1, 1),
-                "padding": "VALID",
-                "activation": {"type": "relu"},
-            },
-            {
-                "name": "conv2",
-                "shape": (24, 24, 32),  # 26-3+1=24
-                "type": "conv2d",
-                "kernel_size": (3, 3),
-                "stride": (1, 1),
-                "padding": "VALID",
-                "activation": {"type": "relu"},
-            },
-            {
-                "name": "output",
-                "shape": (10,),  # 10 classes
-                "type": "linear",
-                "flatten_input": True,
-                "activation": {"type": "sigmoid"},
-            },
+    input_node = Linear(
+        shape=(28, 28, 1), activation=IdentityActivation(), name="input"
+    )
+    conv1 = Conv2DNode(
+        shape=(26, 26, 16),  # VALID padding: 28-3+1=26
+        kernel_size=(3, 3),
+        stride=(1, 1),
+        padding="VALID",
+        activation=ReLUActivation(),
+        name="conv1",
+    )
+    conv2 = Conv2DNode(
+        shape=(24, 24, 32),  # 26-3+1=24
+        kernel_size=(3, 3),
+        stride=(1, 1),
+        padding="VALID",
+        activation=ReLUActivation(),
+        name="conv2",
+    )
+    output_node = Linear(
+        shape=(10,),  # 10 classes
+        activation=SigmoidActivation(),
+        flatten_input=True,
+        name="output",
+    )
+
+    structure = graph(
+        nodes=[input_node, conv1, conv2, output_node],
+        edges=[
+            Edge(source=input_node, target=conv1.slot("in")),
+            Edge(source=conv1, target=conv2.slot("in")),
+            Edge(source=conv2, target=output_node.slot("in")),
         ],
-        "edge_list": [
-            {"source_name": "input", "target_name": "conv1", "slot": "in"},
-            {"source_name": "conv1", "target_name": "conv2", "slot": "in"},
-            {"source_name": "conv2", "target_name": "output", "slot": "in"},
-        ],
-        "task_map": {"x": "input", "y": "output"},
-    }
+        task_map=TaskMap(x=input_node, y=output_node),
+    )
+
+    return structure
 
 
 # ==============================================================================
@@ -268,19 +270,12 @@ def main():
     master_rng_key = jax.random.PRNGKey(42)
     graph_key, train_key, eval_key = jax.random.split(master_rng_key, 3)
 
-    # Show registered node types (should include our custom conv2d)
-    from fabricpc.nodes import list_node_types
-
-    print(f"\nRegistered node types: {list_node_types()}")
-
     # Create model
     print("\nCreating convolutional MNIST classifier...")
-    config = create_conv_mnist_config()
-    params, structure = create_pc_graph(config, graph_key)
+    structure = create_conv_mnist_structure()
+    params = initialize_params(structure, graph_key)
 
-    print(
-        f"Model created: {len(config['node_list'])} nodes, {len(config['edge_list'])} edges"
-    )
+    print(f"Model created: {len(structure.nodes)} nodes, {len(structure.edges)} edges")
     for name, node_info in structure.nodes.items():
         print(f"  {name}: shape={node_info.shape}, type={node_info.node_type}")
 
@@ -331,9 +326,11 @@ def main():
     print("Custom node example complete!")
     print("\nKey takeaways:")
     print("  1. Create custom nodes by subclassing NodeBase")
-    print("  2. Use @register_node decorator to register with the library")
-    print("  3. Implement get_slots(), initialize_params(), and forward()")
-    print("  4. Use train_pcn/evaluate_pcn for standard training workflow")
+    print("  2. Use _register_node_class() to register with the library")
+    print("  3. Set DEFAULT_ACTIVATION, DEFAULT_ENERGY, DEFAULT_LATENT_INIT")
+    print("  4. Implement get_slots(), initialize_params(), and forward()")
+    print("  5. Use object-oriented API with graph() for network construction")
+    print("  6. Use train_pcn/evaluate_pcn for standard training workflow")
     print("=" * 70)
 
 

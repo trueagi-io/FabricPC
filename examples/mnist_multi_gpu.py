@@ -25,7 +25,10 @@ os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Suppress XLA warnings
 import jax
 import time
 
-from fabricpc.graph import create_pc_graph
+from fabricpc.nodes import Linear
+from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.graph import initialize_params
+from fabricpc.core.activations import IdentityActivation, SigmoidActivation
 from fabricpc.training import train_pcn_multi_gpu, evaluate_pcn_multi_gpu
 from fabricpc.utils.data.dataloader import MnistLoader
 
@@ -38,22 +41,20 @@ graph_key, train_key, eval_key = jax.random.split(master_rng_key, 3)
 # ==============================================================================
 # fmt: off
 
-config = {
-    "node_list": [
-        {"name": "pixels",  "shape": (784,), "type": "linear", "activation": {"type": "identity"}},
-        {"name": "hidden1", "shape": (256,), "type": "linear", "activation": {"type": "sigmoid"}},
-        {"name": "hidden2", "shape": (64,),  "type": "linear", "activation": {"type": "sigmoid"}},
-        {"name": "class",   "shape": (10,),  "type": "linear", "activation": {"type": "sigmoid"}},
-    ],
+pixels = Linear(shape=(784,), activation=IdentityActivation(), name="pixels")
+hidden1 = Linear(shape=(256,), activation=SigmoidActivation(), name="hidden1")
+hidden2 = Linear(shape=(64,), activation=SigmoidActivation(), name="hidden2")
+class_node = Linear(shape=(10,), activation=SigmoidActivation(), name="class")
 
-    "edge_list": [
-        {"source_name": "pixels",   "target_name": "hidden1",   "slot": "in"},
-        {"source_name": "hidden1",  "target_name": "hidden2",   "slot": "in"},
-        {"source_name": "hidden2",  "target_name": "class",     "slot": "in"},
+structure = graph(
+    nodes=[pixels, hidden1, hidden2, class_node],
+    edges=[
+        Edge(source=pixels, target=hidden1.slot("in")),
+        Edge(source=hidden1, target=hidden2.slot("in")),
+        Edge(source=hidden2, target=class_node.slot("in")),
     ],
-
-    "task_map": {"x": "pixels", "y": "class"},
-}
+    task_map=TaskMap(x=pixels, y=class_node),
+)
 
 train_config = {
     "num_epochs": 20,
@@ -91,11 +92,11 @@ else:
 # ==============================================================================
 
 print(f"\n[Model Architecture]")
-params, structure = create_pc_graph(config, graph_key)
+params = initialize_params(structure, graph_key)
 num_params = sum(p.size for p in jax.tree_util.tree_leaves(params))
 
-print(f"  Nodes: {len(config['node_list'])}")
-print(f"  Edges: {len(config['edge_list'])}")
+print(f"  Nodes: {len(structure.nodes)}")
+print(f"  Edges: {len(structure.edges)}")
 print(f"  Parameters: {num_params:,}")
 
 # ==============================================================================

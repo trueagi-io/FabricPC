@@ -1,7 +1,8 @@
 """
-Test suite for node registry functionality.
+Test suite for node dispatch and custom node creation.
 
-Tests registration, lookup, config validation, and entry point discovery.
+Tests node class dispatch via _node_class_map, custom node creation
+by subclassing NodeBase, and integration with graph construction.
 """
 
 import os
@@ -13,93 +14,98 @@ import jax
 import jax.numpy as jnp
 from typing import Dict, Any, Tuple
 
-from fabricpc.nodes.base import NodeBase, SlotSpec
-from fabricpc.nodes.registry import (
-    register_node,
-    get_node_class,
-    list_node_types,
-    unregister_node,
-    clear_registry,
-    validate_node_config,
-    discover_external_nodes,
-    NodeRegistrationError,
+from fabricpc.nodes.base import (
+    NodeBase,
+    SlotSpec,
+    _register_node_class,
+    _get_node_class_from_info,
 )
 from fabricpc.nodes import (
     LinearNode,
     LinearExplicitGrad,
-    get_node_class,
 )
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
-from fabricpc.graph.graph_net import create_pc_graph
+from fabricpc.core.activations import IdentityActivation
+from fabricpc.core.energy import GaussianEnergy
+from fabricpc.core.initializers import NormalInitializer
+from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.graph import initialize_params
+
+jax.config.update("jax_platform_name", "cpu")
 
 
-class TestNodeRegistration:
-    """Test node registration functionality."""
+class TestNodeDispatch:
+    """Test node class dispatch via _node_class_map."""
 
     def test_builtin_nodes_registered(self):
-        """Test that built-in nodes are registered on import."""
-        types = list_node_types()
-        assert "linear" in types
-        assert "linear_explicit_grad" in types
+        """Test that built-in nodes are registered for dispatch."""
+        node_info_linear = NodeInfo(
+            name="test",
+            shape=(4,),
+            node_type="LinearNode",
+            node_config={},
+            activation=IdentityActivation(),
+            energy=GaussianEnergy(),
+            latent_init=NormalInitializer(),
+            slots={},
+            in_degree=0,
+            out_degree=0,
+            in_edges=(),
+            out_edges=(),
+        )
+        assert _get_node_class_from_info(node_info_linear) is LinearNode
 
-    def test_get_node_class_returns_correct_class(self):
-        """Test that get_node_class returns the correct node class."""
-        assert get_node_class("linear") is LinearNode
-        assert get_node_class("linear_explicit_grad") is LinearExplicitGrad
+    def test_explicit_grad_node_registered(self):
+        """Test that LinearExplicitGrad is registered for dispatch."""
+        node_info = NodeInfo(
+            name="test",
+            shape=(4,),
+            node_type="LinearExplicitGrad",
+            node_config={},
+            activation=IdentityActivation(),
+            energy=GaussianEnergy(),
+            latent_init=NormalInitializer(),
+            slots={},
+            in_degree=0,
+            out_degree=0,
+            in_edges=(),
+            out_edges=(),
+        )
+        assert _get_node_class_from_info(node_info) is LinearExplicitGrad
 
-    def test_get_node_class_case_insensitive(self):
-        """Test that node type lookup is case-insensitive."""
-        assert get_node_class("LINEAR") is LinearNode
-        assert get_node_class("Linear") is LinearNode
-        assert get_node_class("LINEAR_EXPLICIT_GRAD") is LinearExplicitGrad
-
-    def test_get_node_class_unknown_type_raises(self):
+    def test_unknown_node_type_raises(self):
         """Test that unknown node type raises ValueError."""
-        with pytest.raises(ValueError) as exc_info:
-            get_node_class("unknown_node_type")
-        assert "Unknown node type" in str(exc_info.value)
-        assert "unknown_node_type" in str(exc_info.value)
+        node_info = NodeInfo(
+            name="test",
+            shape=(4,),
+            node_type="NonexistentNode",
+            node_config={},
+            activation=IdentityActivation(),
+            energy=GaussianEnergy(),
+            latent_init=NormalInitializer(),
+            slots={},
+            in_degree=0,
+            out_degree=0,
+            in_edges=(),
+            out_edges=(),
+        )
+        with pytest.raises(ValueError, match="Unknown node type"):
+            _get_node_class_from_info(node_info)
 
-    def test_backward_compatibility_alias(self):
-        """Test that get_node_class still works."""
-        assert get_node_class("linear") is LinearNode
-        assert get_node_class is get_node_class
 
+class TestCustomNodeCreation:
+    """Test creating custom node types by subclassing NodeBase."""
 
-class TestCustomNodeRegistration:
-    """Test registering custom node types."""
+    def test_custom_node_subclass(self):
+        """Test creating a custom node type via subclassing."""
 
-    def test_register_custom_node(self):
-        """Test registering a custom node type."""
+        class ConstantNode(NodeBase):
+            DEFAULT_ACTIVATION = IdentityActivation
+            DEFAULT_ENERGY = GaussianEnergy
+            DEFAULT_LATENT_INIT = NormalInitializer
 
-        @register_node("test_custom")
-        class TestCustomNode(NodeBase):
-            CONFIG_SCHEMA = {}
-
-            @staticmethod
-            def get_slots():
-                return {"in": SlotSpec(name="in", is_multi_input=True)}
-
-            @staticmethod
-            def initialize_params(key, node_shape, input_shapes, config):
-                return NodeParams(weights={}, biases={})
-
-            @staticmethod
-            def forward(params, inputs, state, node_info):
-                return jnp.array(0.0), state
-
-        try:
-            assert get_node_class("test_custom") is TestCustomNode
-            assert "test_custom" in list_node_types()
-        finally:
-            unregister_node("test_custom")
-
-    def test_duplicate_registration_different_class_raises(self):
-        """Test that registering same type with different class raises."""
-
-        @register_node("test_dup")
-        class TestNode1(NodeBase):
-            CONFIG_SCHEMA = {}
+            def __init__(self, shape, name, value=1.0, **kwargs):
+                super().__init__(shape=shape, name=name, value=value, **kwargs)
 
             @staticmethod
             def get_slots():
@@ -111,63 +117,48 @@ class TestCustomNodeRegistration:
 
             @staticmethod
             def forward(params, inputs, state, node_info):
-                return jnp.array(0.0), state
+                value = node_info.node_config.get("value", 1.0)
+                z_mu = jnp.full_like(state.z_latent, value)
+                error = state.z_latent - z_mu
+                state = state._replace(
+                    z_mu=z_mu,
+                    pre_activation=z_mu,
+                    error=error,
+                )
+                state = node_class.energy_functional(state, node_info)
+                total_energy = jnp.sum(state.energy)
+                return total_energy, state
 
-        try:
-            with pytest.raises(NodeRegistrationError) as exc_info:
+        # Register for dispatch
+        _register_node_class(ConstantNode)
 
-                @register_node("test_dup")
-                class TestNode2(NodeBase):
-                    CONFIG_SCHEMA = {}
+        # Verify dispatch works
+        node_info = NodeInfo(
+            name="test",
+            shape=(4,),
+            node_type="ConstantNode",
+            node_config={"value": 2.0},
+            activation=IdentityActivation(),
+            energy=GaussianEnergy(),
+            latent_init=NormalInitializer(),
+            slots={},
+            in_degree=0,
+            out_degree=0,
+            in_edges=(),
+            out_edges=(),
+        )
+        assert _get_node_class_from_info(node_info) is ConstantNode
 
-                    @staticmethod
-                    def get_slots():
-                        return {"in": SlotSpec(name="in", is_multi_input=True)}
+    def test_custom_node_in_graph(self):
+        """Test using a custom node in a graph."""
 
-                    @staticmethod
-                    def initialize_params(key, node_shape, input_shapes, config):
-                        return NodeParams(weights={}, biases={})
+        class PassthroughNode(NodeBase):
+            DEFAULT_ACTIVATION = IdentityActivation
+            DEFAULT_ENERGY = GaussianEnergy
+            DEFAULT_LATENT_INIT = NormalInitializer
 
-                    @staticmethod
-                    def forward(params, inputs, state, node_info):
-                        return jnp.array(0.0), state
-
-            assert "already registered" in str(exc_info.value)
-        finally:
-            unregister_node("test_dup")
-
-    def test_idempotent_registration_same_class(self):
-        """Test that registering same class twice is OK."""
-
-        @register_node("test_idem")
-        class TestIdemNode(NodeBase):
-            CONFIG_SCHEMA = {}
-
-            @staticmethod
-            def get_slots():
-                return {"in": SlotSpec(name="in", is_multi_input=True)}
-
-            @staticmethod
-            def initialize_params(key, node_shape, input_shapes, config):
-                return NodeParams(weights={}, biases={})
-
-            @staticmethod
-            def forward(params, inputs, state, node_info):
-                return jnp.array(0.0), state
-
-        try:
-            # Register same class again - should not raise
-            register_node("test_idem")(TestIdemNode)
-            assert get_node_class("test_idem") is TestIdemNode
-        finally:
-            unregister_node("test_idem")
-
-    def test_unregister_node(self):
-        """Test that unregister_node removes the node type."""
-
-        @register_node("test_unreg")
-        class TestUnregNode(NodeBase):
-            CONFIG_SCHEMA = {}
+            def __init__(self, shape, name, **kwargs):
+                super().__init__(shape=shape, name=name, **kwargs)
 
             @staticmethod
             def get_slots():
@@ -179,283 +170,140 @@ class TestCustomNodeRegistration:
 
             @staticmethod
             def forward(params, inputs, state, node_info):
-                return jnp.array(0.0), state
+                # Sum all inputs as z_mu
+                z_mu = sum(inputs.values())
+                error = state.z_latent - z_mu
+                state = state._replace(
+                    z_mu=z_mu,
+                    pre_activation=z_mu,
+                    error=error,
+                )
+                state = node_class.energy_functional(state, node_info)
+                total_energy = jnp.sum(state.energy)
+                return total_energy, state
 
-        assert "test_unreg" in list_node_types()
-        unregister_node("test_unreg")
-        assert "test_unreg" not in list_node_types()
+        # Register for dispatch
+        _register_node_class(PassthroughNode)
 
+        # Use in a graph
+        from fabricpc.nodes import Linear
 
-class TestInterfaceValidation:
-    """Test that nodes must implement required interface."""
+        input_node = Linear(shape=(8,), name="input")
+        passthrough = PassthroughNode(shape=(8,), name="passthrough")
+        output_node = Linear(shape=(4,), name="output")
 
-    def test_missing_config_schema_raises(self):
-        """Test that missing CONFIG_SCHEMA raises error."""
-        with pytest.raises(NodeRegistrationError) as exc_info:
+        structure = graph(
+            nodes=[input_node, passthrough, output_node],
+            edges=[
+                Edge(source=input_node, target=passthrough.slot("in")),
+                Edge(source=passthrough, target=output_node.slot("in")),
+            ],
+            task_map=TaskMap(x=input_node, y=output_node),
+        )
 
-            @register_node("test_missing_schema")
-            class MissingSchemaNode(NodeBase):
-                @staticmethod
-                def get_slots():
-                    return {"in": SlotSpec(name="in", is_multi_input=True)}
+        key = jax.random.PRNGKey(0)
+        params = initialize_params(structure, key)
 
-                @staticmethod
-                def initialize_params(key, node_shape, input_shapes, config):
-                    return NodeParams(weights={}, biases={})
-
-                @staticmethod
-                def forward(params, inputs, state, node_info):
-                    return jnp.array(0.0), state
-
-        assert "CONFIG_SCHEMA" in str(exc_info.value)
-
-    def test_missing_forward_raises(self):
-        """Test that missing forward method raises error."""
-        with pytest.raises(NodeRegistrationError) as exc_info:
-
-            @register_node("test_missing_forward")
-            class MissingForwardNode(NodeBase):
-                CONFIG_SCHEMA = {}
-
-                @staticmethod
-                def get_slots():
-                    return {"in": SlotSpec(name="in", is_multi_input=True)}
-
-                @staticmethod
-                def initialize_params(key, node_shape, input_shapes, config):
-                    return NodeParams(weights={}, biases={})
-
-                # forward is abstract, not implemented
-
-        assert "forward" in str(exc_info.value)
-        assert "abstract" in str(exc_info.value)
+        assert len(structure.nodes) == 3
+        assert structure.nodes["passthrough"].node_info.node_type == "PassthroughNode"
 
 
-class TestConfigValidation:
-    """Test config schema validation."""
+class TestNodeProperties:
+    """Test node object properties."""
 
-    def test_schema_applies_defaults(self):
-        """Test that LinearNode's CONFIG_SCHEMA applies defaults."""
-        config = {
-            "name": "test",
-            "shape": (10,),
-            "type": "linear",
-            "custom_field": "value",
-        }
-        result = validate_node_config(LinearNode, config)
-        # Original fields preserved
-        assert result["name"] == "test"
-        assert result["custom_field"] == "value"
-        # Defaults applied from LinearNode.CONFIG_SCHEMA
-        assert result["use_bias"] == True
-        assert result["weight_init"]["type"] == "normal"
+    def test_node_shape_property(self):
+        """Test that node shape property works."""
+        from fabricpc.nodes import Linear
 
-    def test_required_field_missing_raises(self):
-        """Test that missing required field raises ValueError."""
+        node = Linear(shape=(128,), name="test")
+        assert node.shape == (128,)
 
-        class NodeWithSchema(NodeBase):
-            CONFIG_SCHEMA = {
-                "kernel_size": {
-                    "type": tuple,
-                    "required": True,
-                    "description": "Kernel dims",
-                },
-            }
+    def test_node_name_property(self):
+        """Test that node name property works."""
+        from fabricpc.nodes import Linear
 
-            @staticmethod
-            def get_slots():
-                return {"in": SlotSpec(name="in", is_multi_input=True)}
+        node = Linear(shape=(10,), name="my_node")
+        assert node.name == "my_node"
 
-            @staticmethod
-            def initialize_params(key, node_shape, input_shapes, config):
-                return NodeParams(weights={}, biases={})
+    def test_node_slot_method(self):
+        """Test that node.slot() returns SlotRef."""
+        from fabricpc.nodes import Linear
 
-            @staticmethod
-            def forward(params, inputs, state, node_info):
-                return jnp.array(0.0), state
+        node = Linear(shape=(10,), name="test")
+        slot_ref = node.slot("in")
+        assert slot_ref.node is node
+        assert slot_ref.slot == "in"
 
-        from fabricpc.core.config import ConfigValidationError
+    def test_node_invalid_slot_raises(self):
+        """Test that accessing nonexistent slot raises KeyError."""
+        from fabricpc.nodes import Linear
 
-        config = {
-            "name": "test",
-            "shape": (10,),
-            "type": "custom",
-        }  # missing kernel_size
-        with pytest.raises(ConfigValidationError) as exc_info:
-            validate_node_config(NodeWithSchema, config)
-        assert "kernel_size" in str(exc_info.value)
+        node = Linear(shape=(10,), name="test")
+        with pytest.raises(KeyError, match="no slot"):
+            node.slot("nonexistent")
 
-    def test_type_mismatch_raises(self):
-        """Test that wrong type raises ConfigValidationError."""
+    def test_node_info_none_before_graph(self):
+        """Test that node_info is None before graph() is called."""
+        from fabricpc.nodes import Linear
 
-        class NodeWithSchema(NodeBase):
-            CONFIG_SCHEMA = {
-                "stride": {"type": tuple},
-            }
+        node = Linear(shape=(10,), name="test")
+        assert node.node_info is None
 
-            @staticmethod
-            def get_slots():
-                return {"in": SlotSpec(name="in", is_multi_input=True)}
+    def test_node_info_set_after_graph(self):
+        """Test that node_info is set after graph() is called."""
+        from fabricpc.nodes import Linear
 
-            @staticmethod
-            def initialize_params(key, node_shape, input_shapes, config):
-                return NodeParams(weights={}, biases={})
+        input_node = Linear(shape=(8,), name="input")
+        output_node = Linear(shape=(4,), name="output")
 
-            @staticmethod
-            def forward(params, inputs, state, node_info):
-                return jnp.array(0.0), state
+        structure = graph(
+            nodes=[input_node, output_node],
+            edges=[Edge(source=input_node, target=output_node.slot("in"))],
+            task_map=TaskMap(x=input_node, y=output_node),
+        )
 
-        from fabricpc.core.config import ConfigValidationError
-
-        config = {
-            "name": "test",
-            "shape": (10,),
-            "type": "custom",
-            "stride": [1, 1],
-        }  # list instead of tuple
-        with pytest.raises(ConfigValidationError) as exc_info:
-            validate_node_config(NodeWithSchema, config)
-        assert "stride" in str(exc_info.value)
-        assert "tuple" in str(exc_info.value)
-
-    def test_choices_validation_raises(self):
-        """Test that invalid choice raises ValueError."""
-
-        class NodeWithSchema(NodeBase):
-            CONFIG_SCHEMA = {
-                "padding": {"type": str, "choices": ["valid", "same"]},
-            }
-
-            @staticmethod
-            def get_slots():
-                return {"in": SlotSpec(name="in", is_multi_input=True)}
-
-            @staticmethod
-            def initialize_params(key, node_shape, input_shapes, config):
-                return NodeParams(weights={}, biases={})
-
-            @staticmethod
-            def forward(params, inputs, state, node_info):
-                return jnp.array(0.0), state
-
-        from fabricpc.core.config import ConfigValidationError
-
-        config = {
-            "name": "test",
-            "shape": (10,),
-            "type": "custom",
-            "padding": "full",
-        }  # not in choices
-        with pytest.raises(ConfigValidationError) as exc_info:
-            validate_node_config(NodeWithSchema, config)
-        assert "padding" in str(exc_info.value)
-        assert "valid" in str(exc_info.value)
-
-    def test_defaults_applied(self):
-        """Test that missing optional field gets default value."""
-
-        class NodeWithSchema(NodeBase):
-            CONFIG_SCHEMA = {
-                "stride": {"type": tuple, "default": (1, 1)},
-                "padding": {"type": str, "default": "valid"},
-            }
-
-            @staticmethod
-            def get_slots():
-                return {"in": SlotSpec(name="in", is_multi_input=True)}
-
-            @staticmethod
-            def initialize_params(key, node_shape, input_shapes, config):
-                return NodeParams(weights={}, biases={})
-
-            @staticmethod
-            def forward(params, inputs, state, node_info):
-                return jnp.array(0.0), state
-
-        config = {
-            "name": "test",
-            "shape": (10,),
-            "type": "custom",
-        }  # missing stride and padding
-        result = validate_node_config(NodeWithSchema, config)
-        assert result["stride"] == (1, 1)
-        assert result["padding"] == "valid"
-        assert result["name"] == "test"
-
-
-class TestEntryPointDiscovery:
-    """Test entry point discovery functionality."""
-
-    def test_discovery_runs_without_error(self):
-        """Test that entry point discovery runs without error (even with no plugins)."""
-        # Should not raise even if no plugins are installed
-        discover_external_nodes()
-
-    def test_builtin_takes_precedence(self):
-        """Test that built-in nodes are not overwritten by external."""
-        # Get the current linear node class
-        original_linear = get_node_class("linear")
-
-        # Run discovery again (should not overwrite)
-        discover_external_nodes()
-
-        # Should still be the same class
-        assert get_node_class("linear") is original_linear
+        # Finalized nodes in structure should have node_info
+        assert structure.nodes["input"].node_info is not None
+        assert structure.nodes["output"].node_info is not None
+        assert structure.nodes["output"].node_info.in_degree == 1
 
 
 class TestIntegration:
     """Integration tests with graph construction."""
 
-    def test_graph_creation_with_registered_nodes(self):
-        """Test that graphs can be created with registered node types."""
-        config = {
-            "node_list": [
-                {"name": "input", "shape": (8,), "type": "linear"},
-                {"name": "output", "shape": (4,), "type": "linear"},
-            ],
-            "edge_list": [
-                {"source_name": "input", "target_name": "output", "slot": "in"},
-            ],
-            "task_map": {"x": "input", "y": "output"},
-        }
+    def test_graph_creation_with_linear_nodes(self):
+        """Test that graphs can be created with Linear nodes."""
+        from fabricpc.nodes import Linear
+
+        input_node = Linear(shape=(8,), name="input")
+        output_node = Linear(shape=(4,), name="output")
+
+        structure = graph(
+            nodes=[input_node, output_node],
+            edges=[Edge(source=input_node, target=output_node.slot("in"))],
+            task_map=TaskMap(x=input_node, y=output_node),
+        )
 
         key = jax.random.PRNGKey(0)
-        params, structure = create_pc_graph(config, key)
+        params = initialize_params(structure, key)
 
         assert len(structure.nodes) == 2
-        assert structure.nodes["input"].node_type == "linear"
-        assert structure.nodes["output"].node_type == "linear"
+        assert structure.nodes["input"].node_info.node_type == "LinearNode"
+        assert structure.nodes["output"].node_info.node_type == "LinearNode"
 
-    def test_graph_creation_with_linear_explicit_grad(self):
-        """Test graph creation with linear_explicit_grad node type."""
-        config = {
-            "node_list": [
-                {"name": "input", "shape": (8,), "type": "linear_explicit_grad"},
-                {"name": "output", "shape": (4,), "type": "linear_explicit_grad"},
-            ],
-            "edge_list": [
-                {"source_name": "input", "target_name": "output", "slot": "in"},
-            ],
-            "task_map": {"x": "input", "y": "output"},
-        }
+    def test_graph_creation_with_explicit_grad_nodes(self):
+        """Test graph creation with LinearExplicitGrad nodes."""
+        input_node = LinearExplicitGrad(shape=(8,), name="input")
+        output_node = LinearExplicitGrad(shape=(4,), name="output")
+
+        structure = graph(
+            nodes=[input_node, output_node],
+            edges=[Edge(source=input_node, target=output_node.slot("in"))],
+            task_map=TaskMap(x=input_node, y=output_node),
+        )
 
         key = jax.random.PRNGKey(0)
-        params, structure = create_pc_graph(config, key)
+        params = initialize_params(structure, key)
 
-        assert structure.nodes["input"].node_type == "linear_explicit_grad"
-        assert structure.nodes["output"].node_type == "linear_explicit_grad"
-
-    def test_unknown_node_type_in_config_raises(self):
-        """Test that unknown node type in config raises error."""
-        config = {
-            "node_list": [
-                {"name": "input", "shape": (8,), "type": "nonexistent_type"},
-            ],
-            "edge_list": [],
-            "task_map": {"x": "input"},
-        }
-
-        key = jax.random.PRNGKey(0)
-        with pytest.raises(ValueError) as exc_info:
-            create_pc_graph(config, key)
-        assert "Unknown node type" in str(exc_info.value)
+        assert structure.nodes["input"].node_info.node_type == "LinearExplicitGrad"
+        assert structure.nodes["output"].node_info.node_type == "LinearExplicitGrad"

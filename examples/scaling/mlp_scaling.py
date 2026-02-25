@@ -53,7 +53,10 @@ import argparse
 from dataclasses import dataclass, asdict
 from typing import List, Dict, Tuple, Optional
 
-from fabricpc.graph import create_pc_graph
+from fabricpc.nodes import Linear
+from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.graph import initialize_params
+from fabricpc.core.activations import IdentityActivation, SigmoidActivation
 from fabricpc.training.train import train_step
 from fabricpc.training.train_backprop import train_step_backprop
 from fabricpc.training.optimizers import create_optimizer
@@ -100,59 +103,52 @@ class ScalingResult:
 # =============================================================================
 
 
-def create_mlp_config(
-    input_dim: int, hidden_width: int, num_layers: int, output_dim: int
-) -> dict:
+def create_mlp_model(
+    input_dim: int,
+    hidden_width: int,
+    num_layers: int,
+    output_dim: int,
+    rng_key: jax.Array,
+):
     """
-    Create MLP configuration with specified width and depth.
+    Create MLP model with specified width and depth.
 
     Architecture: input -> [hidden x num_layers] -> output
     Uses LinearNode with sigmoid activations.
-    """
-    node_list = [
-        {
-            "name": "input",
-            "shape": (input_dim,),
-            "type": "linear",
-            "activation": {"type": "identity"},
-        },
-    ]
 
-    edge_list = []
-    prev_name = "input"
+    Returns:
+        (params, structure) tuple
+    """
+    input_node = Linear(
+        shape=(input_dim,), activation=IdentityActivation(), name="input"
+    )
+
+    nodes = [input_node]
+    edges = []
+    prev_node = input_node
 
     for i in range(num_layers):
-        layer_name = f"hidden_{i}"
-        node_list.append(
-            {
-                "name": layer_name,
-                "shape": (hidden_width,),
-                "type": "linear",
-                "activation": {"type": "sigmoid"},
-            }
+        hidden = Linear(
+            shape=(hidden_width,), activation=SigmoidActivation(), name=f"hidden_{i}"
         )
-        edge_list.append(
-            {"source_name": prev_name, "target_name": layer_name, "slot": "in"}
-        )
-        prev_name = layer_name
+        nodes.append(hidden)
+        edges.append(Edge(source=prev_node, target=hidden.slot("in")))
+        prev_node = hidden
 
-    # Output layer
-    node_list.append(
-        {
-            "name": "output",
-            "shape": (output_dim,),
-            "type": "linear",
-            "activation": {"type": "sigmoid"},
-        }
+    output_node = Linear(
+        shape=(output_dim,), activation=SigmoidActivation(), name="output"
     )
-    edge_list.append({"source_name": prev_name, "target_name": "output", "slot": "in"})
+    nodes.append(output_node)
+    edges.append(Edge(source=prev_node, target=output_node.slot("in")))
 
-    return {
-        "node_list": node_list,
-        "edge_list": edge_list,
-        "task_map": {"x": "input", "y": "output"},
-        "graph_state_initializer": {"type": "feedforward"},
-    }
+    structure = graph(
+        nodes=nodes,
+        edges=edges,
+        task_map=TaskMap(x=input_node, y=output_node),
+        graph_state_initializer={"type": "feedforward"},
+    )
+    params = initialize_params(structure, rng_key)
+    return params, structure
 
 
 def generate_synthetic_data(
@@ -320,10 +316,9 @@ def run_single_experiment(
     rng_key = jax.random.PRNGKey(seed)
 
     # Create model
-    config = create_mlp_config(width, width, depth, width)
     rng_key, graph_key, data_key, train_key = jax.random.split(rng_key, 4)
 
-    params, structure = create_pc_graph(config, graph_key)
+    params, structure = create_mlp_model(width, width, depth, width, graph_key)
     num_params = count_params(params)
 
     # Generate data

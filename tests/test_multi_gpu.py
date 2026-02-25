@@ -21,7 +21,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from fabricpc.graph.graph_net import create_pc_graph
+from fabricpc.nodes import Linear
+from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.graph import initialize_params
+from fabricpc.core.activations import IdentityActivation, ReLUActivation
+from fabricpc.core.initializers import XavierInitializer
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.training.multi_gpu import train_pcn_multi_gpu
 
@@ -36,60 +40,48 @@ def rng_key():
 
 
 @pytest.fixture
-def simple_config():
-    """Simple graph configuration for testing."""
-    return {
-        "node_list": [
-            {
-                "name": "input",
-                "shape": (8,),
-                "type": "linear",
-                "activation": {"type": "identity"},
-            },
-            {
-                "name": "hidden1",
-                "shape": (16,),
-                "type": "linear",
-                "activation": {"type": "relu"},
-                "weight_init": {"type": "xavier"},
-            },
-            {
-                "name": "hidden2",
-                "shape": (16,),
-                "type": "linear",
-                "activation": {"type": "relu"},
-                "weight_init": {"type": "xavier"},
-            },
-            {
-                "name": "hidden3",
-                "shape": (16,),
-                "type": "linear",
-                "activation": {"type": "relu"},
-                "weight_init": {"type": "xavier"},
-            },
-            {
-                "name": "hidden4",
-                "shape": (16,),
-                "type": "linear",
-                "activation": {"type": "relu"},
-                "weight_init": {"type": "xavier"},
-            },
-            {
-                "name": "output",
-                "shape": (8,),
-                "type": "linear",
-                "activation": {"type": "identity"},
-            },
+def simple_structure():
+    """Simple graph structure for testing."""
+    input_node = Linear(shape=(8,), activation=IdentityActivation(), name="input")
+    hidden1 = Linear(
+        shape=(16,),
+        activation=ReLUActivation(),
+        weight_init=XavierInitializer(),
+        name="hidden1",
+    )
+    hidden2 = Linear(
+        shape=(16,),
+        activation=ReLUActivation(),
+        weight_init=XavierInitializer(),
+        name="hidden2",
+    )
+    hidden3 = Linear(
+        shape=(16,),
+        activation=ReLUActivation(),
+        weight_init=XavierInitializer(),
+        name="hidden3",
+    )
+    hidden4 = Linear(
+        shape=(16,),
+        activation=ReLUActivation(),
+        weight_init=XavierInitializer(),
+        name="hidden4",
+    )
+    output_node = Linear(shape=(8,), activation=IdentityActivation(), name="output")
+
+    structure = graph(
+        nodes=[input_node, hidden1, hidden2, hidden3, hidden4, output_node],
+        edges=[
+            Edge(source=input_node, target=hidden1.slot("in")),
+            Edge(source=hidden1, target=hidden2.slot("in")),
+            Edge(source=hidden2, target=hidden3.slot("in")),
+            Edge(source=hidden3, target=hidden4.slot("in")),
+            Edge(source=hidden4, target=output_node.slot("in")),
         ],
-        "edge_list": [
-            {"source_name": "input", "target_name": "hidden1", "slot": "in"},
-            {"source_name": "hidden1", "target_name": "hidden2", "slot": "in"},
-            {"source_name": "hidden2", "target_name": "hidden3", "slot": "in"},
-            {"source_name": "hidden3", "target_name": "hidden4", "slot": "in"},
-            {"source_name": "hidden4", "target_name": "output", "slot": "in"},
-        ],
-        "task_map": {"x": "input", "y": "output"},
-    }
+        task_map=TaskMap(x=input_node, y=output_node),
+    )
+
+    return structure
 
 
 @pytest.fixture
@@ -137,17 +129,19 @@ class SimpleDataLoader:
 class TestMultiGPUTraining:
     """Test suite for multi-GPU training numerical similarity."""
 
-    def test_both_methods_run_successfully(self, simple_config, train_config, rng_key):
+    def test_both_methods_run_successfully(
+        self, simple_structure, train_config, rng_key
+    ):
         """Test that both training methods run without errors."""
         # Split keys for different uses
         model_key, train_key1, train_key2, data_key = jax.random.split(rng_key, 4)
 
-        # Create graph
-        params, structure = create_pc_graph(simple_config, model_key)
+        # Initialize parameters
+        params = initialize_params(simple_structure, model_key)
 
         # Create data loader
-        input_shape = structure.nodes["input"].shape
-        output_shape = structure.nodes["output"].shape
+        input_shape = simple_structure.nodes["input"].node_info.shape
+        output_shape = simple_structure.nodes["output"].node_info.shape
         train_loader = SimpleDataLoader(
             input_shape, output_shape, batch_size=8, num_batches=4, rng_key=data_key
         )
@@ -159,7 +153,7 @@ class TestMultiGPUTraining:
         # Run single-GPU training
         trained_single, iter_results_single, _ = train_pcn(
             params_single,
-            structure,
+            simple_structure,
             train_loader,
             train_config,
             train_key1,
@@ -169,7 +163,7 @@ class TestMultiGPUTraining:
         # Run multi-GPU training
         trained_multi = train_pcn_multi_gpu(
             params_multi,
-            structure,
+            simple_structure,
             train_loader,
             train_config,
             train_key2,
@@ -184,18 +178,18 @@ class TestMultiGPUTraining:
         assert set(trained_single.nodes.keys()) == set(params.nodes.keys())
         assert set(trained_multi.nodes.keys()) == set(params.nodes.keys())
 
-    def test_both_methods_reduce_energy(self, simple_config, train_config, rng_key):
+    def test_both_methods_reduce_energy(self, simple_structure, train_config, rng_key):
         """Test that both training methods reduce energy over training."""
         model_key, train_key1, train_key2, data_key, eval_key = jax.random.split(
             rng_key, 5
         )
 
-        # Create graph
-        params, structure = create_pc_graph(simple_config, model_key)
+        # Initialize parameters
+        params = initialize_params(simple_structure, model_key)
 
         # Create data loader
-        input_shape = structure.nodes["input"].shape
-        output_shape = structure.nodes["output"].shape
+        input_shape = simple_structure.nodes["input"].node_info.shape
+        output_shape = simple_structure.nodes["output"].node_info.shape
         train_loader = SimpleDataLoader(
             input_shape, output_shape, batch_size=8, num_batches=4, rng_key=data_key
         )
@@ -207,7 +201,7 @@ class TestMultiGPUTraining:
         # Run single-GPU training and capture energies
         trained_single, iter_results_single, _ = train_pcn(
             params_single,
-            structure,
+            simple_structure,
             train_loader,
             train_config,
             train_key1,
@@ -217,7 +211,7 @@ class TestMultiGPUTraining:
         # Run multi-GPU training (captures losses internally)
         trained_multi = train_pcn_multi_gpu(
             params_multi,
-            structure,
+            simple_structure,
             train_loader,
             train_config,
             train_key2,
@@ -244,10 +238,10 @@ class TestMultiGPUTraining:
 
         eval_key1, eval_key2 = jax.random.split(eval_key)
         metrics_single = evaluate_pcn(
-            trained_single, structure, eval_loader, eval_config, eval_key1
+            trained_single, simple_structure, eval_loader, eval_config, eval_key1
         )
         metrics_multi = evaluate_pcn(
-            trained_multi, structure, eval_loader, eval_config, eval_key2
+            trained_multi, simple_structure, eval_loader, eval_config, eval_key2
         )
 
         # Both should have finite energy
@@ -258,7 +252,7 @@ class TestMultiGPUTraining:
             metrics_multi["energy"]
         ), "Multi-GPU eval energy should be finite"
 
-    def test_numerical_similarity(self, simple_config, train_config, rng_key):
+    def test_numerical_similarity(self, simple_structure, train_config, rng_key):
         """
         Test that train_pcn_multi_gpu with a single shard produces numerically
         identical results to train_pcn.
@@ -269,12 +263,12 @@ class TestMultiGPUTraining:
         """
         model_key, train_key, data_key = jax.random.split(rng_key, 3)
 
-        # Create graph
-        params, structure = create_pc_graph(simple_config, model_key)
+        # Initialize parameters
+        params = initialize_params(simple_structure, model_key)
 
         # Create data loader
-        input_shape = structure.nodes["input"].shape
-        output_shape = structure.nodes["output"].shape
+        input_shape = simple_structure.nodes["input"].node_info.shape
+        output_shape = simple_structure.nodes["output"].node_info.shape
         train_loader = SimpleDataLoader(
             input_shape, output_shape, batch_size=8, num_batches=4, rng_key=data_key
         )
@@ -286,7 +280,7 @@ class TestMultiGPUTraining:
         # Use the SAME training key - results should be identical
         trained_single, _, _ = train_pcn(
             params_single,
-            structure,
+            simple_structure,
             train_loader,
             train_config,
             train_key,
@@ -294,7 +288,7 @@ class TestMultiGPUTraining:
         )
         trained_multi = train_pcn_multi_gpu(
             params_multi,
-            structure,
+            simple_structure,
             train_loader,
             train_config,
             train_key,
@@ -306,8 +300,10 @@ class TestMultiGPUTraining:
         max_relative_diff = 0.0
         param_diffs = []
 
-        for node_name in structure.nodes:
-            if structure.nodes[node_name].in_degree > 0:  # Skip source nodes
+        for node_name in simple_structure.nodes:
+            if (
+                simple_structure.nodes[node_name].node_info.in_degree > 0
+            ):  # Skip source nodes
                 single_node = trained_single.nodes[node_name]
                 multi_node = trained_multi.nodes[node_name]
 
@@ -341,16 +337,18 @@ class TestMultiGPUTraining:
             f"Per-parameter diffs: {param_diffs}"
         )
 
-    def test_parameter_magnitudes_similar(self, simple_config, train_config, rng_key):
+    def test_parameter_magnitudes_similar(
+        self, simple_structure, train_config, rng_key
+    ):
         """Test that final parameter magnitudes are in similar ranges."""
         model_key, train_key, data_key = jax.random.split(rng_key, 3)
 
-        # Create graph
-        params, structure = create_pc_graph(simple_config, model_key)
+        # Initialize parameters
+        params = initialize_params(simple_structure, model_key)
 
         # Create data loader
-        input_shape = structure.nodes["input"].shape
-        output_shape = structure.nodes["output"].shape
+        input_shape = simple_structure.nodes["input"].node_info.shape
+        output_shape = simple_structure.nodes["output"].node_info.shape
         train_loader = SimpleDataLoader(
             input_shape, output_shape, batch_size=8, num_batches=4, rng_key=data_key
         )
@@ -364,7 +362,7 @@ class TestMultiGPUTraining:
         # Run both trainings
         trained_single, _, _ = train_pcn(
             params_single,
-            structure,
+            simple_structure,
             train_loader,
             train_config,
             train_key1,
@@ -372,7 +370,7 @@ class TestMultiGPUTraining:
         )
         trained_multi = train_pcn_multi_gpu(
             params_multi,
-            structure,
+            simple_structure,
             train_loader,
             train_config,
             train_key2,
@@ -381,7 +379,7 @@ class TestMultiGPUTraining:
 
         max_allowed_difference = 1e-5
         # Compare parameter norms for each node
-        for node_name in structure.nodes:
+        for node_name in simple_structure.nodes:
             if node_name in trained_single.nodes and node_name in trained_multi.nodes:
                 single_params = trained_single.nodes[node_name]
                 multi_params = trained_multi.nodes[node_name]
@@ -445,11 +443,11 @@ class TestMultiGPUUtilities:
         with pytest.raises(ValueError, match="divisible"):
             shard_batch(batch, n_devices=2)
 
-    def test_replicate_params(self, simple_config, rng_key):
+    def test_replicate_params(self, simple_structure, rng_key):
         """Test parameter replication utility."""
         from fabricpc.training.multi_gpu import replicate_params
 
-        params, structure = create_pc_graph(simple_config, rng_key)
+        params = initialize_params(simple_structure, rng_key)
 
         # Replicate to 2 devices
         replicated = replicate_params(params, n_devices=2)

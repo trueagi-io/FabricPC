@@ -3,7 +3,7 @@ MINIMAL Predictive Coding Network Example
 ================================================
 
 This is the absolute SIMPLEST example showing how to:
-1. Define a network with a dictionary
+1. Define a network with the new object API
 2. Train it on MNIST
 3. Get results
 
@@ -17,7 +17,15 @@ os.environ.setdefault("JAX_PLATFORMS", "cuda")  # "cpu", "cuda" or "tpu"
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Suppress XLA warnings
 
 import jax
-from fabricpc.graph import create_pc_graph
+from fabricpc.nodes import Linear
+from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.graph import initialize_params
+from fabricpc.core.activations import (
+    IdentityActivation,
+    SigmoidActivation,
+    SoftmaxActivation,
+)
+from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
 import time
@@ -28,32 +36,28 @@ import time
 jax.config.update(
     "jax_default_prng_impl", "threefry2x32"
 )  # 'rbg' is faster than 'threefry2x32', but less reproducible across vmap
+
 # ==============================================================================
-# NETWORK DEFINITION: A dictionary!
+# NETWORK DEFINITION: Object API
 # ==============================================================================
 # fmt: off
 
-config = {
-    # Define nodes (layers)
-    "node_list": [
-        {"name": "pixels",  "shape": (784,), "type": "linear", "activation": "identity"},
-        {"name": "hidden1", "shape": (256,), "type": "linear", "activation": "sigmoid"},
-        {"name": "hidden2", "shape": (64,),  "type": "linear", "activation": "sigmoid"},
-        {"name": "class",   "shape": (10,),  "type": "linear", "activation": "softmax", "energy": "cross_entropy"},
-    ],
+# Create nodes
+pixels = Linear(shape=(784,), name="pixels")  # defaults: IdentityActivation, GaussianEnergy
+hidden1 = Linear(shape=(256,), activation=SigmoidActivation(), name="hidden1")
+hidden2 = Linear(shape=(64,), activation=SigmoidActivation(), name="hidden2")
+output = Linear(shape=(10,), activation=SoftmaxActivation(), energy=CrossEntropyEnergy(), name="class")
 
-    # Connect nodes with edges.
-    "edge_list": [
-        {"source_name": "pixels",  "target_name": "hidden1", "slot": "in"},
-        {"source_name": "hidden1", "target_name": "hidden2", "slot": "in"},
-        {"source_name": "hidden2", "target_name": "class",   "slot": "in"},
+# Build graph structure
+structure = graph(
+    nodes=[pixels, hidden1, hidden2, output],
+    edges=[
+        Edge(source=pixels, target=hidden1.slot("in")),
+        Edge(source=hidden1, target=hidden2.slot("in")),
+        Edge(source=hidden2, target=output.slot("in")),
     ],
-    # How FabricPC uses the graph:
-    # The source node's latent state (z_latent) serves as input to the target node. The target node's forward projection method produces a prediction (z_mu) that is compared to the target node's latent state to compute an error and update the states.
-
-    # Map data loader (x, y) to node names in the graph. This tells the training loop where to feed data.
-    "task_map": {"x": "pixels", "y": "class"},
-}
+    task_map=TaskMap(x=pixels, y=output),
+)
 
 # Training hyperparameters
 train_config = {
@@ -72,9 +76,9 @@ if __name__ == "__main__":
     graph_key, train_key, eval_key = jax.random.split(master_rng_key, 3)
 
     # ==============================================================================
-    # CREATE MODEL: One line!
+    # CREATE MODEL: Initialize parameters from structure
     # ==============================================================================
-    params, structure = create_pc_graph(config, graph_key)
+    params = initialize_params(structure, graph_key)
 
     # ==============================================================================
     # LOAD DATA
@@ -105,7 +109,7 @@ if __name__ == "__main__":
     )
     delta_t = time.time() - start_time
     print(
-        f"Avg Training time: {delta_t / train_config["num_epochs"]:.2f} seconds per epoch"
+        f"Avg Training time: {delta_t / train_config['num_epochs']:.2f} seconds per epoch"
     )
 
     # ==============================================================================
@@ -121,17 +125,15 @@ if __name__ == "__main__":
         f"Test energy: {metrics['energy']:.4f} Note: Energy will be zero in evaluation mode for graphs that are feed-forward in topology (no cycles) and use feed-forward initialization."
     )
 
-    print(
-        f"Model created: {len(config['node_list'])} nodes, {len(config['edge_list'])} edges"
-    )
+    print(f"Model created: {len(structure.nodes)} nodes, {len(structure.edges)} edges")
     print(f"Total parameters: {sum(p.size for p in jax.tree_util.tree_leaves(params))}")
 
     print("\n" + "=" * 70)
     print("That's it! Want to change the architecture?")
-    print("Just modify the config dictionary above:")
-    print("  - Add more nodes to node_list for deeper networks")
+    print("Just modify the node and edge definitions above:")
+    print("  - Add more Linear nodes for deeper networks")
     print("  - Change 'shape' values to make layers wider/narrower")
-    print("  - Modify edge_list to create different connection patterns")
+    print("  - Modify edges to create different connection patterns")
     print("  - No need to change any other code!")
     print("\nJAX Benefits:")
     print("  ✓ Automatic JIT compilation (10-20x speedup)")

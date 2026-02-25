@@ -3,9 +3,8 @@ Node types for JAX predictive coding networks.
 
 This module provides:
 - NodeBase: Abstract base class for all node types
-- Built-in node implementations (LinearNode, etc.)
-- Node registry for custom node registration
-- Config validation for node parameters
+- Built-in node implementations (LinearNode, TransformerBlockNode)
+- Direct class imports for object-based graph construction
 """
 
 from fabricpc.nodes.base import (
@@ -13,24 +12,17 @@ from fabricpc.nodes.base import (
     Slot,
     NodeBase,
     FlattenInputMixin,
-)
-from fabricpc.nodes.registry import (
-    register_node,
-    get_node_class,
-    list_node_types,
-    unregister_node,
-    clear_registry,
-    validate_node_config,
-    discover_external_nodes,
-    NodeRegistrationError,
+    _register_node_class,
+    _get_node_class_from_info,
 )
 
-# Import node modules to trigger @register_node decorators
+# Import concrete node classes (also triggers _register_node_class calls)
 from fabricpc.nodes.linear import LinearNode, LinearExplicitGrad
 from fabricpc.nodes.transformer import TransformerBlockNode
 
-# Discover external nodes from installed packages
-discover_external_nodes()
+# Convenience aliases matching the target API
+Linear = LinearNode
+TransformerBlock = TransformerBlockNode
 
 __all__ = [
     # Base classes and mixins
@@ -38,17 +30,14 @@ __all__ = [
     "Slot",
     "NodeBase",
     "FlattenInputMixin",
-    # Registry
-    "register_node",
-    "get_node_class",
-    "list_node_types",
-    "unregister_node",
-    "clear_registry",
-    "validate_node_config",
-    "discover_external_nodes",
-    "NodeRegistrationError",
-    # Built-in nodes
+    # Built-in nodes (full names)
     "LinearNode",
     "LinearExplicitGrad",
     "TransformerBlockNode",
+    # Convenience aliases
+    "Linear",
+    "TransformerBlock",
+    # Internal dispatch helpers
+    "_register_node_class",
+    "_get_node_class_from_info",
 ]

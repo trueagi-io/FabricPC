@@ -63,6 +63,25 @@ This is a research-first project.
 ## License:
 Private until officially released. Please do not distribute.
 
+## Building a model
+A model consists of structure and parameters.
+```python
+from fabricpc.nodes import Linear
+from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.graph import initialize_params
+
+layer1 = Linear(shape=(784,), name="input")
+layer2 = Linear(shape=(256,), name="hidden")
+layer3 = Linear(shape=(10,), name="output")
+
+structure = graph(
+  nodes=[layer1, layer2, layer3],
+  edges=[Edge(layer1, layer2.slot("in")), Edge(layer2, layer3.slot("in"))],
+  task_map=TaskMap(x=layer1, y=layer3),
+)
+params = initialize_params(structure, rng_key)
+```
+
 ## Extending FabricPC
 
 ### Custom Nodes

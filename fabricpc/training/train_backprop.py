@@ -152,7 +152,7 @@ def train_backprop(
         Tuple of (trained_params, loss_history, epoch_results)
 
     Example:
-        >>> params, structure = create_pc_graph(config, rng_key)
+        >>> params = initialize_params(structure, rng_key)
         >>> train_config = {
         ...     "num_epochs": 10,
         ...     "optimizer": {"type": "adam", "lr": 1e-3},

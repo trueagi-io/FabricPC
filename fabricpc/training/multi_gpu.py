@@ -209,7 +209,7 @@ def train_pcn_multi_gpu(
         Trained parameters (single device)
 
     Example:
-        >>> params, structure = create_pc_graph(config, jax.random.PRNGKey(0))
+        >>> params = initialize_params(structure, jax.random.PRNGKey(0))
         >>> trained = train_pcn_multi_gpu(params, structure, train_loader, config)
     """
     from fabricpc.training.optimizers import create_optimizer

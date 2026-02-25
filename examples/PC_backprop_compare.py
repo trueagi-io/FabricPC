@@ -25,7 +25,6 @@ os.environ.setdefault("JAX_PLATFORMS", "cuda")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 
 import argparse
-import copy
 import importlib.util
 import sys
 import time
@@ -34,17 +33,25 @@ import numpy as np
 import jax
 from scipy import stats
 
-from fabricpc.graph import create_pc_graph
+from fabricpc.nodes import Linear
+from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.graph import initialize_params
+from fabricpc.core.activations import (
+    IdentityActivation,
+    SigmoidActivation,
+    SoftmaxActivation,
+    ReLUActivation,
+)
+from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.training.train_backprop import train_backprop, evaluate_backprop
 from fabricpc.utils.data.dataloader import MnistLoader
 
-# Import config from mnist_demo without triggering examples/__init__.py
+# Import train_config and batch_size from mnist_demo without triggering examples/__init__.py
 _demo_path = os.path.join(os.path.dirname(__file__), "mnist_demo.py")
 _spec = importlib.util.spec_from_file_location("mnist_demo", _demo_path)
 _mnist_demo = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mnist_demo)
-config = _mnist_demo.config
 train_config = _mnist_demo.train_config
 batch_size = _mnist_demo.batch_size
 
@@ -68,6 +75,54 @@ def parse_args():
         help="Print per-epoch training output for each trial",
     )
     return parser.parse_args()
+
+
+def create_pc_model(rng_key):
+    """Create PC model with sigmoid activations."""
+    pixels = Linear(shape=(784,), name="pixels")
+    hidden1 = Linear(shape=(256,), activation=SigmoidActivation(), name="hidden1")
+    hidden2 = Linear(shape=(64,), activation=SigmoidActivation(), name="hidden2")
+    output = Linear(
+        shape=(10,),
+        activation=SoftmaxActivation(),
+        energy=CrossEntropyEnergy(),
+        name="class",
+    )
+    structure = graph(
+        nodes=[pixels, hidden1, hidden2, output],
+        edges=[
+            Edge(source=pixels, target=hidden1.slot("in")),
+            Edge(source=hidden1, target=hidden2.slot("in")),
+            Edge(source=hidden2, target=output.slot("in")),
+        ],
+        task_map=TaskMap(x=pixels, y=output),
+    )
+    params = initialize_params(structure, rng_key)
+    return params, structure
+
+
+def create_backprop_model(rng_key):
+    """Create backprop model with ReLU activations (to avoid vanishing gradients)."""
+    pixels = Linear(shape=(784,), name="pixels")
+    hidden1 = Linear(shape=(256,), activation=ReLUActivation(), name="hidden1")
+    hidden2 = Linear(shape=(64,), activation=ReLUActivation(), name="hidden2")
+    output = Linear(
+        shape=(10,),
+        activation=SoftmaxActivation(),
+        energy=CrossEntropyEnergy(),
+        name="class",
+    )
+    structure = graph(
+        nodes=[pixels, hidden1, hidden2, output],
+        edges=[
+            Edge(source=pixels, target=hidden1.slot("in")),
+            Edge(source=hidden1, target=hidden2.slot("in")),
+            Edge(source=hidden2, target=output.slot("in")),
+        ],
+        task_map=TaskMap(x=pixels, y=output),
+    )
+    params = initialize_params(structure, rng_key)
+    return params, structure
 
 
 def run_single_trial(method, trial_seed, verbose=False):
@@ -97,8 +152,7 @@ def run_single_trial(method, trial_seed, verbose=False):
     )
 
     if method == "pc":
-        trial_config = copy.deepcopy(config)
-        params, structure = create_pc_graph(trial_config, graph_key)
+        params, structure = create_pc_model(graph_key)
         t0 = time.time()
         trained_params, _, _ = train_pcn(
             params, structure, train_loader, train_config, train_key, verbose=verbose
@@ -108,15 +162,7 @@ def run_single_trial(method, trial_seed, verbose=False):
             trained_params, structure, test_loader, train_config, eval_key
         )
     elif method == "backprop":
-        trial_config = copy.deepcopy(config)
-
-        # Modify the config to use ReLU activations for backprop training (since sigmoid can cause vanishing gradients).
-        # If we want to validate the same architecture, we can keep sigmoid activations for both methods, but it may degrade backprop performance.
-        for node in trial_config["node_list"]:
-            if node["activation"] == "sigmoid":
-                node["activation"] = "relu"
-
-        params, structure = create_pc_graph(trial_config, graph_key)
+        params, structure = create_backprop_model(graph_key)
         t0 = time.time()
         trained_params, _, _ = train_backprop(
             params, structure, train_loader, train_config, train_key, verbose=verbose

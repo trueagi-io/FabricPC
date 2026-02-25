@@ -30,7 +30,16 @@ import time
 import urllib.request
 from typing import Tuple, Iterator, Dict, List
 
-from fabricpc.graph import create_pc_graph
+from fabricpc.nodes import Linear, TransformerBlock
+from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.graph import initialize_params
+from fabricpc.core.activations import (
+    IdentityActivation,
+    SoftmaxActivation,
+    GeluActivation,
+)
+from fabricpc.core.energy import CrossEntropyEnergy
+from fabricpc.core.initializers import NormalInitializer, KaimingInitializer
 from fabricpc.training.train_autoregressive import (
     train_autoregressive,
     generate_autoregressive,
@@ -169,95 +178,86 @@ class DataLoaderWrapper:
 # ==============================================================================
 
 
-def create_transformer_config(
+def create_transformer_model(
     vocab_size: int,
     seq_len: int,
     embed_dim: int,
     num_heads: int,
     num_blocks: int,
-    ff_dim: int,  # should be 4x embed_dim
-    rope_theta: float,  # longer than sequence length
-) -> dict:
+    ff_dim: int,
+    rope_theta: float,
+    rng_key: jax.Array,
+) -> Tuple:
     """
-    Create a transformer language model configuration.
+    Create a transformer language model using the new object-oriented API.
 
     Architecture:
         Input (one-hot) -> Embedding -> [Transformer Block] x N -> Output projection
 
     For predictive coding, each node maintains its own latent state.
+
+    Args:
+        vocab_size: Size of the vocabulary
+        seq_len: Sequence length
+        embed_dim: Embedding dimension
+        num_heads: Number of attention heads
+        num_blocks: Number of transformer blocks
+        ff_dim: Feedforward hidden dimension (should be 4x embed_dim)
+        rope_theta: RoPE frequency parameter (longer than sequence length)
+        rng_key: JAX random key for parameter initialization
+
+    Returns:
+        Tuple of (structure, params)
     """
-    node_list = [
-        # Input embedding: linear projection from one-hot to embed_dim
-        {
-            "name": "input",
-            "shape": (seq_len, vocab_size),
-            "type": "linear",
-            "activation": {"type": "identity"},
-        },
-        {
-            "name": "embed",
-            "shape": (seq_len, embed_dim),
-            "type": "linear",
-            "activation": {"type": "identity"},
-            "weight_init": {"type": "kaiming", "mode": "fan_out"},
-        },
-        {
-            "name": "mask",
-            "shape": (1, seq_len, seq_len),
-            "type": "linear",
-            "activation": {"type": "identity"},
-        },
-    ]
-
-    edge_list = [
-        {"source_name": "input", "target_name": "embed", "slot": "in"},
-    ]
-
-    # Add transformer blocks
-    prev_name = "embed"
-    for i in range(num_blocks):
-        block_name = f"transformer_{i}"
-        node_list.append(
-            {
-                "name": block_name,
-                "shape": (seq_len, embed_dim),
-                "type": "transformer_block",
-                "num_heads": num_heads,
-                "ff_dim": ff_dim,
-                "internal_activation": {"type": "gelu"},
-                "rope_theta": rope_theta,
-            }
-        )
-        edge_list.append(
-            {"source_name": prev_name, "target_name": block_name, "slot": "in"}
-        )  # wire one block to the next
-        edge_list.append(
-            {"source_name": "mask", "target_name": block_name, "slot": "mask"}
-        )  # wire mask to the block
-        prev_name = block_name
-
-    # Output projection back to vocabulary
-    # Use small initialization to prevent softmax saturation from large logits
-    node_list.append(
-        {
-            "name": "output",
-            "shape": (seq_len, vocab_size),
-            "type": "linear",
-            "activation": {"type": "softmax"},
-            "energy": {"type": "cross_entropy"},
-            "weight_init": {"type": "normal", "mean": 0.0, "std": 0.02},
-        }
+    input_node = Linear(
+        shape=(seq_len, vocab_size), activation=IdentityActivation(), name="input"
     )
-    edge_list.append({"source_name": prev_name, "target_name": "output", "slot": "in"})
+    embed = Linear(
+        shape=(seq_len, embed_dim),
+        activation=IdentityActivation(),
+        weight_init=KaimingInitializer(mode="fan_out"),
+        name="embed",
+    )
+    mask_node = Linear(
+        shape=(1, seq_len, seq_len), activation=IdentityActivation(), name="mask"
+    )
 
-    # Assemble the complete model configuration
-    return {
-        "node_list": node_list,
-        "edge_list": edge_list,
-        "task_map": {"x": "input", "y": "output", "causal_mask": "mask"},
-        "graph_state_initializer": {"type": "feedforward"},
-        # "graph_state_initializer": {"type": "global", "initializer": {"type": "normal", "mean": 0.0, "std": 0.01}},
-    }
+    nodes = [input_node, embed, mask_node]
+    edges = [Edge(source=input_node, target=embed.slot("in"))]
+
+    prev_node = embed
+    for i in range(num_blocks):
+        block = TransformerBlock(
+            shape=(seq_len, embed_dim),
+            num_heads=num_heads,
+            ff_dim=ff_dim,
+            internal_activation=GeluActivation(),
+            rope_theta=rope_theta,
+            name=f"transformer_{i}",
+        )
+        nodes.append(block)
+        edges.append(Edge(source=prev_node, target=block.slot("in")))
+        edges.append(Edge(source=mask_node, target=block.slot("mask")))
+        prev_node = block
+
+    output_node = Linear(
+        shape=(seq_len, vocab_size),
+        activation=SoftmaxActivation(),
+        energy=CrossEntropyEnergy(),
+        weight_init=NormalInitializer(mean=0.0, std=0.02),
+        name="output",
+    )
+    nodes.append(output_node)
+    edges.append(Edge(source=prev_node, target=output_node.slot("in")))
+
+    structure = graph(
+        nodes=nodes,
+        edges=edges,
+        task_map=TaskMap(x=input_node, y=output_node, causal_mask=mask_node),
+        graph_state_initializer={"type": "feedforward"},
+    )
+    params = initialize_params(structure, rng_key)
+    return structure, params
 
 
 # ==============================================================================
@@ -303,7 +303,7 @@ def generate_text(
     if rng_key is None:
         rng_key = jax.random.PRNGKey(0)
 
-    seq_len = structure.nodes["input"].shape[0]
+    seq_len = structure.nodes["input"].node_info.shape[0]
     pad_char = dataset.char_to_idx.get(" ", 0)
 
     # Encode all prompts and pad to seq_len
@@ -420,7 +420,7 @@ def main():
 
     # Create model
     print("\n[2/5] Creating transformer model...")
-    config = create_transformer_config(
+    structure, params = create_transformer_model(
         vocab_size=train_dataset.vocab_size,
         seq_len=SEQ_LEN,
         embed_dim=EMBED_DIM,
@@ -428,14 +428,11 @@ def main():
         num_blocks=NUM_BLOCKS,
         ff_dim=FF_DIM,
         rope_theta=ROPE_THETA,
+        rng_key=graph_key,
     )
-
-    params, structure = create_pc_graph(config, graph_key)
 
     total_params = sum(p.size for p in jax.tree_util.tree_leaves(params))
-    print(
-        f"Model created: {len(config['node_list'])} nodes, {len(config['edge_list'])} edges"
-    )
+    print(f"Model created: {len(structure.nodes)} nodes, {len(structure.edges)} edges")
     print(f"Total parameters: {total_params:,}")
 
     # Training config for autoregressive training

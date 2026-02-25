@@ -12,7 +12,10 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from fabricpc.graph.graph_net import create_pc_graph
+from fabricpc.nodes import Linear
+from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.graph import initialize_params
+from fabricpc.core.activations import ReLUActivation, SoftmaxActivation
 from fabricpc.training.train_backprop import (
     train_backprop,
     evaluate_backprop,
@@ -51,36 +54,22 @@ def rng_key():
 
 
 @pytest.fixture
-def feedforward_graph_config():
-    """Graph config with feedforward state initializer for backprop training."""
-    return {
-        "node_list": [
-            {"name": "input", "shape": (10,), "type": "linear"},
-            {
-                "name": "hidden",
-                "shape": (20,),
-                "type": "linear",
-                "activation": {"type": "relu"},
-            },
-            {
-                "name": "output",
-                "shape": (5,),
-                "type": "linear",
-                "activation": {"type": "softmax"},
-            },
-        ],
-        "edge_list": [
-            {"source_name": "input", "target_name": "hidden", "slot": "in"},
-            {"source_name": "hidden", "target_name": "output", "slot": "in"},
-        ],
-        "task_map": {"x": "input", "y": "output"},
-        "graph_state_initializer": {"type": "feedforward"},
-    }
+def graph_with_feedforward(rng_key):
+    """Graph with feedforward state initializer for backprop training."""
+    input_node = Linear(shape=(10,), name="input")
+    hidden = Linear(shape=(20,), activation=ReLUActivation(), name="hidden")
+    output = Linear(shape=(5,), activation=SoftmaxActivation(), name="output")
 
-
-@pytest.fixture
-def graph_with_feedforward(feedforward_graph_config, rng_key):
-    params, structure = create_pc_graph(feedforward_graph_config, rng_key)
+    structure = graph(
+        nodes=[input_node, hidden, output],
+        edges=[
+            Edge(source=input_node, target=hidden.slot("in")),
+            Edge(source=hidden, target=output.slot("in")),
+        ],
+        task_map=TaskMap(x=input_node, y=output),
+        graph_state_initializer={"type": "feedforward"},
+    )
+    params = initialize_params(structure, rng_key)
     return params, structure
 
 
@@ -170,18 +159,17 @@ class TestTrainBackprop:
 
     def test_train_backprop_invalid_initializer_raises(self, rng_key):
         """Test that non-feedforward initializer raises error."""
-        config = {
-            "node_list": [
-                {"name": "input", "shape": (10,), "type": "linear"},
-                {"name": "output", "shape": (5,), "type": "linear"},
+        input_node = Linear(shape=(10,), name="input")
+        output = Linear(shape=(5,), name="output")
+
+        structure = graph(
+            nodes=[input_node, output],
+            edges=[
+                Edge(source=input_node, target=output.slot("in")),
             ],
-            "edge_list": [
-                {"source_name": "input", "target_name": "output", "slot": "in"}
-            ],
-            "task_map": {"x": "input", "y": "output"},
-            "graph_state_initializer": {"type": "global"},  # Not feedforward
-        }
-        params, structure = create_pc_graph(config, rng_key)
+            task_map=TaskMap(x=input_node, y=output),
+            graph_state_initializer={"type": "global"},  # Not feedforward
+        )
 
         with pytest.raises(ValueError, match="feedforward"):
             validate_feedforward_init(structure)
@@ -248,9 +236,22 @@ class TestComputeForwardPass:
 class TestIntegration:
     """Integration test for full training and evaluation pipeline."""
 
-    def test_train_then_evaluate(self, feedforward_graph_config, rng_key):
+    def test_train_then_evaluate(self, rng_key):
         """Test complete pipeline: train then evaluate."""
-        params, structure = create_pc_graph(feedforward_graph_config, rng_key)
+        input_node = Linear(shape=(10,), name="input")
+        hidden = Linear(shape=(20,), activation=ReLUActivation(), name="hidden")
+        output = Linear(shape=(5,), activation=SoftmaxActivation(), name="output")
+
+        structure = graph(
+            nodes=[input_node, hidden, output],
+            edges=[
+                Edge(source=input_node, target=hidden.slot("in")),
+                Edge(source=hidden, target=output.slot("in")),
+            ],
+            task_map=TaskMap(x=input_node, y=output),
+            graph_state_initializer={"type": "feedforward"},
+        )
+        params = initialize_params(structure, rng_key)
 
         train_loader = make_mock_loader(rng_key, batch_size=16, num_batches=10)
         test_loader = make_mock_loader(

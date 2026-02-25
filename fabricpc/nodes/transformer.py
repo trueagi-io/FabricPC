@@ -6,10 +6,10 @@
 import jax
 import jax.numpy as jnp
 
-from fabricpc.nodes import get_node_class
-from fabricpc.nodes.base import NodeBase, NodeParams, SlotSpec
-from fabricpc.nodes.registry import register_node
-from fabricpc.core.activations import get_activation
+from fabricpc.nodes.base import NodeBase, NodeParams, SlotSpec, _register_node_class
+from fabricpc.core.activations import IdentityActivation, GeluActivation
+from fabricpc.core.energy import GaussianEnergy
+from fabricpc.core.initializers import NormalInitializer
 from fabricpc.core.types import NodeState, NodeInfo
 from typing import Dict, Tuple, Any
 
@@ -100,7 +100,6 @@ def apply_rotary_emb(
     return x_rot
 
 
-@register_node("transformer_block")
 class TransformerBlockNode(NodeBase):
     """
     Complete Transformer Block with attention and FFN.
@@ -110,73 +109,59 @@ class TransformerBlockNode(NodeBase):
     └─────────────────────┘ └────────────────────┘
          (residual)              (residual)
 
-    This is a composite node that internally manages its substructure.
-    For hypergraph support, this could be decomposed into a subgraph.
-
     Positional Encoding:
-    Uses Rotary Position Embeddings (RoPE) by default. This generalizes better than absolute positional encodings.
+    Uses Rotary Position Embeddings (RoPE) by default.
 
-    **Example Transformer Block Config**:
-    {
-        "name": "transformer_block_1",
-        "shape": (128, 512),  # (seq_len, embed_dim)
-        "type": "transformer_block",
-        "internal_activation": {"type": "gelu"},
-        # Transformer-specific config:
-        "num_heads": 8,
-        "ff_dim": 2048,
-        "dropout_rate": 0.1,
-        "pre_norm": True,
-    }
+    Args:
+        shape: (seq_len, embed_dim) tuple
+        name: Node name
+        activation: Output activation (default: IdentityActivation)
+        energy: Energy functional (default: GaussianEnergy)
+        internal_activation: FFN internal activation (default: GeluActivation)
+        num_heads: Number of attention heads (default: 8)
+        ff_dim: FFN hidden dim (default: 4 * embed_dim)
+        dropout_rate: Dropout rate, currently unused (default: 0.0)
+        pre_norm: Use pre-norm architecture (default: True)
+        use_rope: Use Rotary Position Embeddings (default: True)
+        rope_theta: Base frequency for RoPE (default: 10000.0)
+        weight_init: InitializerBase for weights
     """
 
-    CONFIG_SCHEMA = {
-        "num_heads": {
-            "type": int,
-            "default": 8,
-            "description": "Number of attention heads",
-        },
-        "ff_dim": {
-            "type": int,
-            "default": None,  # Will be computed as 4 * embed_dim if not specified
-            "description": "Feedforward hidden dimension (defaults to 4 * embed_dim)",
-        },
-        "internal_activation": {
-            "type": dict,
-            "default": {"type": "gelu"},
-            "description": "Internal activation function for the feedforward network",
-        },
-        "dropout_rate": {
-            "type": float,
-            "default": 0.0,
-            "description": "Dropout rate (currently unused, for future implementation)",
-        },
-        "pre_norm": {
-            "type": bool,
-            "default": True,
-            "description": "Use pre-norm architecture (LayerNorm before attention/FFN)",
-        },
-        "use_rope": {
-            "type": bool,
-            "default": True,
-            "description": "Use Rotary Position Embeddings (RoPE)",
-        },
-        "rope_theta": {
-            "type": float,
-            "default": 10000.0,
-            "description": "Base frequency for RoPE",
-        },
-        "weight_init": {
-            "type": dict,
-            "default": {"type": "kaiming", "mode": "fan_out"},
-            "description": "Weight initialization config",
-        },
-    }
+    DEFAULT_ACTIVATION = IdentityActivation
+    DEFAULT_ENERGY = GaussianEnergy
+    DEFAULT_LATENT_INIT = NormalInitializer
 
-    DEFAULT_ENERGY_CONFIG = {"type": "gaussian"}
-    DEFAULT_ACTIVATION_CONFIG = {
-        "type": "identity"
-    }  # Identity at output of node; internal activations handled in "internal_activation"
+    def __init__(
+        self,
+        shape,
+        name,
+        activation=None,
+        energy=None,
+        internal_activation=None,
+        num_heads=8,
+        ff_dim=None,
+        dropout_rate=0.0,
+        pre_norm=True,
+        use_rope=True,
+        rope_theta=10000.0,
+        weight_init=None,
+        latent_init=None,
+    ):
+        super().__init__(
+            shape=shape,
+            name=name,
+            activation=activation,
+            energy=energy,
+            latent_init=latent_init,
+            internal_activation=internal_activation or GeluActivation(),
+            num_heads=num_heads,
+            ff_dim=ff_dim,
+            dropout_rate=dropout_rate,
+            pre_norm=pre_norm,
+            use_rope=use_rope,
+            rope_theta=rope_theta,
+            weight_init=weight_init,
+        )
 
     @staticmethod
     def get_slots():
@@ -187,13 +172,13 @@ class TransformerBlockNode(NodeBase):
 
     @staticmethod
     def initialize_params(
-        key: jax.Array,  # from jax.random.PRNGKey
+        key: jax.Array,
         node_shape: Tuple[int, ...],
-        input_shapes: Dict[str, Tuple[int, ...]],  # edge_key -> source shape
+        input_shapes: Dict[str, Tuple[int, ...]],
         config: Dict[str, Any],
     ) -> NodeParams:
 
-        num_heads = config["num_heads"]
+        num_heads = config.get("num_heads", 8)
         embed_dim = node_shape[-1]
         # Default ff_dim to 4 * embed_dim (standard transformer ratio)
         ff_dim = config.get("ff_dim") or (4 * embed_dim)
@@ -236,21 +221,26 @@ class TransformerBlockNode(NodeBase):
     @staticmethod
     def forward(
         params: NodeParams,
-        inputs: Dict[str, jnp.ndarray],  # EdgeInfo.key -> inputs data
-        state: NodeState,  # state object for the present node
+        inputs: Dict[str, jnp.ndarray],
+        state: NodeState,
         node_info: NodeInfo,
     ) -> tuple[jax.Array, NodeState]:
-        """
-        Forward pass for the Transformer Block.
-        """
-        node_class = get_node_class(node_info.node_type)
+        """Forward pass for the Transformer Block."""
         config = node_info.node_config
-        num_heads = config["num_heads"]
+        num_heads = config.get("num_heads", 8)
+
+        # Get internal activation from config (stored as ActivationBase instance)
+        internal_activation = config.get("internal_activation")
+        if internal_activation is not None:
+            activation_fn = lambda x: type(internal_activation).forward(
+                x, internal_activation.config
+            )
+        else:
+            activation_fn = lambda x: x
 
         # Get input (self-attention)
-        # find the input key with slotname "in", key format is "{source_name}->{target_name}:{slot_name}"
         in_edge_key = next(iter(k for k in inputs.keys() if k.endswith(":in")))
-        input_tensor = inputs[in_edge_key]  # shape: (batch_size, seq_len, embed_dim)
+        input_tensor = inputs[in_edge_key]
 
         batch_size, seq_len, embed_dim = input_tensor.shape
         assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
@@ -258,7 +248,6 @@ class TransformerBlockNode(NodeBase):
         # Find mask input key if provided
         mask_edge_key = next((k for k in inputs.keys() if k.endswith(":mask")), None)
         mask = inputs[mask_edge_key] if mask_edge_key else None
-        activation_fn, _ = get_activation(config["internal_activation"])
 
         # LayerNorm 1
         x_norm1 = TransformerBlockNode._layernorm(
@@ -279,8 +268,8 @@ class TransformerBlockNode(NodeBase):
             params.biases["b_v"],
             params.biases["b_o"],
             lambda x: x,  # Identity activation for attention output
-            use_rope=config["use_rope"],
-            rope_theta=config["rope_theta"],
+            use_rope=config.get("use_rope", True),
+            rope_theta=config.get("rope_theta", 10000.0),
         )
 
         # Residual connection 1
@@ -313,6 +302,9 @@ class TransformerBlockNode(NodeBase):
         )
 
         # Compute energy, accumulate the self-latent gradient
+        from fabricpc.nodes.base import _get_node_class_from_info
+
+        node_class = _get_node_class_from_info(node_info)
         state = node_class.energy_functional(state, node_info)
 
         total_energy = jnp.sum(state.energy)
@@ -322,11 +314,7 @@ class TransformerBlockNode(NodeBase):
     def _layernorm(
         x: jnp.ndarray, gamma: jnp.ndarray, beta: jnp.ndarray, eps: float = 1e-5
     ) -> jnp.ndarray:
-        """
-        Layer Normalization implementation.
-        Normalizes the input across the last dimension.
-        """
-
+        """Layer Normalization implementation."""
         mean = jnp.mean(x, axis=-1, keepdims=True)
         variance = jnp.var(x, axis=-1, keepdims=True)
         x_normalized = (x - mean) / jnp.sqrt(variance + eps)
@@ -336,32 +324,23 @@ class TransformerBlockNode(NodeBase):
     def _mha(
         x: jnp.ndarray,
         mask: jnp.ndarray,
-        num_heads: int,  # Number of attention heads
-        W_q: jnp.ndarray,  # Query projection
-        W_k: jnp.ndarray,  # Key projection
-        W_v: jnp.ndarray,  # Value projection
-        W_o: jnp.ndarray,  # Output projection
-        b_q: jnp.ndarray,  # Query bias
-        b_k: jnp.ndarray,  # Key bias
-        b_v: jnp.ndarray,  # Value bias
-        b_o: jnp.ndarray,  # Output bias
-        activation_fn,  # Activation function
-        use_rope: bool = True,  # Use Rotary Position Embeddings
-        rope_theta: float = 10000.0,  # Base frequency for RoPE
+        num_heads: int,
+        W_q: jnp.ndarray,
+        W_k: jnp.ndarray,
+        W_v: jnp.ndarray,
+        W_o: jnp.ndarray,
+        b_q: jnp.ndarray,
+        b_k: jnp.ndarray,
+        b_v: jnp.ndarray,
+        b_o: jnp.ndarray,
+        activation_fn,
+        use_rope: bool = True,
+        rope_theta: float = 10000.0,
     ) -> tuple[jnp.ndarray, Dict[str, jnp.ndarray]]:
         """
         Multi-head attention implementation.
-        Implements scaled dot-product multi-head attention.
-        1. Linear projections for Q, K, V
-        2. Apply RoPE to Q and K (if enabled)
-        3. Scaled dot-product attention
-        4. Concatenate heads and final linear projection
-        5. Apply activation function
-
-        Variables are named using standard transformer notation for mathematical clarity; don't change for PEP styling.
+        Variables are named using standard transformer notation for mathematical clarity.
         """
-
-        # Get input (self-attention)
         batch_size, seq_len, embed_dim = x.shape
         assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
         head_dim = embed_dim // num_heads
@@ -375,7 +354,6 @@ class TransformerBlockNode(NodeBase):
         Q = Q.reshape(batch_size, seq_len, num_heads, head_dim).transpose(0, 2, 1, 3)
         K = K.reshape(batch_size, seq_len, num_heads, head_dim).transpose(0, 2, 1, 3)
         V = V.reshape(batch_size, seq_len, num_heads, head_dim).transpose(0, 2, 1, 3)
-        # Now for multi-head: (batch, heads, seq, head_dim)
 
         # Apply Rotary Position Embeddings to Q and K
         if use_rope:
@@ -385,16 +363,14 @@ class TransformerBlockNode(NodeBase):
 
         # Scaled dot-product attention
         scale = jnp.sqrt(head_dim)
-        scores = (
-            jnp.matmul(Q, K.transpose(0, 1, 3, 2)) / scale
-        )  # (batch, heads, seq, seq)
+        scores = jnp.matmul(Q, K.transpose(0, 1, 3, 2)) / scale
 
         # Optional mask
         if mask is not None:
             scores = jnp.where(mask == 0, -1e9, scores)
 
-        attn_matrix = jax.nn.softmax(scores, axis=-1)  # (batch, heads, seq, seq)
-        attn_output = jnp.matmul(attn_matrix, V)  # (batch, heads, seq, head_dim)
+        attn_matrix = jax.nn.softmax(scores, axis=-1)
+        attn_output = jnp.matmul(attn_matrix, V)
 
         # Reshape back: (batch, seq, embed_dim)
         attn_output = attn_output.transpose(0, 2, 1, 3).reshape(
@@ -403,11 +379,8 @@ class TransformerBlockNode(NodeBase):
 
         # Output projection
         pre_activation = jnp.matmul(attn_output, W_o) + b_o
-
-        # Apply activation (typically identity for attention output)
         projection = activation_fn(pre_activation)
 
-        # Store attention weights for gradient computation
         substructure = {
             "attn_matrix": attn_matrix,
             "Q": Q,
@@ -416,3 +389,7 @@ class TransformerBlockNode(NodeBase):
         }
 
         return projection, substructure
+
+
+# Register node class for dispatch
+_register_node_class(TransformerBlockNode)

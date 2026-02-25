@@ -3,10 +3,10 @@
 Test suite for the Initializer system.
 
 Tests:
-- Built-in initializers (zeros, ones, normal, uniform, xavier, kaiming)
-- Registry registration/lookup/validation
-- Custom initializer registration
-- Config validation with defaults
+- Built-in initializers (Zeros, Ones, Normal, Uniform, Xavier, Kaiming)
+- Custom initializer creation
+- Determinism with same random key
+- Various tensor shapes
 """
 
 import os
@@ -21,13 +21,13 @@ import numpy as np
 
 from fabricpc.core.initializers import (
     InitializerBase,
-    register_initializer,
-    get_initializer_class,
-    list_initializer_types,
-    unregister_initializer,
-    validate_initializer_config,
     initialize,
-    InitializerRegistrationError,
+    ZerosInitializer,
+    OnesInitializer,
+    NormalInitializer,
+    UniformInitializer,
+    XavierInitializer,
+    KaimingInitializer,
 )
 
 jax.config.update("jax_platform_name", "cpu")
@@ -45,7 +45,7 @@ class TestBuiltinInitializers:
     def test_zeros_initializer(self, rng_key):
         """Test zeros initializer returns all zeros."""
         shape = (32, 64)
-        result = initialize(rng_key, shape, {"type": "zeros"})
+        result = initialize(rng_key, shape, ZerosInitializer())
 
         assert result.shape == shape
         assert jnp.all(result == 0.0)
@@ -53,7 +53,7 @@ class TestBuiltinInitializers:
     def test_ones_initializer(self, rng_key):
         """Test ones initializer returns all ones."""
         shape = (16, 32)
-        result = initialize(rng_key, shape, {"type": "ones"})
+        result = initialize(rng_key, shape, OnesInitializer())
 
         assert result.shape == shape
         assert jnp.all(result == 1.0)
@@ -61,26 +61,26 @@ class TestBuiltinInitializers:
     def test_normal_initializer_default(self, rng_key):
         """Test normal initializer with default config."""
         shape = (1000, 100)
-        result = initialize(rng_key, shape, {"type": "normal"})
+        result = initialize(rng_key, shape, NormalInitializer())
 
         assert result.shape == shape
         # Default mean=0.0, std=0.05
-        assert jnp.abs(jnp.mean(result)) < 0.01  # Should be close to 0
-        assert jnp.abs(jnp.std(result) - 0.05) < 0.01  # Should be close to 0.05
+        assert jnp.abs(jnp.mean(result)) < 0.01
+        assert jnp.abs(jnp.std(result) - 0.05) < 0.01
 
     def test_normal_initializer_custom(self, rng_key):
         """Test normal initializer with custom mean and std."""
         shape = (1000, 100)
-        result = initialize(rng_key, shape, {"type": "normal", "mean": 5.0, "std": 2.0})
+        result = initialize(rng_key, shape, NormalInitializer(mean=5.0, std=2.0))
 
         assert result.shape == shape
-        assert jnp.abs(jnp.mean(result) - 5.0) < 0.1  # Should be close to 5
-        assert jnp.abs(jnp.std(result) - 2.0) < 0.1  # Should be close to 2
+        assert jnp.abs(jnp.mean(result) - 5.0) < 0.1
+        assert jnp.abs(jnp.std(result) - 2.0) < 0.1
 
     def test_uniform_initializer_default(self, rng_key):
         """Test uniform initializer with default config."""
         shape = (1000, 100)
-        result = initialize(rng_key, shape, {"type": "uniform"})
+        result = initialize(rng_key, shape, UniformInitializer())
 
         assert result.shape == shape
         # Default min=-0.1, max=0.1
@@ -91,36 +91,31 @@ class TestBuiltinInitializers:
         """Test uniform initializer with custom min and max."""
         shape = (1000, 100)
         result = initialize(
-            rng_key, shape, {"type": "uniform", "min": -1.0, "max": 1.0}
+            rng_key, shape, UniformInitializer(min_val=-1.0, max_val=1.0)
         )
 
         assert result.shape == shape
         assert jnp.all(result >= -1.0)
         assert jnp.all(result <= 1.0)
-        # Mean should be close to 0 for uniform(-1, 1)
         assert jnp.abs(jnp.mean(result)) < 0.1
 
     def test_xavier_initializer_normal(self, rng_key):
         """Test Xavier initializer with normal distribution."""
         shape = (256, 128)
-        result = initialize(
-            rng_key, shape, {"type": "xavier", "distribution": "normal"}
-        )
+        result = initialize(rng_key, shape, XavierInitializer(distribution="normal"))
 
         assert result.shape == shape
-        # Xavier std = sqrt(2 / (fan_in + fan_out)) = sqrt(2 / 384) ≈ 0.072
+        # Xavier std = sqrt(2 / (fan_in + fan_out))
         expected_std = jnp.sqrt(2.0 / (256 + 128))
         assert jnp.abs(jnp.std(result) - expected_std) < 0.01
 
     def test_xavier_initializer_uniform(self, rng_key):
         """Test Xavier initializer with uniform distribution."""
         shape = (256, 128)
-        result = initialize(
-            rng_key, shape, {"type": "xavier", "distribution": "uniform"}
-        )
+        result = initialize(rng_key, shape, XavierInitializer(distribution="uniform"))
 
         assert result.shape == shape
-        # Xavier limit = sqrt(6 / (fan_in + fan_out)) = sqrt(6 / 384) ≈ 0.125
+        # Xavier limit = sqrt(6 / (fan_in + fan_out))
         expected_limit = jnp.sqrt(6.0 / (256 + 128))
         assert jnp.all(result >= -expected_limit - 0.01)
         assert jnp.all(result <= expected_limit + 0.01)
@@ -131,16 +126,13 @@ class TestBuiltinInitializers:
         result = initialize(
             rng_key,
             shape,
-            {
-                "type": "kaiming",
-                "mode": "fan_in",
-                "nonlinearity": "relu",
-                "distribution": "normal",
-            },
+            KaimingInitializer(
+                mode="fan_in", nonlinearity="relu", distribution="normal"
+            ),
         )
 
         assert result.shape == shape
-        # Kaiming std = sqrt(2) / sqrt(fan_in) = sqrt(2) / sqrt(512) ≈ 0.0625
+        # Kaiming std = sqrt(2) / sqrt(fan_in)
         expected_std = jnp.sqrt(2.0) / jnp.sqrt(512)
         assert jnp.abs(jnp.std(result) - expected_std) < 0.01
 
@@ -150,33 +142,29 @@ class TestBuiltinInitializers:
         result = initialize(
             rng_key,
             shape,
-            {
-                "type": "kaiming",
-                "mode": "fan_out",
-                "nonlinearity": "relu",
-                "distribution": "normal",
-            },
+            KaimingInitializer(
+                mode="fan_out", nonlinearity="relu", distribution="normal"
+            ),
         )
 
         assert result.shape == shape
-        # Kaiming std = sqrt(2) / sqrt(fan_out) = sqrt(2) / sqrt(256)
+        # Kaiming std = sqrt(2) / sqrt(fan_out)
         expected_std = jnp.sqrt(2.0) / jnp.sqrt(256)
         assert jnp.abs(jnp.std(result) - expected_std) < 0.01
 
     def test_kaiming_initializer_leaky_relu(self, rng_key):
         """Test Kaiming initializer with leaky ReLU."""
         shape = (512, 256)
-        a = 0.2  # Leaky ReLU slope
+        a = 0.2
         result = initialize(
             rng_key,
             shape,
-            {
-                "type": "kaiming",
-                "mode": "fan_in",
-                "nonlinearity": "leaky_relu",
-                "distribution": "normal",
-                "a": a,
-            },
+            KaimingInitializer(
+                mode="fan_in",
+                nonlinearity="leaky_relu",
+                distribution="normal",
+                a=a,
+            ),
         )
 
         assert result.shape == shape
@@ -186,136 +174,57 @@ class TestBuiltinInitializers:
         assert jnp.abs(jnp.std(result) - expected_std) < 0.01
 
 
-class TestInitializerRegistry:
-    """Test suite for initializer registry operations."""
+class TestInitializerConfig:
+    """Test that initializer instances store config correctly."""
 
-    def test_list_initializer_types(self):
-        """Test listing registered initializer types."""
-        types = list_initializer_types()
+    def test_normal_config(self):
+        """Test NormalInitializer stores config."""
+        init = NormalInitializer(mean=1.0, std=0.5)
+        assert init.config["mean"] == 1.0
+        assert init.config["std"] == 0.5
 
-        # Should include all built-in types
-        assert "zeros" in types
-        assert "ones" in types
-        assert "normal" in types
-        assert "uniform" in types
-        assert "xavier" in types
-        assert "kaiming" in types
+    def test_uniform_config(self):
+        """Test UniformInitializer stores config."""
+        init = UniformInitializer(min_val=-2.0, max_val=2.0)
+        assert init.config["min"] == -2.0
+        assert init.config["max"] == 2.0
 
-    def test_get_initializer_class(self):
-        """Test getting initializer class by type."""
-        normal_class = get_initializer_class("normal")
+    def test_xavier_config(self):
+        """Test XavierInitializer stores config."""
+        init = XavierInitializer(distribution="normal")
+        assert init.config["distribution"] == "normal"
 
-        assert normal_class is not None
-        assert hasattr(normal_class, "initialize")
-        assert hasattr(normal_class, "CONFIG_SCHEMA")
+    def test_kaiming_config(self):
+        """Test KaimingInitializer stores config."""
+        init = KaimingInitializer(mode="fan_out", nonlinearity="relu")
+        assert init.config["mode"] == "fan_out"
+        assert init.config["nonlinearity"] == "relu"
 
-    def test_get_initializer_class_case_insensitive(self):
-        """Test that type lookup is case-insensitive."""
-        assert get_initializer_class("Normal") == get_initializer_class("normal")
-        assert get_initializer_class("XAVIER") == get_initializer_class("xavier")
 
-    def test_get_unknown_type_raises(self):
-        """Test that unknown type raises ValueError."""
-        with pytest.raises(ValueError, match="Unknown"):
-            get_initializer_class("nonexistent_initializer")
+class TestCustomInitializer:
+    """Test creating custom initializers."""
 
-    def test_register_custom_initializer(self, rng_key):
-        """Test registering a custom initializer."""
+    def test_custom_initializer_subclass(self, rng_key):
+        """Test creating and using a custom initializer subclass."""
 
-        @register_initializer("test_custom")
-        class TestCustomInitializer(InitializerBase):
-            CONFIG_SCHEMA = {"multiplier": {"type": (int, float), "default": 2.0}}
+        class ConstantInitializer(InitializerBase):
+            def __init__(self, value=1.0):
+                super().__init__(value=value)
 
             @staticmethod
             def initialize(key, shape, config=None):
-                multiplier = config.get("multiplier", 2.0) if config else 2.0
-                return multiplier * jnp.ones(shape)
+                value = config.get("value", 1.0) if config else 1.0
+                return jnp.full(shape, value)
 
-        try:
-            # Verify registration
-            assert "test_custom" in list_initializer_types()
+        # Use the custom initializer
+        init = ConstantInitializer(value=42.0)
+        result = initialize(rng_key, (4, 4), init)
+        assert jnp.all(result == 42.0)
 
-            # Test using the initializer
-            result = initialize(rng_key, (4, 4), {"type": "test_custom"})
-            assert jnp.all(result == 2.0)
-
-            result_custom = initialize(
-                rng_key, (4, 4), {"type": "test_custom", "multiplier": 5.0}
-            )
-            assert jnp.all(result_custom == 5.0)
-        finally:
-            # Cleanup
-            unregister_initializer("test_custom")
-
-    def test_duplicate_registration_raises(self):
-        """Test that duplicate registration with different class raises error."""
-
-        @register_initializer("test_dup")
-        class FirstInit(InitializerBase):
-            CONFIG_SCHEMA = {}
-
-            @staticmethod
-            def initialize(key, shape, config=None):
-                return jnp.zeros(shape)
-
-        try:
-            with pytest.raises(
-                InitializerRegistrationError, match="already registered"
-            ):
-
-                @register_initializer("test_dup")
-                class SecondInit(InitializerBase):
-                    CONFIG_SCHEMA = {}
-
-                    @staticmethod
-                    def initialize(key, shape, config=None):
-                        return jnp.ones(shape)
-
-        finally:
-            unregister_initializer("test_dup")
-
-    def test_idempotent_registration_same_class(self):
-        """Test that registering the same class object twice is idempotent."""
-
-        class IdempotentInit(InitializerBase):
-            CONFIG_SCHEMA = {}
-
-            @staticmethod
-            def initialize(key, shape, config=None):
-                return jnp.zeros(shape)
-
-        try:
-            # First registration
-            register_initializer("test_idem")(IdempotentInit)
-            assert "test_idem" in list_initializer_types()
-
-            # Second registration with same class object should be idempotent
-            register_initializer("test_idem")(IdempotentInit)
-            assert "test_idem" in list_initializer_types()
-        finally:
-            unregister_initializer("test_idem")
-
-
-class TestConfigValidation:
-    """Test suite for initializer config validation."""
-
-    def test_validate_config_applies_defaults(self):
-        """Test that validation applies default values."""
-        normal_class = get_initializer_class("normal")
-        config = {"type": "normal"}
-        validated = validate_initializer_config(normal_class, config)
-
-        assert validated["mean"] == 0.0
-        assert validated["std"] == 0.05
-
-    def test_validate_config_preserves_custom_values(self):
-        """Test that validation preserves custom values."""
-        normal_class = get_initializer_class("normal")
-        config = {"type": "normal", "mean": 1.0, "std": 0.5}
-        validated = validate_initializer_config(normal_class, config)
-
-        assert validated["mean"] == 1.0
-        assert validated["std"] == 0.5
+        # Different value
+        init2 = ConstantInitializer(value=-1.0)
+        result2 = initialize(rng_key, (3, 5), init2)
+        assert jnp.all(result2 == -1.0)
 
 
 class TestInitializerDeterminism:
@@ -324,31 +233,31 @@ class TestInitializerDeterminism:
     def test_normal_deterministic(self, rng_key):
         """Test normal initializer is deterministic."""
         shape = (64, 64)
-        config = {"type": "normal"}
+        init = NormalInitializer()
 
-        result1 = initialize(rng_key, shape, config)
-        result2 = initialize(rng_key, shape, config)
+        result1 = initialize(rng_key, shape, init)
+        result2 = initialize(rng_key, shape, init)
 
         assert jnp.allclose(result1, result2)
 
     def test_different_keys_different_results(self, rng_key):
         """Test different keys produce different results."""
         shape = (64, 64)
-        config = {"type": "normal"}
+        init = NormalInitializer()
 
         key1, key2 = jax.random.split(rng_key)
-        result1 = initialize(key1, shape, config)
-        result2 = initialize(key2, shape, config)
+        result1 = initialize(key1, shape, init)
+        result2 = initialize(key2, shape, init)
 
         assert not jnp.allclose(result1, result2)
 
     def test_xavier_deterministic(self, rng_key):
         """Test Xavier initializer is deterministic."""
         shape = (128, 64)
-        config = {"type": "xavier"}
+        init = XavierInitializer()
 
-        result1 = initialize(rng_key, shape, config)
-        result2 = initialize(rng_key, shape, config)
+        result1 = initialize(rng_key, shape, init)
+        result2 = initialize(rng_key, shape, init)
 
         assert jnp.allclose(result1, result2)
 
@@ -358,42 +267,20 @@ class TestInitializerShapes:
 
     def test_1d_shape(self, rng_key):
         """Test initializer with 1D shape."""
-        result = initialize(rng_key, (128,), {"type": "normal"})
+        result = initialize(rng_key, (128,), NormalInitializer())
         assert result.shape == (128,)
 
     def test_2d_shape(self, rng_key):
         """Test initializer with 2D shape."""
-        result = initialize(rng_key, (64, 128), {"type": "xavier"})
+        result = initialize(rng_key, (64, 128), XavierInitializer())
         assert result.shape == (64, 128)
 
     def test_3d_shape(self, rng_key):
         """Test initializer with 3D shape."""
-        result = initialize(rng_key, (32, 28, 28), {"type": "uniform"})
+        result = initialize(rng_key, (32, 28, 28), UniformInitializer())
         assert result.shape == (32, 28, 28)
 
     def test_4d_shape(self, rng_key):
         """Test initializer with 4D shape (conv kernel)."""
-        result = initialize(rng_key, (3, 3, 32, 64), {"type": "kaiming"})
+        result = initialize(rng_key, (3, 3, 32, 64), KaimingInitializer())
         assert result.shape == (3, 3, 32, 64)
-
-
-class TestInterfaceValidation:
-    """Test that registration validates the initializer interface."""
-
-    def test_missing_config_schema_raises(self):
-        """Test that missing CONFIG_SCHEMA raises error."""
-        with pytest.raises(InitializerRegistrationError, match="CONFIG_SCHEMA"):
-
-            @register_initializer("test_no_schema")
-            class NoSchemaInit(InitializerBase):
-                @staticmethod
-                def initialize(key, shape, config=None):
-                    return jnp.zeros(shape)
-
-    def test_missing_initialize_raises(self):
-        """Test that missing initialize method raises error."""
-        with pytest.raises(InitializerRegistrationError, match="initialize"):
-
-            @register_initializer("test_no_init")
-            class NoInitMethod(InitializerBase):
-                CONFIG_SCHEMA = {}

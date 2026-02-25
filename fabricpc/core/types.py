@@ -36,8 +36,11 @@ class NodeInfo:
 
     name: str
     shape: Tuple[int, ...]  # Output shape excluding batch dimension
-    node_type: str  # "linear", "transformer", etc.
-    node_config: Dict[str, Any]  # Includes "activation" and "energy" sub-configs
+    node_type: str  # "linear", "transformer", etc. (kept for debugging/display)
+    node_config: Dict[str, Any]  # Extra config (use_bias, flatten_input, etc.)
+    activation: Any  # ActivationBase instance
+    energy: Any  # EnergyFunctional instance
+    latent_init: Any  # InitializerBase instance or None
     slots: Dict[str, SlotInfo]  # {"in": SlotInfo, ...}
     in_degree: int  # Number of incoming edges
     out_degree: int  # Number of outgoing edges
@@ -186,113 +189,33 @@ class GraphStructure(NamedTuple):
     This structure is immutable and marked as static during JIT compilation.
 
     Attributes:
-        nodes: Dictionary mapping node names to NodeInfo
+        nodes: Dictionary mapping node names to NodeBase instances (with node_info attribute)
         edges: Dictionary mapping edge keys to EdgeInfo
         task_map: Dictionary mapping task names to node names
         node_order: Topological order for forward pass
         config: Graph configuration
     """
 
-    nodes: Dict[str, NodeInfo]
+    nodes: Dict[str, Any]  # Dict[str, NodeBase] - node instances with node_info
     edges: Dict[str, EdgeInfo]
     task_map: Dict[str, str]
     node_order: Tuple[str, ...]  # Topological sort for inference
     config: Dict[str, Any]  # Graph configuration
-
-    # CONFIG_SCHEMA defined below class
 
     def __repr__(self) -> str:
         n_nodes = len(self.nodes)
         n_edges = len(self.edges)
         return f"GraphStructure(nodes={n_nodes}, edges={n_edges})"
 
-    @classmethod
-    def from_config(cls, config: dict) -> "GraphStructure":
-        """
-        Construct a GraphStructure from configuration dictionary.
-
-        Args:
-            config: Configuration dictionary with node_list, edge_list, task_map
-
-        Returns:
-            Immutable GraphStructure with validated components
-
-        Raises:
-            ValueError: If graph is misspecified
-            ConfigValidationError: If config validation fails
-        """
-        # Lazy imports to avoid circular dependencies
-        from fabricpc.core.config import validate_config, ConfigValidationError
-        from fabricpc.nodes import get_node_class, validate_node_config, NodeBase
-
-        # 1. Validate graph-level config
-        validated_graph = validate_config(cls.CONFIG_SCHEMA, config, context="graph")
-
-        node_list = validated_graph["node_list"]
-        edge_list = validated_graph["edge_list"]
-        task_map = validated_graph["task_map"]
-
-        # 2. Build edges - delegate to EdgeInfo.from_config()
-        edges: Dict[str, EdgeInfo] = {}
-        for edge_config in edge_list:
-            edge = EdgeInfo.from_config(edge_config)
-            if edge.key in edges:
-                raise ConfigValidationError(f"duplicate edge: {edge.key}")
-            edges[edge.key] = edge
-
-        # 3. Build nodes - delegate to node class from_config()
-        nodes: Dict[str, NodeInfo] = {}
-        for node_config in node_list:
-            # Validate base requirements (name, shape, type)
-            validated_base = validate_node_config(NodeBase, node_config)
-            name = validated_base["name"]
-            node_type = validated_base["type"].lower()
-
-            # Validate unique node names
-            if name in nodes:
-                raise ValueError(f"duplicate node '{name}', names must be unique")
-
-            # Find edges for this node
-            in_edges_dict = {k: e for k, e in edges.items() if e.target == name}
-            out_edges_dict = {k: e for k, e in edges.items() if e.source == name}
-
-            # Delegate node construction to node class
-            node_class = get_node_class(node_type)
-            nodes[name] = node_class.from_config(
-                node_config, in_edges_dict, out_edges_dict
-            )
-
-        # 4. Validate edge endpoints exist
-        for edge_key, edge_info in edges.items():
-            if edge_info.source not in nodes:
-                raise ValueError(
-                    f"edge source node '{edge_info.source}' does not exist"
-                )
-            if edge_info.target not in nodes:
-                raise ValueError(
-                    f"edge target node '{edge_info.target}' does not exist"
-                )
-
-        # 5. Compute topological order
-        node_order = cls._topological_sort(nodes, edges)
-
-        return cls(
-            nodes=nodes,
-            edges=edges,
-            task_map=task_map,
-            node_order=node_order,
-            config=validated_graph,
-        )
-
     @staticmethod
     def _topological_sort(
-        nodes: Dict[str, "NodeInfo"], edges: Dict[str, "EdgeInfo"]
+        nodes: Dict[str, Any], edges: Dict[str, "EdgeInfo"]
     ) -> Tuple[str, ...]:
         """
         Compute topological ordering of nodes for feedforward traversal.
 
         Args:
-            nodes: Dictionary of node information
+            nodes: Dictionary of NodeBase instances (access in_degree/out_edges via node.node_info)
             edges: Dictionary of edge information
 
         Returns:
@@ -301,8 +224,8 @@ class GraphStructure(NamedTuple):
         Note:
             If the graph contains cycles, some nodes may be omitted from the order.
         """
-        # Count in-degrees
-        in_degree = {name: info.in_degree for name, info in nodes.items()}
+        # Count in-degrees from node.node_info
+        in_degree = {name: node.node_info.in_degree for name, node in nodes.items()}
 
         # Queue of nodes, begin with nodes having no incoming edges
         queue = [name for name, deg in in_degree.items() if deg == 0]
@@ -313,8 +236,7 @@ class GraphStructure(NamedTuple):
             result.append(node_name)
 
             # Reduce in-degree of neighbors
-            node_info = nodes[node_name]
-            for out_edge_key in node_info.out_edges:
+            for out_edge_key in nodes[node_name].node_info.out_edges:
                 edge_info = edges[out_edge_key]
                 target_name = edge_info.target
                 in_degree[target_name] -= 1
@@ -327,32 +249,6 @@ class GraphStructure(NamedTuple):
             print("Warning: Graph contains cycles, using partial topological order")
 
         return tuple(result)
-
-
-# Config schema for graph configuration (validated during graph construction)
-# Node and edge configs are validated by their respective class CONFIG_SCHEMAs
-GraphStructure.CONFIG_SCHEMA = {
-    "node_list": {
-        "type": list,
-        "required": True,
-        "description": "List of node configurations",
-    },
-    "edge_list": {
-        "type": list,
-        "required": True,
-        "description": "List of edge configurations",
-    },
-    "task_map": {
-        "type": dict,
-        "required": True,
-        "description": "Mapping of task names to node names",
-    },
-    "graph_state_initializer": {
-        "type": dict,
-        "default": {"type": "feedforward"},
-        "description": "Graph-level latent state initialization configuration",
-    },
-}
 
 
 # Register as pytrees for JAX transformations

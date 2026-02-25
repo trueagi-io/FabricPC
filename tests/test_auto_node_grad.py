@@ -15,41 +15,28 @@ import jax
 import jax.numpy as jnp
 
 from fabricpc.core.types import NodeState, NodeParams, NodeInfo
-from fabricpc.graph.graph_net import create_pc_graph
-from fabricpc.graph.state_initializer import initialize_graph_state
 from fabricpc.core.inference import run_inference, gather_inputs
 from fabricpc.nodes import (
-    get_node_class,
     LinearNode,
+    Linear,
     LinearExplicitGrad,
-    validate_node_config,
+    _get_node_class_from_info,
 )
+from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.graph import initialize_params
+from fabricpc.core.activations import (
+    IdentityActivation,
+    ReLUActivation,
+    TanhActivation,
+    SigmoidActivation,
+)
+from fabricpc.core.energy import GaussianEnergy
+from fabricpc.core.initializers import NormalInitializer
+from fabricpc.graph.state_initializer import initialize_graph_state
 
 jax.config.update(
     "jax_platform_name", "cpu"
 )  # using cuda causes larger numerical differences because of TF32 precision
-
-
-def make_node_config(node_type: str, activation: str) -> dict:
-    """
-    Create a properly validated node config with all defaults from the schema.
-
-    Uses validate_node_config to ensure all defaults (e.g., flatten_input, use_bias)
-    are populated from the node class's CONFIG_SCHEMA. Also resolves energy and
-    activation configs using the node class's default resolvers.
-    """
-    node_class = get_node_class(node_type)
-    raw_config = {
-        "name": "test_node",
-        "shape": (1,),  # placeholder, will be overridden
-        "type": node_type,
-        "activation": {"type": activation},
-    }
-    validated_config = validate_node_config(node_class, raw_config)
-    # Resolve energy and activation configs (normally done by from_config)
-    validated_config["energy"] = node_class._resolve_energy_config(raw_config)
-    validated_config["activation"] = node_class._resolve_activation_config(raw_config)
-    return validated_config
 
 
 @pytest.fixture
@@ -64,35 +51,22 @@ def grad_tolerance():
     return 1e-5
 
 
-def create_config(node_type: str):
-    """Create a small network config with specified node type."""
-    return {
-        "node_list": [
-            {
-                "name": "input",
-                "shape": (8,),
-                "type": node_type,
-                "activation": {"type": "identity"},
-            },
-            {
-                "name": "hidden",
-                "shape": (12,),
-                "type": node_type,
-                "activation": {"type": "tanh"},
-            },
-            {
-                "name": "output",
-                "shape": (4,),
-                "type": node_type,
-                "activation": {"type": "sigmoid"},
-            },
+def create_graph(node_class, rng_key):
+    """Create a small network using specified node class."""
+    input_node = node_class(shape=(8,), name="input")
+    hidden = node_class(shape=(12,), activation=TanhActivation(), name="hidden")
+    output_node = node_class(shape=(4,), activation=SigmoidActivation(), name="output")
+
+    structure = graph(
+        nodes=[input_node, hidden, output_node],
+        edges=[
+            Edge(source=input_node, target=hidden.slot("in")),
+            Edge(source=hidden, target=output_node.slot("in")),
         ],
-        "edge_list": [
-            {"source_name": "input", "target_name": "hidden", "slot": "in"},
-            {"source_name": "hidden", "target_name": "output", "slot": "in"},
-        ],
-        "task_map": {"x": "input", "y": "output"},
-    }
+        task_map=TaskMap(x=input_node, y=output_node),
+    )
+    params = initialize_params(structure, rng_key)
+    return params, structure
 
 
 class TestLinearAutoGradNode:
@@ -117,26 +91,40 @@ class TestLinearAutoGradNode:
         )
         inputs = {edge_key: jax.random.normal(rngkey_inputs, (batch_size, input_dim))}
 
-        # Create validated node_config with all defaults from schema
-        validated_config = make_node_config("linear", activation)
+        # Map activation strings to instances
+        activation_map = {
+            "identity": IdentityActivation(),
+            "relu": ReLUActivation(),
+            "tanh": TanhActivation(),
+            "sigmoid": SigmoidActivation(),
+        }
+        activation_inst = activation_map[activation]
+
+        # Create NodeInfo for LinearNode
         node_info = NodeInfo(
             name="dst",
             shape=(output_dim,),
-            node_type="linear",
-            node_config=validated_config,
+            node_type="LinearNode",
+            node_config={"use_bias": True, "flatten_input": False},
+            activation=activation_inst,
+            energy=GaussianEnergy(),
+            latent_init=NormalInitializer(),
             slots={},
             in_degree=1,
             out_degree=0,
             in_edges=(edge_key,),
             out_edges=(),
         )
-        # Override node_type for autograd version
-        validated_config_explicit = make_node_config("linear_explicit_grad", activation)
+
+        # Create NodeInfo for LinearExplicitGrad
         node_info_explicit = NodeInfo(
             name="dst",
             shape=(output_dim,),
-            node_type="linear_explicit_grad",
-            node_config=validated_config_explicit,
+            node_type="LinearExplicitGrad",
+            node_config={"use_bias": True, "flatten_input": False},
+            activation=activation_inst,
+            energy=GaussianEnergy(),
+            latent_init=NormalInitializer(),
             slots={},
             in_degree=1,
             out_degree=0,
@@ -200,26 +188,40 @@ class TestLinearAutoGradNode:
         )
         inputs = {edge_key: jax.random.normal(rngkey_inputs, (batch_size, input_dim))}
 
-        # Create validated node_config with all defaults from schema
-        validated_config = make_node_config("linear", activation)
+        # Map activation strings to instances
+        activation_map = {
+            "identity": IdentityActivation(),
+            "relu": ReLUActivation(),
+            "tanh": TanhActivation(),
+            "sigmoid": SigmoidActivation(),
+        }
+        activation_inst = activation_map[activation]
+
+        # Create NodeInfo for LinearNode
         node_info = NodeInfo(
             name="dst",
             shape=(output_dim,),
-            node_type="linear",
-            node_config=validated_config,
+            node_type="LinearNode",
+            node_config={"use_bias": True, "flatten_input": False},
+            activation=activation_inst,
+            energy=GaussianEnergy(),
+            latent_init=NormalInitializer(),
             slots={},
             in_degree=1,
             out_degree=0,
             in_edges=(edge_key,),
             out_edges=(),
         )
-        # Override node_type for autograd version
-        validated_config_explicit = make_node_config("linear_explicit_grad", activation)
+
+        # Create NodeInfo for LinearExplicitGrad
         node_info_explicit = NodeInfo(
             name="dst",
             shape=(output_dim,),
-            node_type="linear_explicit_grad",
-            node_config=validated_config_explicit,
+            node_type="LinearExplicitGrad",
+            node_config={"use_bias": True, "flatten_input": False},
+            activation=activation_inst,
+            energy=GaussianEnergy(),
+            latent_init=NormalInitializer(),
             slots={},
             in_degree=1,
             out_degree=0,
@@ -272,12 +274,8 @@ class TestLinearAutoGradNode:
         batch_size = 8
 
         # Create two identical networks with different node types
-        config_linear = create_config("linear")
-        config_autograd = create_config("linear_explicit_grad")
-
-        # Use same key for identical initialization
-        params_linear, structure_linear = create_pc_graph(config_linear, rng_key)
-        params_autograd, structure_autograd = create_pc_graph(config_autograd, rng_key)
+        params_linear, structure_linear = create_graph(Linear, rng_key)
+        params_autograd, structure_autograd = create_graph(LinearExplicitGrad, rng_key)
 
         # Verify params are identical
         for node_name in params_linear.nodes:
@@ -330,11 +328,23 @@ class TestLinearAutoGradNode:
 
         # Compare gradients for each non-input node using forward_inference
         for node_name in ["hidden", "output"]:
-            node_info = structure_linear.nodes[node_name]
-            # Override node_type for autograd version
-            info_fields = node_info.__dict__.copy()
+            node = structure_linear.nodes[node_name]
+            node_info = node.node_info
+
+            # Create NodeInfo for autograd version with same config
             node_info_explicit = NodeInfo(
-                **{**info_fields, "node_type": "linear_explicit_grad"}
+                name=node_info.name,
+                shape=node_info.shape,
+                node_type="LinearExplicitGrad",
+                node_config=node_info.node_config,
+                activation=node_info.activation,
+                energy=node_info.energy,
+                latent_init=node_info.latent_init,
+                slots=node_info.slots,
+                in_degree=node_info.in_degree,
+                out_degree=node_info.out_degree,
+                in_edges=node_info.in_edges,
+                out_edges=node_info.out_edges,
             )
 
             # Gather inputs for gradient computation
@@ -370,17 +380,30 @@ class TestLinearAutoGradNodeRegistration:
     """Test that LinearExplicitGrad is properly registered."""
 
     def test_node_type_registered(self):
-        """Test that linear_explicit_grad node type is registered."""
-        node_class = get_node_class("linear_explicit_grad")
+        """Test that LinearExplicitGrad node type is registered."""
+        # Create a NodeInfo with node_type="LinearExplicitGrad"
+        node_info = NodeInfo(
+            name="test",
+            shape=(4,),
+            node_type="LinearExplicitGrad",
+            node_config={"use_bias": True, "flatten_input": False},
+            activation=TanhActivation(),
+            energy=GaussianEnergy(),
+            latent_init=NormalInitializer(),
+            slots={},
+            in_degree=0,
+            out_degree=0,
+            in_edges=(),
+            out_edges=(),
+        )
+        node_class = _get_node_class_from_info(node_info)
         assert node_class is LinearExplicitGrad
 
     def test_network_creation_with_autograd_nodes(self, rng_key):
-        """Test that a network can be created using linear_explicit_grad nodes."""
-        config = create_config("linear_explicit_grad")
-        params, structure = create_pc_graph(config, rng_key)
+        """Test that a network can be created using LinearExplicitGrad nodes."""
+        params, structure = create_graph(LinearExplicitGrad, rng_key)
 
         assert len(structure.nodes) == 3
-        assert all(
-            info.node_type == "linear_explicit_grad"
-            for info in structure.nodes.values()
-        )
+        for node_name in structure.nodes:
+            node = structure.nodes[node_name]
+            assert node.node_info.node_type == "LinearExplicitGrad"

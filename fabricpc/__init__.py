@@ -12,9 +12,26 @@ Key Features:
 - XLA optimization for maximum performance
 
 Example:
-    >>> from fabricpc import create_pc_graph, train_pcn, evaluate_pcn
+    >>> from fabricpc.nodes import Linear
+    >>> from fabricpc.builder import Edge, TaskMap, graph
+    >>> from fabricpc.graph import initialize_params
+    >>> from fabricpc.training import train_pcn, evaluate_pcn
     >>>
-    >>> params, structure = create_pc_graph(config, rng_key)
+    >>> # Define nodes
+    >>> input_node = Linear(shape=(784,), name="input")
+    >>> hidden = Linear(shape=(128,), name="hidden")
+    >>> output = Linear(shape=(10,), name="output")
+    >>>
+    >>> # Build graph
+    >>> structure = graph(
+    ...     nodes=[input_node, hidden, output],
+    ...     edges=[
+    ...         Edge(source=input_node, target=hidden.slot("in")),
+    ...         Edge(source=hidden, target=output.slot("in")),
+    ...     ],
+    ...     task_map=TaskMap(x=input_node, y=output),
+    ... )
+    >>> params = initialize_params(structure, rng_key)
     >>> trained_params, history, _ = train_pcn(params, structure, train_loader, config)
     >>> metrics = evaluate_pcn(trained_params, structure, test_loader, config)
 """
@@ -24,10 +41,10 @@ from importlib.metadata import version
 __version__ = version("fabricpc")
 
 # Submodules (for advanced use)
-from fabricpc import core, graph, nodes, training, utils
+from fabricpc import core, graph, nodes, training, utils, builder
 
 # Core API - what most users need
-from fabricpc.graph import create_pc_graph
+from fabricpc.graph import initialize_params
 from fabricpc.training import train_pcn, evaluate_pcn
 
 # Types - for type hints
@@ -35,7 +52,7 @@ from fabricpc.core.types import GraphParams, GraphState, GraphStructure
 
 __all__ = [
     # Core API (common use)
-    "create_pc_graph",
+    "initialize_params",
     "train_pcn",
     "evaluate_pcn",
     # Types (for type hints)
@@ -46,6 +63,7 @@ __all__ = [
     "core",
     "graph",
     "nodes",
+    "builder",
     "training",
     "utils",
 ]

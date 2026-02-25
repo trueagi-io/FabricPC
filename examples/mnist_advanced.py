@@ -3,12 +3,13 @@ ADVANCED Predictive Coding Network Example
 =================================================
 
 This example demonstrates:
-1. Explicit network config dictionary (no defaults)
+1. Object-oriented network construction with direct node instantiation
 2. Custom training configurations
 3. Progress monitoring and checkpointing
 4. Hyperparameter exploration
 
 Compared to mnist_demo.py, this shows a customizable training loop
+using the new object-oriented API with node objects.
 """
 
 import os  # set environment variables before importing JAX
@@ -23,7 +24,12 @@ import jax
 import jax.numpy as jnp
 import time
 
-from fabricpc.graph import create_pc_graph
+from fabricpc.nodes import Linear
+from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.graph import initialize_params
+from fabricpc.core.activations import IdentityActivation, SigmoidActivation
+from fabricpc.core.energy import GaussianEnergy
+from fabricpc.core.initializers import NormalInitializer
 from fabricpc.training import train_step, create_optimizer, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
 
@@ -35,72 +41,61 @@ master_rng_key = jax.random.PRNGKey(42)
 graph_key, train_key, eval_key = jax.random.split(master_rng_key, 3)
 
 # ==============================================================================
-# ADVANCED NETWORK CONFIGURATION - FULLY EXPLICIT (NO DEFAULTS)
+# ADVANCED NETWORK CONFIGURATION - OBJECT-ORIENTED API
 # ==============================================================================
-# fmt: off
 
-# Detailed node configuration template
-template_node = {
-    "name": None,   # To be filled -> str
-    "shape": None,  # To be filled -> tuple of ints for tensor shape. The batch as first dimension is implicit. Specify only dimensions following batch.
-    "type": "linear",
-    "activation": {"type": "sigmoid"},
-    "energy": {"type": "gaussian", "precision": 1.0},
-    "weight_init": {"type": "normal", "mean": 0.0, "std": 0.05},
-    "use_bias": True,
-    "flatten_input": False,
-    "latent_init": None,  # Use graph-level default}
-}
+# Create nodes with explicit configuration
+pixels = Linear(shape=(784,), activation=IdentityActivation(), name="pixels")
+h1 = Linear(
+    shape=(256,),
+    activation=SigmoidActivation(),
+    energy=GaussianEnergy(precision=1.0),
+    weight_init=NormalInitializer(mean=0.0, std=0.05),
+    name="h1",
+)
+h2 = Linear(
+    shape=(128,),
+    activation=SigmoidActivation(),
+    energy=GaussianEnergy(precision=1.0),
+    weight_init=NormalInitializer(mean=0.0, std=0.05),
+    name="h2",
+)
+h3 = Linear(
+    shape=(64,),
+    activation=SigmoidActivation(),
+    energy=GaussianEnergy(precision=1.0),
+    weight_init=NormalInitializer(mean=0.0, std=0.05),
+    name="h3",
+)
+class_node = Linear(
+    shape=(10,),
+    activation=SigmoidActivation(),
+    energy=GaussianEnergy(precision=1.0),
+    weight_init=NormalInitializer(mean=0.0, std=0.05),
+    name="class",
+)
 
-config = {
-    # Deeper 3-hidden-layer network with fully explicit configs
-    "node_list": [
-        {   **template_node,
-            "name": "pixels",  # Override template fields
-            "shape": (784,),
-            "activation": {"type": "identity"},
-        },
-        {   **template_node,
-            "name": "h1",
-            "shape": (256,),
-        },
-        {   **template_node,
-            "name": "h2",
-            "shape": (128,),
-        },
-        {   **template_node,
-            "name": "h3",
-            "shape": (64,),
-        },
-        {   **template_node,
-            "name": "class",
-            "shape": (10,),
-        },
+structure = graph(
+    nodes=[pixels, h1, h2, h3, class_node],
+    edges=[
+        Edge(source=pixels, target=h1.slot("in")),
+        Edge(source=h1, target=h2.slot("in")),
+        Edge(source=h2, target=h3.slot("in")),
+        Edge(source=h3, target=class_node.slot("in")),
     ],
-
-    "edge_list": [
-        {"source_name": "pixels", "target_name": "h1",    "slot": "in"},
-        {"source_name": "h1",     "target_name": "h2",    "slot": "in"},
-        {"source_name": "h2",     "target_name": "h3",    "slot": "in"},
-        {"source_name": "h3",     "target_name": "class", "slot": "in"},
-    ],
-
-    "task_map": {"x": "pixels", "y": "class"},
-
-    # Graph-level state initialization (feedforward with normal fallback)
-    "graph_state_initializer": {"type": "feedforward"},
-}
+    task_map=TaskMap(x=pixels, y=class_node),
+    graph_state_initializer={"type": "feedforward"},
+)
 
 # More sophisticated training configuration
 train_config = {
-    "infer_steps": 20,     # More inference steps for deeper network
-    "eta_infer": 0.05,     # Inference learning rate
+    "infer_steps": 20,  # More inference steps for deeper network
+    "eta_infer": 0.05,  # Inference learning rate
     "optimizer": {"type": "adam", "lr": 0.001, "weight_decay": 0.001},
 }
 batch_size = 200
 num_epochs = 10
 
-# fmt: on
 # ==============================================================================
 # CREATE MODEL
 # ==============================================================================
@@ -109,16 +104,16 @@ print("=" * 70)
 print("Predictive Coding - Advanced MNIST Example")
 print("=" * 70)
 
-params, structure = create_pc_graph(config, graph_key)
+params = initialize_params(structure, graph_key)
 num_params = sum(p.size for p in jax.tree_util.tree_leaves(params))
 
 print(f"\n[Model Architecture]")
-print(f"  Nodes: {len(config['node_list'])}")
-print(f"  Edges: {len(config['edge_list'])}")
+print(f"  Nodes: {len(structure.nodes)}")
+print(f"  Edges: {len(structure.edges)}")
 print(f"  Total parameters: {num_params:,}")
 print(f"\n  Layer sizes: ", end="")
-for node in config["node_list"]:
-    print(f"{node['shape']} → ", end="")
+for node in structure.nodes.values():
+    print(f"{node.node_info.shape} → ", end="")
 print("(output)")
 
 # ==============================================================================

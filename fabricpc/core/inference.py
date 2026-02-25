@@ -10,8 +10,8 @@ import jax
 import jax.numpy as jnp
 
 from fabricpc.core.types import GraphParams, GraphState, GraphStructure
-from fabricpc.nodes import get_node_class
 from fabricpc.core.types import NodeInfo
+from fabricpc.nodes.base import _get_node_class_from_info
 from fabricpc.utils.helpers import update_node_in_state
 
 
@@ -66,9 +66,10 @@ def inference_step(
 
     # 2. Forward inference pass
     for node_name in structure.nodes:
-        # Get node info and state
-        node_info = structure.nodes[node_name]
-        node_class = get_node_class(node_info.node_type)
+        # Get node and its info
+        node = structure.nodes[node_name]
+        node_info = node.node_info
+        node_class = _get_node_class_from_info(node_info)
         node_state = state.nodes[node_name]
         node_params = params.nodes[node_name]
 

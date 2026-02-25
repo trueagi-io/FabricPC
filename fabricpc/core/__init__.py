@@ -15,23 +15,28 @@ from fabricpc.core.types import (
 # Activation functions
 from fabricpc.core.activations import (
     ActivationBase,
-    get_activation,
-    get_activation_fn,
-    get_activation_deriv,
-    register_activation,
-    get_activation_class,
-    list_activation_types,
+    IdentityActivation,
+    SigmoidActivation,
+    TanhActivation,
+    ReLUActivation,
+    LeakyReLUActivation,
+    GeluActivation,
+    SoftmaxActivation,
+    HardTanhActivation,
 )
 
 # Energy functions
 from fabricpc.core.energy import (
     EnergyFunctional,
+    GaussianEnergy,
+    BernoulliEnergy,
+    CrossEntropyEnergy,
+    LaplacianEnergy,
+    HuberEnergy,
+    KLDivergenceEnergy,
     compute_energy,
     compute_energy_gradient,
     get_energy_and_gradient,
-    register_energy,
-    get_energy_class,
-    list_energy_types,
 )
 
 # Inference functions
@@ -41,19 +46,16 @@ from fabricpc.core.inference import (
     run_inference,
 )
 
-# Initializer registry
+# Initializers
 from fabricpc.core.initializers import (
     InitializerBase,
-    register_initializer,
-    get_initializer_class,
-    list_initializer_types,
+    ZerosInitializer,
+    OnesInitializer,
+    NormalInitializer,
+    UniformInitializer,
+    XavierInitializer,
+    KaimingInitializer,
     initialize,
-)
-
-# Config utilities
-from fabricpc.core.config import (
-    validate_config,
-    transform_shorthand,
 )
 
 __all__ = [
@@ -68,31 +70,36 @@ __all__ = [
     "NodeState",
     # Activation functions
     "ActivationBase",
-    "get_activation",
-    "get_activation_fn",
-    "get_activation_deriv",
-    "register_activation",
-    "get_activation_class",
-    "list_activation_types",
+    "IdentityActivation",
+    "SigmoidActivation",
+    "TanhActivation",
+    "ReLUActivation",
+    "LeakyReLUActivation",
+    "GeluActivation",
+    "SoftmaxActivation",
+    "HardTanhActivation",
     # Energy functions
     "EnergyFunctional",
+    "GaussianEnergy",
+    "BernoulliEnergy",
+    "CrossEntropyEnergy",
+    "LaplacianEnergy",
+    "HuberEnergy",
+    "KLDivergenceEnergy",
     "compute_energy",
     "compute_energy_gradient",
     "get_energy_and_gradient",
-    "register_energy",
-    "get_energy_class",
-    "list_energy_types",
     # Inference
     "gather_inputs",
     "inference_step",
     "run_inference",
-    # Initializer registry
+    # Initializers
     "InitializerBase",
-    "register_initializer",
-    "get_initializer_class",
-    "list_initializer_types",
+    "ZerosInitializer",
+    "OnesInitializer",
+    "NormalInitializer",
+    "UniformInitializer",
+    "XavierInitializer",
+    "KaimingInitializer",
     "initialize",
-    # Config utilities
-    "validate_config",
-    "transform_shorthand",
 ]

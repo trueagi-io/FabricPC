@@ -37,7 +37,12 @@ import jax
 import jax.numpy as jnp
 from fabricpc.utils.data.dataloader import MnistLoader
 
-from fabricpc.graph import create_pc_graph
+from fabricpc.nodes import Linear
+from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.graph import initialize_params
+from fabricpc.core.activations import IdentityActivation, SigmoidActivation
+from fabricpc.core.energy import GaussianEnergy
+from fabricpc.core.initializers import NormalInitializer
 from fabricpc.training import create_optimizer, evaluate_pcn
 
 # Import dashboarding utilities
@@ -68,42 +73,47 @@ graph_key, train_key, eval_key = jax.random.split(master_rng_key, 3)
 # NETWORK CONFIGURATION
 # ==============================================================================
 
-template_node = {
-    "name": None,
-    "shape": None,
-    "type": "linear",
-    "activation": {"type": "sigmoid"},
-    "energy": {"type": "gaussian", "precision": 1.0},
-    "weight_init": {"type": "normal", "mean": 0.0, "std": 0.05},
-    "use_bias": True,
-    "flatten_input": False,
-    "latent_init": None,
-}
+pixels = Linear(shape=(784,), activation=IdentityActivation(), name="pixels")
+h1 = Linear(
+    shape=(256,),
+    activation=SigmoidActivation(),
+    energy=GaussianEnergy(precision=1.0),
+    weight_init=NormalInitializer(mean=0.0, std=0.05),
+    name="h1",
+)
+h2 = Linear(
+    shape=(128,),
+    activation=SigmoidActivation(),
+    energy=GaussianEnergy(precision=1.0),
+    weight_init=NormalInitializer(mean=0.0, std=0.05),
+    name="h2",
+)
+h3 = Linear(
+    shape=(64,),
+    activation=SigmoidActivation(),
+    energy=GaussianEnergy(precision=1.0),
+    weight_init=NormalInitializer(mean=0.0, std=0.05),
+    name="h3",
+)
+class_node = Linear(
+    shape=(10,),
+    activation=SigmoidActivation(),
+    energy=GaussianEnergy(precision=1.0),
+    weight_init=NormalInitializer(mean=0.0, std=0.05),
+    name="class",
+)
 
-config = {
-    "node_list": [
-        {
-            **template_node,
-            "name": "pixels",
-            "shape": (784,),
-            "activation": {"type": "identity"},
-        },
-        {**template_node, "name": "h1", "shape": (256,)},
-        {**template_node, "name": "h2", "shape": (128,)},
-        {**template_node, "name": "h3", "shape": (64,)},
-        {**template_node, "name": "class", "shape": (10,)},
+structure = graph(
+    nodes=[pixels, h1, h2, h3, class_node],
+    edges=[
+        Edge(source=pixels, target=h1.slot("in")),
+        Edge(source=h1, target=h2.slot("in")),
+        Edge(source=h2, target=h3.slot("in")),
+        Edge(source=h3, target=class_node.slot("in")),
     ],
-    "edge_list": [
-        {"source_name": "pixels", "target_name": "h1", "slot": "in"},
-        {"source_name": "h1", "target_name": "h2", "slot": "in"},
-        {"source_name": "h2", "target_name": "h3", "slot": "in"},
-        {"source_name": "h3", "target_name": "class", "slot": "in"},
-    ],
-    "task_map": {"x": "pixels", "y": "class"},
-    "graph_state_initializer": {
-        "type": "feedforward",
-    },
-}
+    task_map=TaskMap(x=pixels, y=class_node),
+    graph_state_initializer={"type": "feedforward"},
+)
 
 train_config = {
     "infer_steps": 20,
@@ -121,11 +131,11 @@ print("=" * 70)
 print("MNIST with Aim Experiment Tracking")
 print("=" * 70)
 
-params, structure = create_pc_graph(config, graph_key)
+params = initialize_params(structure, graph_key)
 num_params = sum(p.size for p in jax.tree_util.tree_leaves(params))
 
 print(f"\n[Model Architecture]")
-print(f"  Nodes: {len(config['node_list'])}")
+print(f"  Nodes: {len(structure.nodes)}")
 print(f"  Total parameters: {num_params:,}")
 
 # ==============================================================================
@@ -179,8 +189,10 @@ if TRACKING_ENABLED:
     tracker.log_hyperparams(
         {
             "model_config": {
-                "num_layers": len(config["node_list"]),
-                "layer_sizes": [n["shape"][0] for n in config["node_list"]],
+                "num_layers": len(structure.nodes),
+                "layer_sizes": [
+                    structure.nodes[n].node_info.shape for n in structure.node_order
+                ],
                 "activation": "sigmoid",
                 "energy_type": "gaussian",
             },

@@ -19,8 +19,15 @@ import jax.numpy as jnp
 from hypothesis import given, strategies as st, settings
 
 from fabricpc.core.types import NodeState, GraphState
-from fabricpc.core.config import ConfigValidationError
-from fabricpc.graph.graph_net import create_pc_graph, build_graph_structure
+from fabricpc.nodes import Linear
+from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.graph import initialize_params
+from fabricpc.core.activations import (
+    SigmoidActivation,
+    ReLUActivation,
+    TanhActivation,
+    IdentityActivation,
+)
 from fabricpc.graph.state_initializer import initialize_graph_state
 from fabricpc.core.inference import run_inference
 
@@ -33,95 +40,63 @@ class TestValidation:
 
     def test_duplicate_node_names_raise(self):
         """Test that duplicate node names raise an error."""
-        config = {
-            "node_list": [
-                {
-                    "name": "x",
-                    "shape": (2,),
-                    "type": "linear",
-                    "activation": {"type": "sigmoid"},
-                },
-                {
-                    "name": "x",  # Duplicate name
-                    "shape": (2,),
-                    "type": "linear",
-                    "activation": {"type": "sigmoid"},
-                },
-            ],
-            "edge_list": [],
-            "task_map": {},
-        }
+        x1 = Linear(shape=(2,), activation=SigmoidActivation(), name="x")
+        x2 = Linear(shape=(2,), activation=SigmoidActivation(), name="x")
 
-        with pytest.raises(ValueError, match="duplicate.*node"):
-            build_graph_structure(config)
+        with pytest.raises(ValueError, match="Duplicate node name"):
+            graph(
+                nodes=[x1, x2],
+                edges=[],
+                task_map=TaskMap(),
+            )
 
     def test_self_edge_disallowed(self):
         """Test that self-edges are not allowed."""
-        config = {
-            "node_list": [
-                {
-                    "name": "n1",
-                    "shape": (2,),
-                    "type": "linear",
-                    "activation": {"type": "sigmoid"},
-                },
-            ],
-            "edge_list": [
-                {"source_name": "n1", "target_name": "n1", "slot": "in"},  # Self-edge
-            ],
-            "task_map": {},
-        }
+        n1 = Linear(shape=(2,), activation=SigmoidActivation(), name="n1")
 
-        with pytest.raises(ValueError, match="self.*edge|same.*node"):
-            build_graph_structure(config)
+        with pytest.raises(ValueError, match="Self-edge"):
+            graph(
+                nodes=[n1],
+                edges=[Edge(source=n1, target=n1.slot("in"))],
+                task_map=TaskMap(),
+            )
 
     def test_nonexistent_node_in_edge(self):
         """Test that edges referencing non-existent nodes raise an error."""
-        config = {
-            "node_list": [
-                {"name": "a", "shape": (2,), "type": "linear"},
-            ],
-            "edge_list": [
-                {"source_name": "a", "target_name": "nonexistent", "slot": "in"},
-            ],
-            "task_map": {},
-        }
+        a = Linear(shape=(2,), name="a")
+        nonexistent = Linear(shape=(2,), name="nonexistent")
 
         with pytest.raises(ValueError, match="not found|does not exist"):
-            build_graph_structure(config)
+            graph(
+                nodes=[a],  # Only 'a' is in the nodes list
+                edges=[
+                    Edge(source=a, target=nonexistent.slot("in"))
+                ],  # But edge references 'nonexistent'
+                task_map=TaskMap(),
+            )
 
 
 class TestShapeConsistency:
     """Test suite for shape validation and consistency."""
 
     @pytest.fixture
-    def simple_chain_config(self):
+    def simple_chain(self):
         """Minimal directed chain: a -> b."""
-        return {
-            "node_list": [
-                {
-                    "name": "a",
-                    "shape": (4,),
-                    "type": "linear",
-                    "activation": {"type": "sigmoid"},
-                },
-                {
-                    "name": "b",
-                    "shape": (3,),
-                    "type": "linear",
-                    "activation": {"type": "sigmoid"},
-                },
-            ],
-            "edge_list": [
-                {"source_name": "a", "target_name": "b", "slot": "in"},
-            ],
-            "task_map": {"x": "a", "y": "b"},
-        }
+        a = Linear(shape=(4,), activation=SigmoidActivation(), name="a")
+        b = Linear(shape=(3,), activation=SigmoidActivation(), name="b")
 
-    def test_allocate_and_tensor_shapes(self, simple_chain_config):
+        structure = graph(
+            nodes=[a, b],
+            edges=[Edge(source=a, target=b.slot("in"))],
+            task_map=TaskMap(x=a, y=b),
+        )
+        return structure
+
+    def test_allocate_and_tensor_shapes(self, simple_chain):
         """Test that allocated tensors have correct shapes."""
+        structure = simple_chain
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(simple_chain_config, rng_key)
+        params = initialize_params(structure, rng_key)
 
         batch_size = 5
 
@@ -136,9 +111,9 @@ class TestShapeConsistency:
         )
 
         # Check shapes for each node
-        for node_name, node_info in structure.nodes.items():
+        for node_name, node in structure.nodes.items():
             node_state = state.nodes[node_name]
-            expected_shape = (batch_size, *node_info.shape)
+            expected_shape = (batch_size, *node.node_info.shape)
 
             assert (
                 node_state.z_latent.shape == expected_shape
@@ -153,10 +128,11 @@ class TestShapeConsistency:
                 node_state.pre_activation.shape == expected_shape
             ), f"pre_activation shape mismatch for {node_name}"
 
-    def test_projection_shapes_match(self, simple_chain_config):
+    def test_projection_shapes_match(self, simple_chain):
         """Test that projections maintain correct shapes."""
+        structure = simple_chain
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(simple_chain_config, rng_key)
+        params = initialize_params(structure, rng_key)
 
         batch_size = 3
         x = jax.random.normal(rng_key, (batch_size, 4))
@@ -189,29 +165,17 @@ class TestPropertyBased:
     @settings(deadline=None)
     def test_allocate_respects_batch_and_dims(self, batch_size, dim_a, dim_b):
         """Test that allocation respects arbitrary batch sizes and dimensions."""
-        config = {
-            "node_list": [
-                {
-                    "name": "a",
-                    "shape": (dim_a,),
-                    "type": "linear",
-                    "activation": {"type": "sigmoid"},
-                },
-                {
-                    "name": "b",
-                    "shape": (dim_b,),
-                    "type": "linear",
-                    "activation": {"type": "sigmoid"},
-                },
-            ],
-            "edge_list": [
-                {"source_name": "a", "target_name": "b", "slot": "in"},
-            ],
-            "task_map": {"x": "a", "y": "b"},
-        }
+        a = Linear(shape=(dim_a,), activation=SigmoidActivation(), name="a")
+        b = Linear(shape=(dim_b,), activation=SigmoidActivation(), name="b")
+
+        structure = graph(
+            nodes=[a, b],
+            edges=[Edge(source=a, target=b.slot("in"))],
+            task_map=TaskMap(x=a, y=b),
+        )
 
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(config, rng_key)
+        params = initialize_params(structure, rng_key)
 
         # Create dummy clamps
         x_data = jnp.zeros((batch_size, dim_a))
@@ -224,9 +188,9 @@ class TestPropertyBased:
         )
 
         # Verify shapes
-        for node_name, node_info in structure.nodes.items():
+        for node_name, node in structure.nodes.items():
             node_state = state.nodes[node_name]
-            expected_shape = (batch_size, *node_info.shape)
+            expected_shape = (batch_size, *node.node_info.shape)
 
             assert node_state.z_latent.shape == expected_shape
             assert node_state.error.shape == expected_shape
@@ -240,19 +204,17 @@ class TestPropertyBased:
     @settings(deadline=None)
     def test_inference_parameters(self, infer_steps, eta_infer):
         """Test that inference works with various parameter settings."""
-        config = {
-            "node_list": [
-                {"name": "input", "shape": (3,), "type": "linear"},
-                {"name": "output", "shape": (2,), "type": "linear"},
-            ],
-            "edge_list": [
-                {"source_name": "input", "target_name": "output", "slot": "in"},
-            ],
-            "task_map": {"x": "input", "y": "output"},
-        }
+        input_node = Linear(shape=(3,), name="input")
+        output_node = Linear(shape=(2,), name="output")
+
+        structure = graph(
+            nodes=[input_node, output_node],
+            edges=[Edge(source=input_node, target=output_node.slot("in"))],
+            task_map=TaskMap(x=input_node, y=output_node),
+        )
 
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(config, rng_key)
+        params = initialize_params(structure, rng_key)
 
         batch_size = 4
         x = jax.random.normal(rng_key, (batch_size, 3))
@@ -279,38 +241,28 @@ class TestComplexGraphs:
 
     def test_skip_connection_graph(self):
         """Test graph with skip connections."""
-        config = {
-            "node_list": [
-                {"name": "input", "shape": (10,), "type": "linear"},
-                {
-                    "name": "h1",
-                    "shape": (20,),
-                    "type": "linear",
-                    "activation": {"type": "relu"},
-                },
-                {
-                    "name": "h2",
-                    "shape": (15,),
-                    "type": "linear",
-                    "activation": {"type": "relu"},
-                },
-                {"name": "output", "shape": (5,), "type": "linear"},
-            ],
-            "edge_list": [
-                {"source_name": "input", "target_name": "h1", "slot": "in"},
-                {"source_name": "h1", "target_name": "h2", "slot": "in"},
-                {"source_name": "h2", "target_name": "output", "slot": "in"},
+        input_node = Linear(shape=(10,), name="input")
+        h1 = Linear(shape=(20,), activation=ReLUActivation(), name="h1")
+        h2 = Linear(shape=(15,), activation=ReLUActivation(), name="h2")
+        output_node = Linear(shape=(5,), name="output")
+
+        structure = graph(
+            nodes=[input_node, h1, h2, output_node],
+            edges=[
+                Edge(source=input_node, target=h1.slot("in")),
+                Edge(source=h1, target=h2.slot("in")),
+                Edge(source=h2, target=output_node.slot("in")),
                 # Skip connection
-                {"source_name": "input", "target_name": "output", "slot": "in"},
+                Edge(source=input_node, target=output_node.slot("in")),
             ],
-            "task_map": {"x": "input", "y": "output"},
-        }
+            task_map=TaskMap(x=input_node, y=output_node),
+        )
 
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(config, rng_key)
+        params = initialize_params(structure, rng_key)
 
         # Verify skip connection exists
-        output_edges = structure.nodes["output"].in_edges
+        output_edges = structure.nodes["output"].node_info.in_edges
         assert (
             len(output_edges) == 2
         ), "Output should have 2 incoming edges (including skip)"
@@ -342,38 +294,38 @@ class TestComplexGraphs:
         initial_energy = sum(
             jnp.sum(state_after_1_step.nodes[name].energy)
             for name in structure.nodes
-            if structure.nodes[name].in_degree > 0
+            if structure.nodes[name].node_info.in_degree > 0
         )
         final_energy = sum(
             jnp.sum(final_state.nodes[name].energy)
             for name in structure.nodes
-            if structure.nodes[name].in_degree > 0
+            if structure.nodes[name].node_info.in_degree > 0
         )
         assert final_energy < initial_energy
 
     def test_multi_input_node(self):
         """Test node with multiple inputs from different sources."""
-        config = {
-            "node_list": [
-                {"name": "a", "shape": (5,), "type": "linear"},
-                {"name": "b", "shape": (4,), "type": "linear"},
-                {"name": "c", "shape": (3,), "type": "linear"},
-                {"name": "merger", "shape": (6,), "type": "linear"},
+        a = Linear(shape=(5,), name="a")
+        b = Linear(shape=(4,), name="b")
+        c = Linear(shape=(3,), name="c")
+        merger = Linear(shape=(6,), name="merger")
+
+        structure = graph(
+            nodes=[a, b, c, merger],
+            edges=[
+                Edge(source=a, target=merger.slot("in")),
+                Edge(source=b, target=merger.slot("in")),
+                Edge(source=c, target=merger.slot("in")),
             ],
-            "edge_list": [
-                {"source_name": "a", "target_name": "merger", "slot": "in"},
-                {"source_name": "b", "target_name": "merger", "slot": "in"},
-                {"source_name": "c", "target_name": "merger", "slot": "in"},
-            ],
-            "task_map": {"x": "a", "y": "merger"},
-        }
+            task_map=TaskMap(x=a, y=merger),
+        )
 
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(config, rng_key)
+        params = initialize_params(structure, rng_key)
 
         # Verify merger node has 3 inputs
-        assert structure.nodes["merger"].in_degree == 3
-        assert len(structure.nodes["merger"].in_edges) == 3
+        assert structure.nodes["merger"].node_info.in_degree == 3
+        assert len(structure.nodes["merger"].node_info.in_edges) == 3
 
         # Verify weights exist for all connections
         merger_params = params.nodes["merger"]
@@ -384,29 +336,26 @@ class TestEnergyDynamics:
     """Test energy dynamics during inference."""
 
     @pytest.fixture
-    def energy_test_config(self):
-        return {
-            "node_list": [
-                {"name": "x", "shape": (5,), "type": "linear"},
-                {
-                    "name": "h",
-                    "shape": (10,),
-                    "type": "linear",
-                    "activation": {"type": "tanh"},
-                },
-                {"name": "y", "shape": (3,), "type": "linear"},
-            ],
-            "edge_list": [
-                {"source_name": "x", "target_name": "h", "slot": "in"},
-                {"source_name": "h", "target_name": "y", "slot": "in"},
-            ],
-            "task_map": {"input": "x", "output": "y"},
-        }
+    def energy_test_graph(self):
+        x = Linear(shape=(5,), name="x")
+        h = Linear(shape=(10,), activation=TanhActivation(), name="h")
+        y = Linear(shape=(3,), name="y")
 
-    def test_energy_monotonic_decrease(self, energy_test_config):
+        structure = graph(
+            nodes=[x, h, y],
+            edges=[
+                Edge(source=x, target=h.slot("in")),
+                Edge(source=h, target=y.slot("in")),
+            ],
+            task_map=TaskMap(input=x, output=y),
+        )
+        return structure
+
+    def test_energy_monotonic_decrease(self, energy_test_graph):
         """Test that energy decreases monotonically during inference."""
+        structure = energy_test_graph
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(energy_test_config, rng_key)
+        params = initialize_params(structure, rng_key)
 
         batch_size = 16
         x = jax.random.normal(rng_key, (batch_size, 5))
@@ -428,7 +377,7 @@ class TestEnergyDynamics:
             energy = sum(
                 jnp.sum(current_state.nodes[name].energy)
                 for name in structure.nodes
-                if structure.nodes[name].in_degree > 0
+                if structure.nodes[name].node_info.in_degree > 0
             )
             energies.append(float(energy))
 
@@ -441,44 +390,40 @@ class TestEnergyDynamics:
 
 
 @pytest.mark.parametrize(
-    "node_type", ["linear"]
+    "node_type", ["LinearNode"]
 )  # Add more types as they're implemented
 def test_different_node_types(node_type):
     """Test graph construction with different node types."""
-    config = {
-        "node_list": [
-            {"name": "a", "shape": (4,), "type": node_type},
-            {"name": "b", "shape": (3,), "type": node_type},
-        ],
-        "edge_list": [
-            {"source_name": "a", "target_name": "b", "slot": "in"},
-        ],
-        "task_map": {"x": "a", "y": "b"},
-    }
+    a = Linear(shape=(4,), name="a")
+    b = Linear(shape=(3,), name="b")
+
+    structure = graph(
+        nodes=[a, b],
+        edges=[Edge(source=a, target=b.slot("in"))],
+        task_map=TaskMap(x=a, y=b),
+    )
 
     rng_key = jax.random.PRNGKey(42)
-    params, structure = create_pc_graph(config, rng_key)
+    params = initialize_params(structure, rng_key)
 
-    assert structure.nodes["a"].node_type == node_type
-    assert structure.nodes["b"].node_type == node_type
+    assert structure.nodes["a"].node_info.node_type == node_type
+    assert structure.nodes["b"].node_info.node_type == node_type
 
 
 @pytest.mark.parametrize("batch_size", [1, 4, 8, 16, 32])
 def test_various_batch_sizes(batch_size):
     """Test that the system works with various batch sizes."""
-    config = {
-        "node_list": [
-            {"name": "input", "shape": (5,), "type": "linear"},
-            {"name": "output", "shape": (3,), "type": "linear"},
-        ],
-        "edge_list": [
-            {"source_name": "input", "target_name": "output", "slot": "in"},
-        ],
-        "task_map": {"x": "input", "y": "output"},
-    }
+    input_node = Linear(shape=(5,), name="input")
+    output_node = Linear(shape=(3,), name="output")
+
+    structure = graph(
+        nodes=[input_node, output_node],
+        edges=[Edge(source=input_node, target=output_node.slot("in"))],
+        task_map=TaskMap(x=input_node, y=output_node),
+    )
 
     rng_key = jax.random.PRNGKey(42)
-    params, structure = create_pc_graph(config, rng_key)
+    params = initialize_params(structure, rng_key)
 
     x = jax.random.normal(rng_key, (batch_size, 5))
     y = jax.random.normal(rng_key, (batch_size, 3))
