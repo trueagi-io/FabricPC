@@ -105,7 +105,7 @@ if __name__ == "__main__":
     )
     delta_t = time.time() - start_time
     print(
-        f"Avg Training time: {delta_t / train_config["num_epochs"]:.2f} seconds per epoch"
+        f"Avg Training time: {delta_t / train_config['num_epochs']:.2f} seconds per epoch"
     )
 
     # ==============================================================================

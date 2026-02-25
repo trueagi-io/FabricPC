@@ -31,6 +31,16 @@ import urllib.request
 from typing import Tuple, Iterator, Dict, List
 
 from fabricpc.graph import create_pc_graph
+from fabricpc.graph.state_initializer import FeedforwardStateInit
+from fabricpc.core.types import EdgeInfo
+from fabricpc.nodes import LinearNode, TransformerBlockNode
+from fabricpc.core.activations import (
+    IdentityActivation,
+    SoftmaxActivation,
+    GeluActivation,
+)
+from fabricpc.core.energy import CrossEntropyEnergy
+from fabricpc.core.initializers import KaimingInitializer, NormalInitializer
 from fabricpc.training.train_autoregressive import (
     train_autoregressive,
     generate_autoregressive,
@@ -186,77 +196,62 @@ def create_transformer_config(
 
     For predictive coding, each node maintains its own latent state.
     """
-    node_list = [
-        # Input embedding: linear projection from one-hot to embed_dim
-        {
-            "name": "input",
-            "shape": (seq_len, vocab_size),
-            "type": "linear",
-            "activation": {"type": "identity"},
-        },
-        {
-            "name": "embed",
-            "shape": (seq_len, embed_dim),
-            "type": "linear",
-            "activation": {"type": "identity"},
-            "weight_init": {"type": "kaiming", "mode": "fan_out"},
-        },
-        {
-            "name": "mask",
-            "shape": (1, seq_len, seq_len),
-            "type": "linear",
-            "activation": {"type": "identity"},
-        },
-    ]
+    input_node = LinearNode(
+        name="input",
+        shape=(seq_len, vocab_size),
+        activation=IdentityActivation(),
+    )
+    embed_node = LinearNode(
+        name="embed",
+        shape=(seq_len, embed_dim),
+        activation=IdentityActivation(),
+        weight_init=KaimingInitializer(mode="fan_out"),
+    )
+    mask_node = LinearNode(
+        name="mask",
+        shape=(1, seq_len, seq_len),
+        activation=IdentityActivation(),
+    )
 
-    edge_list = [
-        {"source_name": "input", "target_name": "embed", "slot": "in"},
-    ]
-
+    node_list = [input_node, embed_node, mask_node]
+    edge_list = [EdgeInfo.from_refs(input_node, embed_node, slot="in")]
     # Add transformer blocks
     prev_name = "embed"
     for i in range(num_blocks):
         block_name = f"transformer_{i}"
-        node_list.append(
-            {
-                "name": block_name,
-                "shape": (seq_len, embed_dim),
-                "type": "transformer_block",
-                "num_heads": num_heads,
-                "ff_dim": ff_dim,
-                "internal_activation": {"type": "gelu"},
-                "rope_theta": rope_theta,
-            }
+        block_node = TransformerBlockNode(
+            name=block_name,
+            shape=(seq_len, embed_dim),
+            num_heads=num_heads,
+            ff_dim=ff_dim,
+            internal_activation=GeluActivation(),
+            rope_theta=rope_theta,
         )
-        edge_list.append(
-            {"source_name": prev_name, "target_name": block_name, "slot": "in"}
-        )  # wire one block to the next
-        edge_list.append(
-            {"source_name": "mask", "target_name": block_name, "slot": "mask"}
-        )  # wire mask to the block
+        node_list.append(block_node)
+        prev_node = next(n for n in node_list if n.name == prev_name)
+        edge_list.append(EdgeInfo.from_refs(prev_node, block_node, slot="in"))
+        edge_list.append(EdgeInfo.from_refs(mask_node, block_node, slot="mask"))
         prev_name = block_name
 
     # Output projection back to vocabulary
     # Use small initialization to prevent softmax saturation from large logits
-    node_list.append(
-        {
-            "name": "output",
-            "shape": (seq_len, vocab_size),
-            "type": "linear",
-            "activation": {"type": "softmax"},
-            "energy": {"type": "cross_entropy"},
-            "weight_init": {"type": "normal", "mean": 0.0, "std": 0.02},
-        }
+    output_node = LinearNode(
+        name="output",
+        shape=(seq_len, vocab_size),
+        activation=SoftmaxActivation(),
+        energy=CrossEntropyEnergy(),
+        weight_init=NormalInitializer(mean=0.0, std=0.02),
     )
-    edge_list.append({"source_name": prev_name, "target_name": "output", "slot": "in"})
+    node_list.append(output_node)
+    prev_node = next(n for n in node_list if n.name == prev_name)
+    edge_list.append(EdgeInfo.from_refs(prev_node, output_node, slot="in"))
 
     # Assemble the complete model configuration
     return {
-        "node_list": node_list,
-        "edge_list": edge_list,
+        "nodes": node_list,
+        "edges": edge_list,
         "task_map": {"x": "input", "y": "output", "causal_mask": "mask"},
-        "graph_state_initializer": {"type": "feedforward"},
-        # "graph_state_initializer": {"type": "global", "initializer": {"type": "normal", "mean": 0.0, "std": 0.01}},
+        "graph_state_initializer": FeedforwardStateInit(),
     }
 
 
@@ -430,12 +425,16 @@ def main():
         rope_theta=ROPE_THETA,
     )
 
-    params, structure = create_pc_graph(config, graph_key)
+    params, structure = create_pc_graph(
+        rng_key=graph_key,
+        nodes=config["nodes"],
+        edges=config["edges"],
+        task_map=config["task_map"],
+        graph_state_initializer=config["graph_state_initializer"],
+    )
 
     total_params = sum(p.size for p in jax.tree_util.tree_leaves(params))
-    print(
-        f"Model created: {len(config['node_list'])} nodes, {len(config['edge_list'])} edges"
-    )
+    print(f"Model created: {len(config['nodes'])} nodes, {len(config['edges'])} edges")
     print(f"Total parameters: {total_params:,}")
 
     # Training config for autoregressive training

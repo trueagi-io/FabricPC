@@ -21,7 +21,11 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from fabricpc.graph.graph_net import create_pc_graph
+from fabricpc.core.activations import ReLUActivation
+from fabricpc.core.initializers import XavierInitializer
+from fabricpc.core.types import EdgeInfo
+from fabricpc.graph.graph_net import create_pc_graph as _create_pc_graph
+from fabricpc.nodes import LinearNode
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.training.multi_gpu import train_pcn_multi_gpu
 
@@ -38,55 +42,48 @@ def rng_key():
 @pytest.fixture
 def simple_config():
     """Simple graph configuration for testing."""
+    input_node = LinearNode(name="input", shape=(8,))
+    hidden1_node = LinearNode(
+        name="hidden1",
+        shape=(16,),
+        activation=ReLUActivation(),
+        weight_init=XavierInitializer(),
+    )
+    hidden2_node = LinearNode(
+        name="hidden2",
+        shape=(16,),
+        activation=ReLUActivation(),
+        weight_init=XavierInitializer(),
+    )
+    hidden3_node = LinearNode(
+        name="hidden3",
+        shape=(16,),
+        activation=ReLUActivation(),
+        weight_init=XavierInitializer(),
+    )
+    hidden4_node = LinearNode(
+        name="hidden4",
+        shape=(16,),
+        activation=ReLUActivation(),
+        weight_init=XavierInitializer(),
+    )
+    output_node = LinearNode(name="output", shape=(8,))
+
     return {
-        "node_list": [
-            {
-                "name": "input",
-                "shape": (8,),
-                "type": "linear",
-                "activation": {"type": "identity"},
-            },
-            {
-                "name": "hidden1",
-                "shape": (16,),
-                "type": "linear",
-                "activation": {"type": "relu"},
-                "weight_init": {"type": "xavier"},
-            },
-            {
-                "name": "hidden2",
-                "shape": (16,),
-                "type": "linear",
-                "activation": {"type": "relu"},
-                "weight_init": {"type": "xavier"},
-            },
-            {
-                "name": "hidden3",
-                "shape": (16,),
-                "type": "linear",
-                "activation": {"type": "relu"},
-                "weight_init": {"type": "xavier"},
-            },
-            {
-                "name": "hidden4",
-                "shape": (16,),
-                "type": "linear",
-                "activation": {"type": "relu"},
-                "weight_init": {"type": "xavier"},
-            },
-            {
-                "name": "output",
-                "shape": (8,),
-                "type": "linear",
-                "activation": {"type": "identity"},
-            },
+        "nodes": [
+            input_node,
+            hidden1_node,
+            hidden2_node,
+            hidden3_node,
+            hidden4_node,
+            output_node,
         ],
-        "edge_list": [
-            {"source_name": "input", "target_name": "hidden1", "slot": "in"},
-            {"source_name": "hidden1", "target_name": "hidden2", "slot": "in"},
-            {"source_name": "hidden2", "target_name": "hidden3", "slot": "in"},
-            {"source_name": "hidden3", "target_name": "hidden4", "slot": "in"},
-            {"source_name": "hidden4", "target_name": "output", "slot": "in"},
+        "edges": [
+            EdgeInfo.from_refs(input_node, hidden1_node, slot="in"),
+            EdgeInfo.from_refs(hidden1_node, hidden2_node, slot="in"),
+            EdgeInfo.from_refs(hidden2_node, hidden3_node, slot="in"),
+            EdgeInfo.from_refs(hidden3_node, hidden4_node, slot="in"),
+            EdgeInfo.from_refs(hidden4_node, output_node, slot="in"),
         ],
         "task_map": {"x": "input", "y": "output"},
     }
@@ -143,7 +140,7 @@ class TestMultiGPUTraining:
         model_key, train_key1, train_key2, data_key = jax.random.split(rng_key, 4)
 
         # Create graph
-        params, structure = create_pc_graph(simple_config, model_key)
+        params, structure = _create_pc_graph(rng_key=model_key, **simple_config)
 
         # Create data loader
         input_shape = structure.nodes["input"].shape
@@ -191,7 +188,7 @@ class TestMultiGPUTraining:
         )
 
         # Create graph
-        params, structure = create_pc_graph(simple_config, model_key)
+        params, structure = _create_pc_graph(rng_key=model_key, **simple_config)
 
         # Create data loader
         input_shape = structure.nodes["input"].shape
@@ -270,7 +267,7 @@ class TestMultiGPUTraining:
         model_key, train_key, data_key = jax.random.split(rng_key, 3)
 
         # Create graph
-        params, structure = create_pc_graph(simple_config, model_key)
+        params, structure = _create_pc_graph(rng_key=model_key, **simple_config)
 
         # Create data loader
         input_shape = structure.nodes["input"].shape
@@ -346,7 +343,7 @@ class TestMultiGPUTraining:
         model_key, train_key, data_key = jax.random.split(rng_key, 3)
 
         # Create graph
-        params, structure = create_pc_graph(simple_config, model_key)
+        params, structure = _create_pc_graph(rng_key=model_key, **simple_config)
 
         # Create data loader
         input_shape = structure.nodes["input"].shape
@@ -449,7 +446,7 @@ class TestMultiGPUUtilities:
         """Test parameter replication utility."""
         from fabricpc.training.multi_gpu import replicate_params
 
-        params, structure = create_pc_graph(simple_config, rng_key)
+        params, structure = _create_pc_graph(rng_key=rng_key, **simple_config)
 
         # Replicate to 2 devices
         replicated = replicate_params(params, n_devices=2)

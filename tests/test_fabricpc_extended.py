@@ -18,14 +18,25 @@ import jax
 import jax.numpy as jnp
 from hypothesis import given, strategies as st, settings
 
+from fabricpc.core.activations import ReLUActivation, TanhActivation, SigmoidActivation
 from fabricpc.core.types import NodeState, GraphState
-from fabricpc.core.config import ConfigValidationError
-from fabricpc.graph.graph_net import create_pc_graph, build_graph_structure
-from fabricpc.graph.state_initializer import initialize_graph_state
+from fabricpc.core.types import EdgeInfo
+from fabricpc.graph.graph_net import (
+    create_pc_graph as _create_pc_graph,
+    build_graph_structure as _build_graph_structure,
+)
+from fabricpc.graph.state_initializer import (
+    initialize_graph_state as _initialize_graph_state,
+)
+from fabricpc.nodes import LinearNode
 from fabricpc.core.inference import run_inference
 
 # Set up JAX
 jax.config.update("jax_platform_name", "cpu")
+
+
+def initialize_graph_state(*args, state_init_config=None, **kwargs):
+    return _initialize_graph_state(*args, state_init_config=state_init_config, **kwargs)
 
 
 class TestValidation:
@@ -33,62 +44,46 @@ class TestValidation:
 
     def test_duplicate_node_names_raise(self):
         """Test that duplicate node names raise an error."""
+        node1 = LinearNode(name="x", shape=(2,), activation=SigmoidActivation())
+        node2 = LinearNode(name="x", shape=(2,), activation=SigmoidActivation())
         config = {
-            "node_list": [
-                {
-                    "name": "x",
-                    "shape": (2,),
-                    "type": "linear",
-                    "activation": {"type": "sigmoid"},
-                },
-                {
-                    "name": "x",  # Duplicate name
-                    "shape": (2,),
-                    "type": "linear",
-                    "activation": {"type": "sigmoid"},
-                },
+            "nodes": [
+                node1,
+                node2,  # Duplicate name
             ],
-            "edge_list": [],
+            "edges": [],
             "task_map": {},
         }
 
         with pytest.raises(ValueError, match="duplicate.*node"):
-            build_graph_structure(config)
+            _build_graph_structure(**config)
 
     def test_self_edge_disallowed(self):
         """Test that self-edges are not allowed."""
-        config = {
-            "node_list": [
-                {
-                    "name": "n1",
-                    "shape": (2,),
-                    "type": "linear",
-                    "activation": {"type": "sigmoid"},
-                },
-            ],
-            "edge_list": [
-                {"source_name": "n1", "target_name": "n1", "slot": "in"},  # Self-edge
-            ],
-            "task_map": {},
-        }
-
+        n1 = LinearNode(name="n1", shape=(2,), activation=SigmoidActivation())
         with pytest.raises(ValueError, match="self.*edge|same.*node"):
-            build_graph_structure(config)
+            EdgeInfo.from_refs(n1, n1, slot="in")
 
     def test_nonexistent_node_in_edge(self):
         """Test that edges referencing non-existent nodes raise an error."""
+        a_node = LinearNode(name="a", shape=(2,))
         config = {
-            "node_list": [
-                {"name": "a", "shape": (2,), "type": "linear"},
+            "nodes": [
+                a_node,
             ],
-            "edge_list": [
-                {"source_name": "a", "target_name": "nonexistent", "slot": "in"},
+            "edges": [
+                EdgeInfo(
+                    key="a->nonexistent:in",
+                    source="a",
+                    target="nonexistent",
+                    slot="in",
+                ),
             ],
             "task_map": {},
         }
 
         with pytest.raises(ValueError, match="not found|does not exist"):
-            build_graph_structure(config)
+            _build_graph_structure(**config)
 
 
 class TestShapeConsistency:
@@ -97,23 +92,15 @@ class TestShapeConsistency:
     @pytest.fixture
     def simple_chain_config(self):
         """Minimal directed chain: a -> b."""
+        a_node = LinearNode(name="a", shape=(4,), activation=SigmoidActivation())
+        b_node = LinearNode(name="b", shape=(3,), activation=SigmoidActivation())
         return {
-            "node_list": [
-                {
-                    "name": "a",
-                    "shape": (4,),
-                    "type": "linear",
-                    "activation": {"type": "sigmoid"},
-                },
-                {
-                    "name": "b",
-                    "shape": (3,),
-                    "type": "linear",
-                    "activation": {"type": "sigmoid"},
-                },
+            "nodes": [
+                a_node,
+                b_node,
             ],
-            "edge_list": [
-                {"source_name": "a", "target_name": "b", "slot": "in"},
+            "edges": [
+                EdgeInfo.from_refs(a_node, b_node, slot="in"),
             ],
             "task_map": {"x": "a", "y": "b"},
         }
@@ -121,7 +108,7 @@ class TestShapeConsistency:
     def test_allocate_and_tensor_shapes(self, simple_chain_config):
         """Test that allocated tensors have correct shapes."""
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(simple_chain_config, rng_key)
+        params, structure = _create_pc_graph(rng_key=rng_key, **simple_chain_config)
 
         batch_size = 5
 
@@ -156,7 +143,7 @@ class TestShapeConsistency:
     def test_projection_shapes_match(self, simple_chain_config):
         """Test that projections maintain correct shapes."""
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(simple_chain_config, rng_key)
+        params, structure = _create_pc_graph(rng_key=rng_key, **simple_chain_config)
 
         batch_size = 3
         x = jax.random.normal(rng_key, (batch_size, 4))
@@ -189,29 +176,21 @@ class TestPropertyBased:
     @settings(deadline=None)
     def test_allocate_respects_batch_and_dims(self, batch_size, dim_a, dim_b):
         """Test that allocation respects arbitrary batch sizes and dimensions."""
+        a_node = LinearNode(name="a", shape=(dim_a,), activation=SigmoidActivation())
+        b_node = LinearNode(name="b", shape=(dim_b,), activation=SigmoidActivation())
         config = {
-            "node_list": [
-                {
-                    "name": "a",
-                    "shape": (dim_a,),
-                    "type": "linear",
-                    "activation": {"type": "sigmoid"},
-                },
-                {
-                    "name": "b",
-                    "shape": (dim_b,),
-                    "type": "linear",
-                    "activation": {"type": "sigmoid"},
-                },
+            "nodes": [
+                a_node,
+                b_node,
             ],
-            "edge_list": [
-                {"source_name": "a", "target_name": "b", "slot": "in"},
+            "edges": [
+                EdgeInfo.from_refs(a_node, b_node, slot="in"),
             ],
             "task_map": {"x": "a", "y": "b"},
         }
 
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(rng_key=rng_key, **config)
 
         # Create dummy clamps
         x_data = jnp.zeros((batch_size, dim_a))
@@ -240,19 +219,21 @@ class TestPropertyBased:
     @settings(deadline=None)
     def test_inference_parameters(self, infer_steps, eta_infer):
         """Test that inference works with various parameter settings."""
+        input_node = LinearNode(name="input", shape=(3,))
+        output_node = LinearNode(name="output", shape=(2,))
         config = {
-            "node_list": [
-                {"name": "input", "shape": (3,), "type": "linear"},
-                {"name": "output", "shape": (2,), "type": "linear"},
+            "nodes": [
+                input_node,
+                output_node,
             ],
-            "edge_list": [
-                {"source_name": "input", "target_name": "output", "slot": "in"},
+            "edges": [
+                EdgeInfo.from_refs(input_node, output_node, slot="in"),
             ],
             "task_map": {"x": "input", "y": "output"},
         }
 
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(rng_key=rng_key, **config)
 
         batch_size = 4
         x = jax.random.normal(rng_key, (batch_size, 3))
@@ -279,35 +260,28 @@ class TestComplexGraphs:
 
     def test_skip_connection_graph(self):
         """Test graph with skip connections."""
+        input_node = LinearNode(name="input", shape=(10,))
+        h1_node = LinearNode(name="h1", shape=(20,), activation=ReLUActivation())
+        h2_node = LinearNode(name="h2", shape=(15,), activation=ReLUActivation())
+        output_node = LinearNode(name="output", shape=(5,))
         config = {
-            "node_list": [
-                {"name": "input", "shape": (10,), "type": "linear"},
-                {
-                    "name": "h1",
-                    "shape": (20,),
-                    "type": "linear",
-                    "activation": {"type": "relu"},
-                },
-                {
-                    "name": "h2",
-                    "shape": (15,),
-                    "type": "linear",
-                    "activation": {"type": "relu"},
-                },
-                {"name": "output", "shape": (5,), "type": "linear"},
+            "nodes": [
+                input_node,
+                h1_node,
+                h2_node,
+                output_node,
             ],
-            "edge_list": [
-                {"source_name": "input", "target_name": "h1", "slot": "in"},
-                {"source_name": "h1", "target_name": "h2", "slot": "in"},
-                {"source_name": "h2", "target_name": "output", "slot": "in"},
-                # Skip connection
-                {"source_name": "input", "target_name": "output", "slot": "in"},
+            "edges": [
+                EdgeInfo.from_refs(input_node, h1_node, slot="in"),
+                EdgeInfo.from_refs(h1_node, h2_node, slot="in"),
+                EdgeInfo.from_refs(h2_node, output_node, slot="in"),
+                EdgeInfo.from_refs(input_node, output_node, slot="in"),
             ],
             "task_map": {"x": "input", "y": "output"},
         }
 
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(rng_key=rng_key, **config)
 
         # Verify skip connection exists
         output_edges = structure.nodes["output"].in_edges
@@ -353,23 +327,27 @@ class TestComplexGraphs:
 
     def test_multi_input_node(self):
         """Test node with multiple inputs from different sources."""
+        a_node = LinearNode(name="a", shape=(5,))
+        b_node = LinearNode(name="b", shape=(4,))
+        c_node = LinearNode(name="c", shape=(3,))
+        merger_node = LinearNode(name="merger", shape=(6,))
         config = {
-            "node_list": [
-                {"name": "a", "shape": (5,), "type": "linear"},
-                {"name": "b", "shape": (4,), "type": "linear"},
-                {"name": "c", "shape": (3,), "type": "linear"},
-                {"name": "merger", "shape": (6,), "type": "linear"},
+            "nodes": [
+                a_node,
+                b_node,
+                c_node,
+                merger_node,
             ],
-            "edge_list": [
-                {"source_name": "a", "target_name": "merger", "slot": "in"},
-                {"source_name": "b", "target_name": "merger", "slot": "in"},
-                {"source_name": "c", "target_name": "merger", "slot": "in"},
+            "edges": [
+                EdgeInfo.from_refs(a_node, merger_node, slot="in"),
+                EdgeInfo.from_refs(b_node, merger_node, slot="in"),
+                EdgeInfo.from_refs(c_node, merger_node, slot="in"),
             ],
             "task_map": {"x": "a", "y": "merger"},
         }
 
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(rng_key=rng_key, **config)
 
         # Verify merger node has 3 inputs
         assert structure.nodes["merger"].in_degree == 3
@@ -385,20 +363,18 @@ class TestEnergyDynamics:
 
     @pytest.fixture
     def energy_test_config(self):
+        x_node = LinearNode(name="x", shape=(5,))
+        h_node = LinearNode(name="h", shape=(10,), activation=TanhActivation())
+        y_node = LinearNode(name="y", shape=(3,))
         return {
-            "node_list": [
-                {"name": "x", "shape": (5,), "type": "linear"},
-                {
-                    "name": "h",
-                    "shape": (10,),
-                    "type": "linear",
-                    "activation": {"type": "tanh"},
-                },
-                {"name": "y", "shape": (3,), "type": "linear"},
+            "nodes": [
+                x_node,
+                h_node,
+                y_node,
             ],
-            "edge_list": [
-                {"source_name": "x", "target_name": "h", "slot": "in"},
-                {"source_name": "h", "target_name": "y", "slot": "in"},
+            "edges": [
+                EdgeInfo.from_refs(x_node, h_node, slot="in"),
+                EdgeInfo.from_refs(h_node, y_node, slot="in"),
             ],
             "task_map": {"input": "x", "output": "y"},
         }
@@ -406,7 +382,7 @@ class TestEnergyDynamics:
     def test_energy_monotonic_decrease(self, energy_test_config):
         """Test that energy decreases monotonically during inference."""
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(energy_test_config, rng_key)
+        params, structure = _create_pc_graph(rng_key=rng_key, **energy_test_config)
 
         batch_size = 16
         x = jax.random.normal(rng_key, (batch_size, 5))
@@ -445,40 +421,47 @@ class TestEnergyDynamics:
 )  # Add more types as they're implemented
 def test_different_node_types(node_type):
     """Test graph construction with different node types."""
+    a_node = LinearNode(name="a", shape=(4,))
+    b_node = LinearNode(name="b", shape=(3,))
     config = {
-        "node_list": [
-            {"name": "a", "shape": (4,), "type": node_type},
-            {"name": "b", "shape": (3,), "type": node_type},
+        "nodes": [
+            a_node,
+            b_node,
         ],
-        "edge_list": [
-            {"source_name": "a", "target_name": "b", "slot": "in"},
+        "edges": [
+            EdgeInfo.from_refs(a_node, b_node, slot="in"),
         ],
         "task_map": {"x": "a", "y": "b"},
     }
 
     rng_key = jax.random.PRNGKey(42)
-    params, structure = create_pc_graph(config, rng_key)
+    params, structure = _create_pc_graph(rng_key=rng_key, **config)
 
-    assert structure.nodes["a"].node_type == node_type
-    assert structure.nodes["b"].node_type == node_type
+    expected_type_names = {
+        "linear": "LinearNode",
+    }
+    assert structure.nodes["a"].node_type == expected_type_names[node_type]
+    assert structure.nodes["b"].node_type == expected_type_names[node_type]
 
 
 @pytest.mark.parametrize("batch_size", [1, 4, 8, 16, 32])
 def test_various_batch_sizes(batch_size):
     """Test that the system works with various batch sizes."""
+    input_node = LinearNode(name="input", shape=(5,))
+    output_node = LinearNode(name="output", shape=(3,))
     config = {
-        "node_list": [
-            {"name": "input", "shape": (5,), "type": "linear"},
-            {"name": "output", "shape": (3,), "type": "linear"},
+        "nodes": [
+            input_node,
+            output_node,
         ],
-        "edge_list": [
-            {"source_name": "input", "target_name": "output", "slot": "in"},
+        "edges": [
+            EdgeInfo.from_refs(input_node, output_node, slot="in"),
         ],
         "task_map": {"x": "input", "y": "output"},
     }
 
     rng_key = jax.random.PRNGKey(42)
-    params, structure = create_pc_graph(config, rng_key)
+    params, structure = _create_pc_graph(rng_key=rng_key, **config)
 
     x = jax.random.normal(rng_key, (batch_size, 5))
     y = jax.random.normal(rng_key, (batch_size, 3))

@@ -1,53 +1,48 @@
-"""
-Graph-based predictive coding network construction for JAX with local Hebbian learning.
+"""Graph construction and parameter utilities for object-based FabricPC graphs."""
 
-This module provides functions to build graph structures with node classes,
-validate slot connections, and initialize parameters at the node level.
-
-Edges direct the flow of information through the graph in inference and training.
-- Node output is passed to input slots of post-synaptic nodes
-- Node gets gradient contributions from post-synaptic nodes by querying its out_neighbors on each outgoing edge for the gradient contributions of that particular edge.
-
-Config schemas are defined at the appropriate level:
-- GRAPH_CONFIG_SCHEMA: Validates graph structure (node_list, edge_list, task_map)
-- EDGE_CONFIG_SCHEMA: Validates edge fields (source_name, target_name, slot)
-- Node-specific schemas: Defined in node classes (e.g., LinearNode.CONFIG_SCHEMA)
-- Energy/Activation schemas: Defined in their respective classes and validated via delegation
-"""
-
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Any, Optional, Sequence
 import jax
 import jax.numpy as jnp
 from fabricpc.core.types import (
+    EdgeInfo,
     NodeParams,
     GraphParams,
     NodeState,
     GraphState,
     GraphStructure,
 )
-from fabricpc.nodes import get_node_class
 from fabricpc.utils.helpers import update_node_in_state
 from fabricpc.core.inference import gather_inputs
+from fabricpc.graph.state_initializer import FeedforwardStateInit
 
 
-# TODO deprecated
-def build_graph_structure(config: dict) -> GraphStructure:
-    """
-    Convert configuration dictionary to static GraphStructure with slot validation.
+def build_graph_structure(
+    config: Optional[dict] = None,
+    *,
+    nodes: Optional[Sequence[Any]] = None,
+    edges: Optional[Sequence[EdgeInfo]] = None,
+    task_map: Optional[Dict[str, str]] = None,
+    graph_state_initializer: Optional[Any] = None,
+) -> GraphStructure:
+    """Build GraphStructure from concrete nodes and edges."""
+    if config is not None:
+        raise ValueError(
+            "Config-dict graph construction has been removed. "
+            "Construct node objects directly and pass nodes/edges."
+        )
 
-    This is a convenience function that delegates to GraphStructure.from_config().
+    if nodes is None or edges is None:
+        raise ValueError("object mode requires `nodes` and `edges`")
 
-    Args:
-        config: Configuration dictionary with node_list, edge_list, task_map
+    if graph_state_initializer is None:
+        graph_state_initializer = FeedforwardStateInit()
 
-    Returns:
-        Immutable GraphStructure with validated slots
-
-    Raises:
-        ValueError: If graph is misspecified
-        ConfigValidationError: If config validation fails
-    """
-    return GraphStructure.from_config(config)
+    return GraphStructure.from_objects(
+        nodes=nodes,
+        edges=edges,
+        task_map=task_map,
+        graph_state_initializer=graph_state_initializer,
+    )
 
 
 def compute_local_weight_gradients(
@@ -55,95 +50,52 @@ def compute_local_weight_gradients(
     final_state: GraphState,
     structure: GraphStructure,
 ) -> GraphParams:
-    """
-    Compute local weight gradients for each node using its own error signal.
-
-    This implements the local Hebbian learning rule for predictive coding:
-
-    Args:
-        params: Current model parameters
-        final_state: Converged state after inference
-        structure: Graph structure
-
-    Returns:
-        GraphParams containing gradients for the parameters
-    """
+    """Compute local weight gradients for each node using its own error signal."""
     gradients = {}
 
     for node_name, node_info in structure.nodes.items():
-        # Source nodes have no weights, but need empty gradient dict for consistency
         if node_info.in_degree == 0:
             gradients[node_name] = NodeParams(weights={}, biases={})
             continue
 
         in_edges_data = gather_inputs(node_info, structure, final_state)
-
-        # Get node class
-        node_class = get_node_class(node_info.node_type)
-
-        # Compute local gradients using node's method
-        node_state, grad_params = node_class.forward_learning(
+        node_cls = node_info.node.__class__
+        _, grad_params = node_cls.forward_learning(
             params.nodes[node_name],
             in_edges_data,
             final_state.nodes[node_name],
             node_info,
         )
 
-        # Store gradients
         gradients[node_name] = grad_params
 
-    # convert to GraphParams
-    params_gradients = GraphParams(nodes=gradients)
-
-    return params_gradients
+    return GraphParams(nodes=gradients)
 
 
-# TODO create abstraction and config schema for param initialization, similar to graph state initialization
 def initialize_params(
     structure: GraphStructure,
-    rng_key: jax.Array,  # from jax.random.PRNGKey
+    rng_key: jax.Array,
 ) -> GraphParams:
-    """
-    Initialize model parameters at the node level.
-
-    Each node class handles its own parameter initialization,
-    supporting complex nodes with multiple internal parameters.
-
-    Args:
-        structure: Graph structure
-        rng_key: JAX random key
-
-    Returns:
-        GraphParams with node-based parameter organization
-    """
+    """Initialize model parameters at the node level."""
     node_params = {}  # type: Dict[str, NodeParams]
 
-    # Split key for each node
     num_nodes = len([n for n in structure.nodes.values() if n.in_degree > 0])
-    if num_nodes > 0:
-        keys = jax.random.split(rng_key, num_nodes)
-    else:
-        keys = []
+    keys = jax.random.split(rng_key, num_nodes) if num_nodes > 0 else []
     key_idx = 0
 
     for node_name, node_info in structure.nodes.items():
-        # Skip source nodes (no parameters)
         if node_info.in_degree == 0:
             node_params[node_name] = NodeParams(weights={}, biases={})
             continue
 
-        # Get node class
-        node_class = get_node_class(node_info.node_type)
-
-        # Get the input shapes for each edge (full shapes for conv support)
         input_shapes = {}
         for edge_key in node_info.in_edges:
             edge_info = structure.edges[edge_key]
             source_node = structure.nodes[edge_info.source]
             input_shapes[edge_key] = source_node.shape
 
-        # Initialize parameters of the node
-        params_obj = node_class.initialize_params(
+        node_cls = node_info.node.__class__
+        params_obj = node_cls.initialize_params(
             keys[key_idx], node_info.shape, input_shapes, node_info.node_config
         )
         key_idx += 1
@@ -156,16 +108,7 @@ def set_latents_to_clamps(
     state: GraphState,
     clamps: Dict[str, jnp.ndarray],
 ) -> GraphState:
-    """
-    Set the latent states of specified nodes to their clamped values.
-
-    Args:
-        state: Current graph state
-        clamps: Dictionary of clamped values, keyed on node names
-
-    Returns:
-        Updated GraphState with latents set to clamped values
-    """
+    """Set latent states of specified nodes to clamped values."""
     for node_name, clamp_value in clamps.items():
         if node_name in state.nodes:
             state = update_node_in_state(state, node_name, z_latent=clamp_value)
@@ -173,52 +116,24 @@ def set_latents_to_clamps(
 
 
 def create_pc_graph(
-    config: dict,
-    rng_key: jax.Array,  # from jax.random.PRNGKey
+    config: Optional[dict] = None,
+    rng_key: Optional[jax.Array] = None,
+    *,
+    nodes: Optional[Sequence[Any]] = None,
+    edges: Optional[Sequence[EdgeInfo]] = None,
+    task_map: Optional[Dict[str, str]] = None,
+    graph_state_initializer: Optional[Any] = None,
 ) -> Tuple[GraphParams, GraphStructure]:
-    """
-    Create a complete PC graph with local Hebbian learning.
+    """Create a complete PC graph from node objects and edge references."""
+    if rng_key is None:
+        raise ValueError("`rng_key` is required")
 
-    This is the main entry point for creating a JAX PC model with the new architecture.
-
-    Args:
-        config: Configuration dictionary with node_list, edge_list, task_map
-        rng_key: JAX random key for initialization
-
-    Returns:
-        Tuple of (params, structure)
-
-    Example:
-        >>> config = {
-        ...     "node_list": [
-        ...         {
-        ...             "name": "pixels",
-        ...             "shape": (784,),
-        ...             "type": "linear",
-        ...             "activation": {"type": "identity"},
-        ...             "weight_init": {"type": "xavier"}
-        ...         },
-        ...         {
-        ...             "name": "hidden",
-        ...             "shape": (256,),
-        ...             "type": "linear",
-        ...             "activation": {"type": "relu"}
-        ...         },
-        ...         {
-        ...             "name": "class",
-        ...             "shape": (10,),
-        ...             "type": "linear",
-        ...             "activation": {"type": "softmax"}
-        ...         },
-        ...     ],
-        ...     "edge_list": [
-        ...         {"source_name": "pixels", "target_name": "hidden", "slot": "in"},
-        ...         {"source_name": "hidden", "target_name": "class", "slot": "in"},
-        ...     ],
-        ...     "task_map": {"x": "pixels", "y": "class"}
-        ... }
-        >>> params, structure = create_pc_graph(config, jax.random.PRNGKey(0))
-    """
-    structure = build_graph_structure(config)
+    structure = build_graph_structure(
+        config=config,
+        nodes=nodes,
+        edges=edges,
+        task_map=task_map,
+        graph_state_initializer=graph_state_initializer,
+    )
     params = initialize_params(structure, rng_key)
     return params, structure

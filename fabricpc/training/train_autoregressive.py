@@ -22,7 +22,6 @@ import optax
 from fabricpc.core.types import GraphParams, GraphState, GraphStructure, NodeParams
 from fabricpc.core.inference import run_inference, gather_inputs
 from fabricpc.graph.state_initializer import initialize_graph_state
-from fabricpc.nodes import get_node_class
 
 
 def create_causal_mask(seq_len: int) -> jnp.ndarray:
@@ -99,10 +98,8 @@ def compute_local_weight_gradients_ar(
             continue
 
         in_edges_data = gather_inputs(node_info, structure, final_state)
-        node_class = get_node_class(node_info.node_type)
-
         # Compute local gradients
-        node_state, grad_params = node_class.forward_learning(
+        node_state, grad_params = node_info.node.__class__.forward_learning(
             params.nodes[node_name],
             in_edges_data,
             final_state.nodes[node_name],
