@@ -21,7 +21,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from fabricpc.graph.graph_net import create_pc_graph
+from fabricpc.graph.graph_net import create_pc_graph as _create_pc_graph
+from tests.new_style_graph import graph_kwargs_from_legacy_config
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.training.multi_gpu import train_pcn_multi_gpu
 
@@ -143,7 +144,9 @@ class TestMultiGPUTraining:
         model_key, train_key1, train_key2, data_key = jax.random.split(rng_key, 4)
 
         # Create graph
-        params, structure = create_pc_graph(simple_config, model_key)
+        params, structure = _create_pc_graph(
+            rng_key=model_key, **graph_kwargs_from_legacy_config(simple_config)
+        )
 
         # Create data loader
         input_shape = structure.nodes["input"].shape
@@ -191,7 +194,9 @@ class TestMultiGPUTraining:
         )
 
         # Create graph
-        params, structure = create_pc_graph(simple_config, model_key)
+        params, structure = _create_pc_graph(
+            rng_key=model_key, **graph_kwargs_from_legacy_config(simple_config)
+        )
 
         # Create data loader
         input_shape = structure.nodes["input"].shape
@@ -270,7 +275,9 @@ class TestMultiGPUTraining:
         model_key, train_key, data_key = jax.random.split(rng_key, 3)
 
         # Create graph
-        params, structure = create_pc_graph(simple_config, model_key)
+        params, structure = _create_pc_graph(
+            rng_key=model_key, **graph_kwargs_from_legacy_config(simple_config)
+        )
 
         # Create data loader
         input_shape = structure.nodes["input"].shape
@@ -346,7 +353,9 @@ class TestMultiGPUTraining:
         model_key, train_key, data_key = jax.random.split(rng_key, 3)
 
         # Create graph
-        params, structure = create_pc_graph(simple_config, model_key)
+        params, structure = _create_pc_graph(
+            rng_key=model_key, **graph_kwargs_from_legacy_config(simple_config)
+        )
 
         # Create data loader
         input_shape = structure.nodes["input"].shape
@@ -449,7 +458,9 @@ class TestMultiGPUUtilities:
         """Test parameter replication utility."""
         from fabricpc.training.multi_gpu import replicate_params
 
-        params, structure = create_pc_graph(simple_config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(simple_config)
+        )
 
         # Replicate to 2 devices
         replicated = replicate_params(params, n_devices=2)

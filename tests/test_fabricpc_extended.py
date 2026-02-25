@@ -20,12 +20,24 @@ from hypothesis import given, strategies as st, settings
 
 from fabricpc.core.types import NodeState, GraphState
 from fabricpc.core.config import ConfigValidationError
-from fabricpc.graph.graph_net import create_pc_graph, build_graph_structure
-from fabricpc.graph.state_initializer import initialize_graph_state
+from fabricpc.graph.graph_net import (
+    create_pc_graph as _create_pc_graph,
+    build_graph_structure as _build_graph_structure,
+)
+from fabricpc.graph.state_initializer import (
+    initialize_graph_state as _initialize_graph_state,
+)
+from tests.new_style_graph import graph_kwargs_from_legacy_config, state_init_from_spec
 from fabricpc.core.inference import run_inference
 
 # Set up JAX
 jax.config.update("jax_platform_name", "cpu")
+
+
+def initialize_graph_state(*args, state_init_config=None, **kwargs):
+    if isinstance(state_init_config, dict):
+        state_init_config = state_init_from_spec(state_init_config)
+    return _initialize_graph_state(*args, state_init_config=state_init_config, **kwargs)
 
 
 class TestValidation:
@@ -53,7 +65,7 @@ class TestValidation:
         }
 
         with pytest.raises(ValueError, match="duplicate.*node"):
-            build_graph_structure(config)
+            _build_graph_structure(**graph_kwargs_from_legacy_config(config))
 
     def test_self_edge_disallowed(self):
         """Test that self-edges are not allowed."""
@@ -73,7 +85,7 @@ class TestValidation:
         }
 
         with pytest.raises(ValueError, match="self.*edge|same.*node"):
-            build_graph_structure(config)
+            _build_graph_structure(**graph_kwargs_from_legacy_config(config))
 
     def test_nonexistent_node_in_edge(self):
         """Test that edges referencing non-existent nodes raise an error."""
@@ -88,7 +100,7 @@ class TestValidation:
         }
 
         with pytest.raises(ValueError, match="not found|does not exist"):
-            build_graph_structure(config)
+            _build_graph_structure(**graph_kwargs_from_legacy_config(config))
 
 
 class TestShapeConsistency:
@@ -121,7 +133,9 @@ class TestShapeConsistency:
     def test_allocate_and_tensor_shapes(self, simple_chain_config):
         """Test that allocated tensors have correct shapes."""
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(simple_chain_config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(simple_chain_config)
+        )
 
         batch_size = 5
 
@@ -156,7 +170,9 @@ class TestShapeConsistency:
     def test_projection_shapes_match(self, simple_chain_config):
         """Test that projections maintain correct shapes."""
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(simple_chain_config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(simple_chain_config)
+        )
 
         batch_size = 3
         x = jax.random.normal(rng_key, (batch_size, 4))
@@ -211,7 +227,9 @@ class TestPropertyBased:
         }
 
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
         # Create dummy clamps
         x_data = jnp.zeros((batch_size, dim_a))
@@ -252,7 +270,9 @@ class TestPropertyBased:
         }
 
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
         batch_size = 4
         x = jax.random.normal(rng_key, (batch_size, 3))
@@ -307,7 +327,9 @@ class TestComplexGraphs:
         }
 
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
         # Verify skip connection exists
         output_edges = structure.nodes["output"].in_edges
@@ -369,7 +391,9 @@ class TestComplexGraphs:
         }
 
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
         # Verify merger node has 3 inputs
         assert structure.nodes["merger"].in_degree == 3
@@ -406,7 +430,9 @@ class TestEnergyDynamics:
     def test_energy_monotonic_decrease(self, energy_test_config):
         """Test that energy decreases monotonically during inference."""
         rng_key = jax.random.PRNGKey(42)
-        params, structure = create_pc_graph(energy_test_config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(energy_test_config)
+        )
 
         batch_size = 16
         x = jax.random.normal(rng_key, (batch_size, 5))
@@ -457,10 +483,15 @@ def test_different_node_types(node_type):
     }
 
     rng_key = jax.random.PRNGKey(42)
-    params, structure = create_pc_graph(config, rng_key)
+    params, structure = _create_pc_graph(
+        rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+    )
 
-    assert structure.nodes["a"].node_type == node_type
-    assert structure.nodes["b"].node_type == node_type
+    expected_type_names = {
+        "linear": "LinearNode",
+    }
+    assert structure.nodes["a"].node_type == expected_type_names[node_type]
+    assert structure.nodes["b"].node_type == expected_type_names[node_type]
 
 
 @pytest.mark.parametrize("batch_size", [1, 4, 8, 16, 32])
@@ -478,7 +509,9 @@ def test_various_batch_sizes(batch_size):
     }
 
     rng_key = jax.random.PRNGKey(42)
-    params, structure = create_pc_graph(config, rng_key)
+    params, structure = _create_pc_graph(
+        rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+    )
 
     x = jax.random.normal(rng_key, (batch_size, 5))
     y = jax.random.normal(rng_key, (batch_size, 3))

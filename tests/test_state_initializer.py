@@ -19,18 +19,28 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from fabricpc.graph.graph_net import create_pc_graph
+from fabricpc.graph.graph_net import create_pc_graph as _create_pc_graph
+from fabricpc.graph.state_initializer import (
+    initialize_graph_state as _initialize_graph_state,
+)
 from fabricpc.graph.state_initializer import (
     StateInitBase,
-    register_state_init,
-    get_state_init_class,
-    list_state_init_types,
-    unregister_state_init,
-    initialize_graph_state,
-    StateInitRegistrationError,
+    GlobalStateInit,
+    NodeDistributionStateInit,
+    FeedforwardStateInit,
+)
+from tests.new_style_graph import (
+    graph_kwargs_from_legacy_config,
+    state_init_from_spec,
 )
 
 jax.config.update("jax_platform_name", "cpu")
+
+
+def initialize_graph_state(*args, state_init_config=None, **kwargs):
+    if isinstance(state_init_config, dict):
+        state_init_config = state_init_from_spec(state_init_config)
+    return _initialize_graph_state(*args, state_init_config=state_init_config, **kwargs)
 
 
 @pytest.fixture
@@ -62,38 +72,13 @@ def simple_graph_config():
 
 
 class TestStateInitRegistry:
-    """Test suite for state initializer registry operations."""
+    """Test suite for built-in state initializer classes."""
 
-    def test_list_state_init_types(self):
-        """Test listing registered state init types."""
-        types = list_state_init_types()
-
-        # Should include built-in types
-        assert "global" in types
-        assert "node_distribution" in types
-        assert "feedforward" in types
-
-    def test_get_state_init_class(self):
-        """Test getting state init class by type."""
-        dist_class = get_state_init_class("node_distribution")
-
-        assert dist_class is not None
-        assert hasattr(dist_class, "initialize_state")
-        assert hasattr(dist_class, "CONFIG_SCHEMA")
-
-    def test_get_state_init_class_case_insensitive(self):
-        """Test that type lookup is case-insensitive."""
-        assert get_state_init_class("node_Distribution") == get_state_init_class(
-            "node_distribution"
-        )
-        assert get_state_init_class("FEEDFORWARD") == get_state_init_class(
-            "feedforward"
-        )
-
-    def test_get_unknown_type_raises(self):
-        """Test that unknown type raises ValueError."""
-        with pytest.raises(ValueError, match="Unknown"):
-            get_state_init_class("nonexistent_state_init")
+    def test_builtin_state_init_classes_available(self):
+        """Test that built-in state init classes are importable and concrete."""
+        assert issubclass(GlobalStateInit, StateInitBase)
+        assert issubclass(NodeDistributionStateInit, StateInitBase)
+        assert issubclass(FeedforwardStateInit, StateInitBase)
 
 
 class TestDistributionStateInit:
@@ -101,7 +86,9 @@ class TestDistributionStateInit:
 
     def test_distribution_init_graph_level_config(self, simple_graph_config, rng_key):
         """Test distribution init with graph-level default initializer."""
-        params, structure = create_pc_graph(simple_graph_config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(simple_graph_config)
+        )
 
         batch_size = 8
         x = jax.random.normal(rng_key, (batch_size, 784))
@@ -137,7 +124,9 @@ class TestDistributionStateInit:
 
     def test_distribution_init_with_zeros(self, simple_graph_config, rng_key):
         """Test distribution init with zeros initializer."""
-        params, structure = create_pc_graph(simple_graph_config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(simple_graph_config)
+        )
 
         batch_size = 4
         x = jax.random.normal(rng_key, (batch_size, 784))
@@ -176,7 +165,9 @@ class TestDistributionStateInit:
             "task_map": {"x": "input", "y": "output"},
         }
 
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
         batch_size = 8
         x = jax.random.normal(rng_key, (batch_size, 32))
@@ -205,7 +196,9 @@ class TestFeedforwardStateInit:
 
     def test_feedforward_init_requires_params(self, simple_graph_config, rng_key):
         """Test that feedforward init raises error without params."""
-        params, structure = create_pc_graph(simple_graph_config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(simple_graph_config)
+        )
 
         batch_size = 4
         x = jax.random.normal(rng_key, (batch_size, 784))
@@ -224,7 +217,9 @@ class TestFeedforwardStateInit:
 
     def test_feedforward_init_with_params(self, simple_graph_config, rng_key):
         """Test feedforward init propagates through network."""
-        params, structure = create_pc_graph(simple_graph_config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(simple_graph_config)
+        )
 
         batch_size = 4
         x = jax.random.normal(rng_key, (batch_size, 784))
@@ -285,7 +280,9 @@ class TestFeedforwardStateInit:
             "task_map": {"x": "input", "y": "output"},
         }
 
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
         batch_size = 2
         x = jax.random.normal(rng_key, (batch_size, 32))
@@ -313,7 +310,9 @@ class TestClampHandling:
 
     def test_distribution_init_respects_clamps(self, simple_graph_config, rng_key):
         """Test that distribution init respects clamped values."""
-        params, structure = create_pc_graph(simple_graph_config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(simple_graph_config)
+        )
 
         batch_size = 4
         x = jnp.ones((batch_size, 784)) * 5.0  # Specific clamped value
@@ -334,7 +333,9 @@ class TestClampHandling:
 
     def test_feedforward_init_respects_clamps(self, simple_graph_config, rng_key):
         """Test that feedforward init respects clamped values."""
-        params, structure = create_pc_graph(simple_graph_config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(simple_graph_config)
+        )
 
         batch_size = 4
         x = jnp.ones((batch_size, 784)) * 2.0
@@ -356,7 +357,9 @@ class TestClampHandling:
 
     def test_partial_clamps(self, simple_graph_config, rng_key):
         """Test initialization with only some nodes clamped."""
-        params, structure = create_pc_graph(simple_graph_config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(simple_graph_config)
+        )
 
         batch_size = 4
         x = jnp.ones((batch_size, 784)) * 3.0
@@ -384,7 +387,9 @@ class TestConvenienceFunctions:
 
     def test_initialize_graph_state_function(self, simple_graph_config, rng_key):
         """Test that initialize_graph_state convenience function works correctly."""
-        params, structure = create_pc_graph(simple_graph_config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(simple_graph_config)
+        )
 
         batch_size = 4
         x = jax.random.normal(rng_key, (batch_size, 784))
@@ -403,22 +408,20 @@ class TestConvenienceFunctions:
 
 
 class TestCustomStateInit:
-    """Test custom state initializer registration."""
+    """Test custom state initializer usage via direct object construction."""
 
-    def test_register_custom_state_init(self, simple_graph_config, rng_key):
-        """Test registering and using a custom state initializer."""
+    def test_custom_state_init_object(self, simple_graph_config, rng_key):
+        """Test using a custom state initializer object."""
 
-        @register_state_init("test_custom_state")
         class TestCustomStateInit(StateInitBase):
-            CONFIG_SCHEMA = {"fill_value": {"type": (int, float), "default": 99.0}}
+            def __init__(self, fill_value: float = 99.0):
+                self.fill_value = fill_value
 
-            @staticmethod
             def initialize_state(
-                structure, batch_size, rng_key, clamps, config, params=None
+                self, structure, batch_size, rng_key, clamps, params=None
             ):
                 from fabricpc.core.types import GraphState, NodeState
 
-                fill_value = config.get("fill_value", 99.0)
                 node_state_dict = {}
 
                 for node_name, node_info in structure.nodes.items():
@@ -427,7 +430,7 @@ class TestCustomStateInit:
                     if node_name in clamps:
                         z_latent = clamps[node_name]
                     else:
-                        z_latent = jnp.full(shape, fill_value)
+                        z_latent = jnp.full(shape, self.fill_value)
 
                     node_state_dict[node_name] = NodeState(
                         z_latent=z_latent,
@@ -441,33 +444,29 @@ class TestCustomStateInit:
 
                 return GraphState(nodes=node_state_dict, batch_size=batch_size)
 
-        try:
-            # Verify registration
-            assert "test_custom_state" in list_state_init_types()
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(simple_graph_config)
+        )
 
-            params, structure = create_pc_graph(simple_graph_config, rng_key)
+        batch_size = 2
+        x = jax.random.normal(rng_key, (batch_size, 784))
+        y = jax.random.normal(rng_key, (batch_size, 10))
+        clamps = {"input": x, "output": y}
 
-            batch_size = 2
-            x = jax.random.normal(rng_key, (batch_size, 784))
-            y = jax.random.normal(rng_key, (batch_size, 10))
-            clamps = {"input": x, "output": y}
+        state = initialize_graph_state(
+            structure,
+            batch_size,
+            rng_key,
+            clamps,
+            state_init_config=TestCustomStateInit(fill_value=42.0),
+        )
 
-            state = initialize_graph_state(
-                structure,
-                batch_size,
-                rng_key,
-                clamps,
-                state_init_config={"type": "test_custom_state", "fill_value": 42.0},
-            )
+        # Hidden should be filled with 42.0
+        assert jnp.all(state.nodes["hidden"].z_latent == 42.0)
 
-            # Hidden should be filled with 42.0
-            assert jnp.all(state.nodes["hidden"].z_latent == 42.0)
-
-            # Clamped nodes should have clamped values
-            assert jnp.allclose(state.nodes["input"].z_latent, x)
-            assert jnp.allclose(state.nodes["output"].z_latent, y)
-        finally:
-            unregister_state_init("test_custom_state")
+        # Clamped nodes should have clamped values
+        assert jnp.allclose(state.nodes["input"].z_latent, x)
+        assert jnp.allclose(state.nodes["output"].z_latent, y)
 
 
 class TestFeedforwardZeroError:
@@ -506,7 +505,9 @@ class TestFeedforwardZeroError:
             "task_map": {"x": "input", "y": "output"},
         }
 
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
         batch_size = 4
         x = jax.random.normal(rng_key, (batch_size, 32))
@@ -587,7 +588,9 @@ class TestFeedforwardZeroError:
             "task_map": {"x": "input", "y": "output", "causal_mask": "mask"},
         }
 
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
         batch_size = 2
         # Create one-hot input
@@ -650,7 +653,9 @@ class TestFeedforwardZeroError:
             "task_map": {"x": "input", "y": "output"},
         }
 
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
         batch_size = 2
         x = jax.random.normal(rng_key, (batch_size, 16))
@@ -690,7 +695,9 @@ class TestStateInitDeterminism:
 
     def test_distribution_init_deterministic(self, simple_graph_config, rng_key):
         """Test distribution init is deterministic with same key."""
-        params, structure = create_pc_graph(simple_graph_config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(simple_graph_config)
+        )
 
         batch_size = 4
         clamps = {}
@@ -717,7 +724,9 @@ class TestStateInitDeterminism:
 
     def test_feedforward_init_deterministic(self, simple_graph_config, rng_key):
         """Test feedforward init is deterministic with same key."""
-        params, structure = create_pc_graph(simple_graph_config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(simple_graph_config)
+        )
 
         batch_size = 4
         x = jax.random.normal(rng_key, (batch_size, 784))

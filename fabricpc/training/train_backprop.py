@@ -22,7 +22,10 @@ import optax
 
 from fabricpc.core import GraphState
 from fabricpc.core.types import GraphParams, GraphStructure
-from fabricpc.graph.state_initializer import initialize_graph_state
+from fabricpc.graph.state_initializer import (
+    FeedforwardStateInit,
+    initialize_graph_state,
+)
 from fabricpc.training.train_autoregressive import create_causal_mask, compute_loss
 
 
@@ -33,10 +36,10 @@ def validate_feedforward_init(structure: GraphStructure):
     Raises:
         ValueError if incompatible.
     """
-    initializer_type = structure.config["graph_state_initializer"].get("type", "")
-    if initializer_type != "feedforward":
+    initializer_obj = structure.config.get("graph_state_initializer")
+    if not isinstance(initializer_obj, FeedforwardStateInit):
         raise ValueError(
-            f"GraphState initializer must be 'feedforward' for backprop training, got '{initializer_type}'"
+            "GraphState initializer must be a FeedforwardStateInit instance for backprop training"
         )
 
 

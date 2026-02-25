@@ -20,13 +20,22 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from fabricpc.graph.graph_net import create_pc_graph
-from fabricpc.graph.state_initializer import initialize_graph_state
+from fabricpc.graph.graph_net import create_pc_graph as _create_pc_graph
+from fabricpc.graph.state_initializer import (
+    initialize_graph_state as _initialize_graph_state,
+)
+from tests.new_style_graph import graph_kwargs_from_legacy_config, state_init_from_spec
 from fabricpc.core.inference import run_inference
 from fabricpc.training import train_step
 from fabricpc.training.optimizers import create_optimizer
 
 jax.config.update("jax_platform_name", "cpu")
+
+
+def initialize_graph_state(*args, state_init_config=None, **kwargs):
+    if isinstance(state_init_config, dict):
+        state_init_config = state_init_from_spec(state_init_config)
+    return _initialize_graph_state(*args, state_init_config=state_init_config, **kwargs)
 
 
 @pytest.fixture
@@ -58,7 +67,9 @@ class TestNDimShapes:
             "task_map": {"x": "input", "y": "output"},
         }
 
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
         # Verify shapes
         assert structure.nodes["input"].shape == (784,)
@@ -116,7 +127,9 @@ class TestNDimShapes:
             "task_map": {"x": "image", "y": "output"},
         }
 
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
         # Verify shapes
         assert structure.nodes["image"].shape == (28, 28)
@@ -176,7 +189,9 @@ class TestNDimShapes:
             "task_map": {"x": "image", "y": "output"},
         }
 
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
         # Verify shapes
         assert structure.nodes["image"].shape == (28, 28, 1)
@@ -226,7 +241,9 @@ class TestNDimShapes:
             "task_map": {"x": "rgb_image", "y": "output"},
         }
 
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
         # Verify shapes
         assert structure.nodes["rgb_image"].shape == (32, 32, 3)
@@ -281,7 +298,9 @@ class TestNDimShapes:
             "task_map": {"x": "image", "y": "output"},
         }
 
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
         # Verify weight shapes for each transition
         # image (28, 28) -> hidden1 (256): weights (784, 256)
@@ -340,7 +359,9 @@ class TestSameParamsDifferentBatchSizes:
         }
 
         # Create params ONCE
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
         # Test with different batch sizes using the SAME params
         for batch_size in [1, 32, 128]:
@@ -400,7 +421,9 @@ class TestSameParamsDifferentBatchSizes:
         }
 
         # Create params ONCE
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
         # Test with different batch sizes
         for batch_size in [1, 16, 64]:
@@ -446,7 +469,9 @@ class TestNDimTraining:
             "task_map": {"x": "image", "y": "output"},
         }
 
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
         # Create optimizer
         optimizer = create_optimizer({"type": "adam", "lr": 0.01})
@@ -501,7 +526,9 @@ class TestNDimTraining:
             "task_map": {"x": "image", "y": "output"},
         }
 
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
         optimizer = create_optimizer({"type": "sgd", "lr": 0.01})
         opt_state = optimizer.init(params)
 
@@ -550,7 +577,9 @@ class TestEnergyWithNDimShapes:
             "task_map": {"x": "image", "y": "output"},
         }
 
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
         batch_size = 8
         x = jax.random.normal(rng_key, (batch_size, 14, 14))

@@ -26,18 +26,26 @@ import jax.numpy as jnp
 
 from fabricpc.core.types import NodeState, NodeParams, GraphState
 from fabricpc.graph.graph_net import (
-    create_pc_graph,
-    build_graph_structure,
+    create_pc_graph as _create_pc_graph,
+    build_graph_structure as _build_graph_structure,
     compute_local_weight_gradients,
 )
-from fabricpc.graph.state_initializer import initialize_graph_state
+from fabricpc.graph.state_initializer import (
+    initialize_graph_state as _initialize_graph_state,
+)
+from tests.new_style_graph import graph_kwargs_from_legacy_config, state_init_from_spec
 from fabricpc.core.inference import run_inference
 from fabricpc.training import train_step
 from fabricpc.training.optimizers import create_optimizer
-from fabricpc.nodes import get_node_class
 
 # Set up JAX
 jax.config.update("jax_platform_name", "cpu")
+
+
+def initialize_graph_state(*args, state_init_config=None, **kwargs):
+    if isinstance(state_init_config, dict):
+        state_init_config = state_init_from_spec(state_init_config)
+    return _initialize_graph_state(*args, state_init_config=state_init_config, **kwargs)
 
 
 @pytest.fixture
@@ -91,7 +99,9 @@ def sample_config():
 @pytest.fixture
 def graph(sample_config, rng_key):
     """Fixture providing a constructed graph with parameters and structure."""
-    params, structure = create_pc_graph(sample_config, rng_key)
+    params, structure = _create_pc_graph(
+        rng_key=rng_key, **graph_kwargs_from_legacy_config(sample_config)
+    )
     return params, structure
 
 
@@ -100,7 +110,9 @@ class TestGraphConstruction:
 
     def test_graph_construction_with_slots(self, sample_config, rng_key):
         """Test building a graph with slot validation and node classes."""
-        params, structure = create_pc_graph(sample_config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(sample_config)
+        )
 
         # Verify structure
         assert len(structure.nodes) == 4, "Should have 4 nodes"
@@ -143,7 +155,7 @@ class TestGraphConstruction:
         }
 
         with pytest.raises(ValueError, match="non-existent slot"):
-            build_graph_structure(config)
+            _build_graph_structure(**graph_kwargs_from_legacy_config(config))
 
 
 class TestInference:
@@ -388,7 +400,7 @@ class TestForwardMethods:
 
         for node_name, node_info in structure.nodes.items():
             if node_info.in_degree > 0:  # Skip source nodes
-                node_class = get_node_class(node_info.node_type)
+                node_class = node_info.node.__class__
                 node_state = state.nodes[node_name]
 
                 # Collect edge inputs
@@ -429,7 +441,7 @@ class TestForwardMethods:
 
         for node_name, node_info in structure.nodes.items():
             if node_info.in_degree > 0:  # Skip source nodes
-                node_class = get_node_class(node_info.node_type)
+                node_class = node_info.node.__class__
                 node_state = state.nodes[node_name]
                 node_params = params.nodes[node_name]
 
@@ -489,9 +501,18 @@ def test_different_activations(activation_type, rng_key):
         "task_map": {"x": "input", "y": "output"},
     }
 
-    params, structure = create_pc_graph(config, rng_key)
+    params, structure = _create_pc_graph(
+        rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+    )
+    expected_class_names = {
+        "identity": "IdentityActivation",
+        "relu": "ReLUActivation",
+        "tanh": "TanhActivation",
+        "sigmoid": "SigmoidActivation",
+    }
     assert (
-        structure.nodes["hidden"].node_config["activation"]["type"] == activation_type
+        structure.nodes["hidden"].activation.__class__.__name__
+        == expected_class_names[activation_type]
     )
 
 
@@ -516,7 +537,9 @@ def test_different_weight_initializations(weight_init_type, rng_key):
         "task_map": {"x": "input", "y": "output"},
     }
 
-    params, structure = create_pc_graph(config, rng_key)
+    params, structure = _create_pc_graph(
+        rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+    )
 
     # Check that weights are initialized (not zero or NaN)
     for edge_key, weight in params.nodes["hidden"].weights.items():

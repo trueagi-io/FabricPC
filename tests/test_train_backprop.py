@@ -12,7 +12,8 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from fabricpc.graph.graph_net import create_pc_graph
+from fabricpc.graph.graph_net import create_pc_graph as _create_pc_graph
+from tests.new_style_graph import graph_kwargs_from_legacy_config
 from fabricpc.training.train_backprop import (
     train_backprop,
     evaluate_backprop,
@@ -80,7 +81,9 @@ def feedforward_graph_config():
 
 @pytest.fixture
 def graph_with_feedforward(feedforward_graph_config, rng_key):
-    params, structure = create_pc_graph(feedforward_graph_config, rng_key)
+    params, structure = _create_pc_graph(
+        rng_key=rng_key, **graph_kwargs_from_legacy_config(feedforward_graph_config)
+    )
     return params, structure
 
 
@@ -181,9 +184,11 @@ class TestTrainBackprop:
             "task_map": {"x": "input", "y": "output"},
             "graph_state_initializer": {"type": "global"},  # Not feedforward
         }
-        params, structure = create_pc_graph(config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
+        )
 
-        with pytest.raises(ValueError, match="feedforward"):
+        with pytest.raises(ValueError, match="FeedforwardStateInit|feedforward"):
             validate_feedforward_init(structure)
 
 
@@ -250,7 +255,9 @@ class TestIntegration:
 
     def test_train_then_evaluate(self, feedforward_graph_config, rng_key):
         """Test complete pipeline: train then evaluate."""
-        params, structure = create_pc_graph(feedforward_graph_config, rng_key)
+        params, structure = _create_pc_graph(
+            rng_key=rng_key, **graph_kwargs_from_legacy_config(feedforward_graph_config)
+        )
 
         train_loader = make_mock_loader(rng_key, batch_size=16, num_batches=10)
         test_loader = make_mock_loader(
