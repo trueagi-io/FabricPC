@@ -432,8 +432,8 @@ def main():
     BATCH_SIZE = 128     # Batch size
     NUM_EPOCHS = 1      # Training epochs
     INFER_STEPS = 10    # Inference iterations per step
-    ETA_INFER = 0.05    # Inference learning rate
-    LR = 1e-3           # Weight learning rate
+    ETA_INFER = 0.01    # Inference learning rate
+    LR = 1e-4           # Weight learning rate
 
     # fmt: on
     # Random keys
@@ -669,6 +669,7 @@ def main():
         def debug_iter_callback(
             epoch_idx: int,
             batch_idx: int,
+            params: Any,
             energy: float,
             ce_loss: float,
             final_state: Any,
@@ -684,6 +685,11 @@ def main():
             tracker.track_batch_energy(energy_value, epoch=epoch_idx, batch=batch_idx)
             tracker.track_batch_energy_per_node(
                 final_state, structure, epoch=epoch_idx, batch=batch_idx
+            )
+            tracker.track_weight_distributions(
+                params,
+                structure,
+                epoch=epoch_idx,
             )
             tracker.track_latent_distributions(
                 final_state,

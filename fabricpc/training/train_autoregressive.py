@@ -334,7 +334,15 @@ def train_autoregressive(
         epoch_callback: Optional callback (epoch, params, structure, config, rng) -> any
         iter_callback: Optional callback (epoch, batch_idx, loss) -> any
         debug_iter_callback: Optional callback:
-            (epoch_idx, batch_idx, energy, ce_loss, final_state, inference_history) -> any
+            (
+                epoch_idx,
+                batch_idx,
+                params,
+                energy,
+                ce_loss,
+                final_state,
+                inference_history,
+            ) -> any
             where inference_history is None unless history collection is enabled.
         debug_collect_inference_history: Whether to collect sampled inference histories.
         debug_collect_every: Subsample stride for collected inference history steps.
@@ -452,6 +460,7 @@ def train_autoregressive(
                 debug_iter_callback(
                     epoch_idx,
                     batch_idx,
+                    params,
                     energy,
                     ce_loss,
                     final_state,
