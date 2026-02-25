@@ -12,8 +12,11 @@ import pytest
 import jax
 import jax.numpy as jnp
 
+from fabricpc.core.types import EdgeInfo
+from fabricpc.core.activations import ReLUActivation, SoftmaxActivation
 from fabricpc.graph.graph_net import create_pc_graph as _create_pc_graph
-from tests.new_style_graph import graph_kwargs_from_legacy_config
+from fabricpc.graph.state_initializer import FeedforwardStateInit, GlobalStateInit
+from fabricpc.nodes import LinearNode
 from fabricpc.training.train_backprop import (
     train_backprop,
     evaluate_backprop,
@@ -54,36 +57,35 @@ def rng_key():
 @pytest.fixture
 def feedforward_graph_config():
     """Graph config with feedforward state initializer for backprop training."""
+    input_node = LinearNode(name="input", shape=(10,))
+    hidden_node = LinearNode(
+        name="hidden",
+        shape=(20,),
+        activation=ReLUActivation(),
+    )
+    output_node = LinearNode(
+        name="output",
+        shape=(5,),
+        activation=SoftmaxActivation(),
+    )
     return {
-        "node_list": [
-            {"name": "input", "shape": (10,), "type": "linear"},
-            {
-                "name": "hidden",
-                "shape": (20,),
-                "type": "linear",
-                "activation": {"type": "relu"},
-            },
-            {
-                "name": "output",
-                "shape": (5,),
-                "type": "linear",
-                "activation": {"type": "softmax"},
-            },
+        "nodes": [
+            input_node,
+            hidden_node,
+            output_node,
         ],
-        "edge_list": [
-            {"source_name": "input", "target_name": "hidden", "slot": "in"},
-            {"source_name": "hidden", "target_name": "output", "slot": "in"},
+        "edges": [
+            EdgeInfo.from_refs(input_node, hidden_node, slot="in"),
+            EdgeInfo.from_refs(hidden_node, output_node, slot="in"),
         ],
         "task_map": {"x": "input", "y": "output"},
-        "graph_state_initializer": {"type": "feedforward"},
+        "graph_state_initializer": FeedforwardStateInit(),
     }
 
 
 @pytest.fixture
 def graph_with_feedforward(feedforward_graph_config, rng_key):
-    params, structure = _create_pc_graph(
-        rng_key=rng_key, **graph_kwargs_from_legacy_config(feedforward_graph_config)
-    )
+    params, structure = _create_pc_graph(rng_key=rng_key, **feedforward_graph_config)
     return params, structure
 
 
@@ -173,20 +175,20 @@ class TestTrainBackprop:
 
     def test_train_backprop_invalid_initializer_raises(self, rng_key):
         """Test that non-feedforward initializer raises error."""
+        input_node = LinearNode(name="input", shape=(10,))
+        output_node = LinearNode(name="output", shape=(5,))
         config = {
-            "node_list": [
-                {"name": "input", "shape": (10,), "type": "linear"},
-                {"name": "output", "shape": (5,), "type": "linear"},
+            "nodes": [
+                input_node,
+                output_node,
             ],
-            "edge_list": [
-                {"source_name": "input", "target_name": "output", "slot": "in"}
+            "edges": [
+                EdgeInfo.from_refs(input_node, output_node, slot="in"),
             ],
             "task_map": {"x": "input", "y": "output"},
-            "graph_state_initializer": {"type": "global"},  # Not feedforward
+            "graph_state_initializer": GlobalStateInit(),  # Not feedforward
         }
-        params, structure = _create_pc_graph(
-            rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
-        )
+        params, structure = _create_pc_graph(rng_key=rng_key, **config)
 
         with pytest.raises(ValueError, match="FeedforwardStateInit|feedforward"):
             validate_feedforward_init(structure)
@@ -256,7 +258,7 @@ class TestIntegration:
     def test_train_then_evaluate(self, feedforward_graph_config, rng_key):
         """Test complete pipeline: train then evaluate."""
         params, structure = _create_pc_graph(
-            rng_key=rng_key, **graph_kwargs_from_legacy_config(feedforward_graph_config)
+            rng_key=rng_key, **feedforward_graph_config
         )
 
         train_loader = make_mock_loader(rng_key, batch_size=16, num_batches=10)

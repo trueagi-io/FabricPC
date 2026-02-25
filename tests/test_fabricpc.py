@@ -24,7 +24,19 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from fabricpc.core.types import NodeState, NodeParams, GraphState
+from fabricpc.core.activations import (
+    IdentityActivation,
+    ReLUActivation,
+    TanhActivation,
+    SigmoidActivation,
+)
+from fabricpc.core.initializers import (
+    UniformInitializer,
+    NormalInitializer,
+    XavierInitializer,
+    KaimingInitializer,
+)
+from fabricpc.core.types import NodeState, NodeParams, GraphState, EdgeInfo
 from fabricpc.graph.graph_net import (
     create_pc_graph as _create_pc_graph,
     build_graph_structure as _build_graph_structure,
@@ -33,7 +45,7 @@ from fabricpc.graph.graph_net import (
 from fabricpc.graph.state_initializer import (
     initialize_graph_state as _initialize_graph_state,
 )
-from tests.new_style_graph import graph_kwargs_from_legacy_config, state_init_from_spec
+from fabricpc.nodes import LinearNode
 from fabricpc.core.inference import run_inference
 from fabricpc.training import train_step
 from fabricpc.training.optimizers import create_optimizer
@@ -43,8 +55,6 @@ jax.config.update("jax_platform_name", "cpu")
 
 
 def initialize_graph_state(*args, state_init_config=None, **kwargs):
-    if isinstance(state_init_config, dict):
-        state_init_config = state_init_from_spec(state_init_config)
     return _initialize_graph_state(*args, state_init_config=state_init_config, **kwargs)
 
 
@@ -57,40 +67,36 @@ def rng_key():
 @pytest.fixture
 def sample_config():
     """Fixture providing a sample graph configuration."""
+    input_node = LinearNode(name="input", shape=(10,), activation=IdentityActivation())
+    hidden1_node = LinearNode(
+        name="hidden1",
+        shape=(20,),
+        activation=ReLUActivation(),
+        weight_init=XavierInitializer(),
+    )
+    hidden2_node = LinearNode(
+        name="hidden2",
+        shape=(15,),
+        activation=TanhActivation(),
+    )
+    output_node = LinearNode(
+        name="output",
+        shape=(5,),
+        activation=SigmoidActivation(),
+    )
+
     return {
-        "node_list": [
-            {
-                "name": "input",
-                "shape": (10,),
-                "type": "linear",
-                "activation": {"type": "identity"},
-            },
-            {
-                "name": "hidden1",
-                "shape": (20,),
-                "type": "linear",
-                "activation": {"type": "relu"},
-                "weight_init": {"type": "xavier"},
-            },
-            {
-                "name": "hidden2",
-                "shape": (15,),
-                "type": "linear",
-                "activation": {"type": "tanh"},
-            },
-            {
-                "name": "output",
-                "shape": (5,),
-                "type": "linear",
-                "activation": {"type": "sigmoid"},
-            },
+        "nodes": [
+            input_node,
+            hidden1_node,
+            hidden2_node,
+            output_node,
         ],
-        "edge_list": [
-            {"source_name": "input", "target_name": "hidden1", "slot": "in"},
-            {"source_name": "hidden1", "target_name": "hidden2", "slot": "in"},
-            {"source_name": "hidden2", "target_name": "output", "slot": "in"},
-            # Test skip connection
-            {"source_name": "hidden1", "target_name": "output", "slot": "in"},
+        "edges": [
+            EdgeInfo.from_refs(input_node, hidden1_node, slot="in"),
+            EdgeInfo.from_refs(hidden1_node, hidden2_node, slot="in"),
+            EdgeInfo.from_refs(hidden2_node, output_node, slot="in"),
+            EdgeInfo.from_refs(hidden1_node, output_node, slot="in"),
         ],
         "task_map": {"x": "input", "y": "output"},
     }
@@ -99,9 +105,7 @@ def sample_config():
 @pytest.fixture
 def graph(sample_config, rng_key):
     """Fixture providing a constructed graph with parameters and structure."""
-    params, structure = _create_pc_graph(
-        rng_key=rng_key, **graph_kwargs_from_legacy_config(sample_config)
-    )
+    params, structure = _create_pc_graph(rng_key=rng_key, **sample_config)
     return params, structure
 
 
@@ -110,9 +114,7 @@ class TestGraphConstruction:
 
     def test_graph_construction_with_slots(self, sample_config, rng_key):
         """Test building a graph with slot validation and node classes."""
-        params, structure = _create_pc_graph(
-            rng_key=rng_key, **graph_kwargs_from_legacy_config(sample_config)
-        )
+        params, structure = _create_pc_graph(rng_key=rng_key, **sample_config)
 
         # Verify structure
         assert len(structure.nodes) == 4, "Should have 4 nodes"
@@ -143,19 +145,21 @@ class TestGraphConstruction:
 
     def test_invalid_slot_rejection(self):
         """Test that invalid slot connections are rejected."""
+        a_node = LinearNode(name="a", shape=(10,))
+        b_node = LinearNode(name="b", shape=(5,))
         config = {
-            "node_list": [
-                {"name": "a", "shape": (10,), "type": "linear"},
-                {"name": "b", "shape": (5,), "type": "linear"},
+            "nodes": [
+                a_node,
+                b_node,
             ],
-            "edge_list": [
-                {"source_name": "a", "target_name": "b", "slot": "invalid_slot"},
+            "edges": [
+                EdgeInfo.from_refs(a_node, b_node, slot="invalid_slot"),
             ],
             "task_map": {"x": "a"},
         }
 
         with pytest.raises(ValueError, match="non-existent slot"):
-            _build_graph_structure(**graph_kwargs_from_legacy_config(config))
+            _build_graph_structure(**config)
 
 
 class TestInference:
@@ -473,37 +477,41 @@ class TestForwardMethods:
 @pytest.mark.parametrize("activation_type", ["identity", "relu", "tanh", "sigmoid"])
 def test_different_activations(activation_type, rng_key):
     """Test graph construction with different activation functions."""
+    activation_map = {
+        "identity": IdentityActivation(),
+        "relu": ReLUActivation(),
+        "tanh": TanhActivation(),
+        "sigmoid": SigmoidActivation(),
+    }
+    input_node = LinearNode(
+        name="input",
+        shape=(10,),
+        activation=IdentityActivation(),
+    )
+    hidden_node = LinearNode(
+        name="hidden",
+        shape=(20,),
+        activation=activation_map[activation_type],
+    )
+    output_node = LinearNode(
+        name="output",
+        shape=(5,),
+        activation=IdentityActivation(),
+    )
     config = {
-        "node_list": [
-            {
-                "name": "input",
-                "shape": (10,),
-                "type": "linear",
-                "activation": {"type": "identity"},
-            },
-            {
-                "name": "hidden",
-                "shape": (20,),
-                "type": "linear",
-                "activation": {"type": activation_type},
-            },
-            {
-                "name": "output",
-                "shape": (5,),
-                "type": "linear",
-                "activation": {"type": "identity"},
-            },
+        "nodes": [
+            input_node,
+            hidden_node,
+            output_node,
         ],
-        "edge_list": [
-            {"source_name": "input", "target_name": "hidden", "slot": "in"},
-            {"source_name": "hidden", "target_name": "output", "slot": "in"},
+        "edges": [
+            EdgeInfo.from_refs(input_node, hidden_node, slot="in"),
+            EdgeInfo.from_refs(hidden_node, output_node, slot="in"),
         ],
         "task_map": {"x": "input", "y": "output"},
     }
 
-    params, structure = _create_pc_graph(
-        rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
-    )
+    params, structure = _create_pc_graph(rng_key=rng_key, **config)
     expected_class_names = {
         "identity": "IdentityActivation",
         "relu": "ReLUActivation",
@@ -519,27 +527,33 @@ def test_different_activations(activation_type, rng_key):
 @pytest.mark.parametrize("weight_init_type", ["uniform", "normal", "xavier", "kaiming"])
 def test_different_weight_initializations(weight_init_type, rng_key):
     """Test graph construction with different weight initialization methods."""
+    weight_init_map = {
+        "uniform": UniformInitializer(),
+        "normal": NormalInitializer(),
+        "xavier": XavierInitializer(),
+        "kaiming": KaimingInitializer(),
+    }
+    input_node = LinearNode(name="input", shape=(10,))
+    hidden_node = LinearNode(
+        name="hidden",
+        shape=(20,),
+        weight_init=weight_init_map[weight_init_type],
+    )
+    output_node = LinearNode(name="output", shape=(5,))
     config = {
-        "node_list": [
-            {"name": "input", "shape": (10,), "type": "linear"},
-            {
-                "name": "hidden",
-                "shape": (20,),
-                "type": "linear",
-                "weight_init": {"type": weight_init_type},
-            },
-            {"name": "output", "shape": (5,), "type": "linear"},
+        "nodes": [
+            input_node,
+            hidden_node,
+            output_node,
         ],
-        "edge_list": [
-            {"source_name": "input", "target_name": "hidden", "slot": "in"},
-            {"source_name": "hidden", "target_name": "output", "slot": "in"},
+        "edges": [
+            EdgeInfo.from_refs(input_node, hidden_node, slot="in"),
+            EdgeInfo.from_refs(hidden_node, output_node, slot="in"),
         ],
         "task_map": {"x": "input", "y": "output"},
     }
 
-    params, structure = _create_pc_graph(
-        rng_key=rng_key, **graph_kwargs_from_legacy_config(config)
-    )
+    params, structure = _create_pc_graph(rng_key=rng_key, **config)
 
     # Check that weights are initialized (not zero or NaN)
     for edge_key, weight in params.nodes["hidden"].weights.items():
