@@ -26,7 +26,7 @@ import time
 
 from fabricpc.nodes import Linear
 from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params
+from fabricpc.graph import initialize_params, FeedforwardStateInit
 from fabricpc.core.activations import IdentityActivation, SigmoidActivation
 from fabricpc.core.energy import GaussianEnergy
 from fabricpc.core.initializers import NormalInitializer
@@ -84,7 +84,7 @@ structure = graph(
         Edge(source=h3, target=class_node.slot("in")),
     ],
     task_map=TaskMap(x=pixels, y=class_node),
-    graph_state_initializer={"type": "feedforward"},
+    graph_state_initializer=FeedforwardStateInit(),
 )
 
 # More sophisticated training configuration

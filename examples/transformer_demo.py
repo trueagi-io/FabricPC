@@ -32,7 +32,7 @@ from typing import Tuple, Iterator, Dict, List
 
 from fabricpc.nodes import Linear, TransformerBlock
 from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params
+from fabricpc.graph import initialize_params, FeedforwardStateInit
 from fabricpc.core.activations import (
     IdentityActivation,
     SoftmaxActivation,
@@ -254,7 +254,7 @@ def create_transformer_model(
         nodes=nodes,
         edges=edges,
         task_map=TaskMap(x=input_node, y=output_node, causal_mask=mask_node),
-        graph_state_initializer={"type": "feedforward"},
+        graph_state_initializer=FeedforwardStateInit(),
     )
     params = initialize_params(structure, rng_key)
     return structure, params

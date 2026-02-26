@@ -8,6 +8,7 @@ Tests:
 - FeedforwardStateInit requires params
 - FeedforwardStateInit topological propagation
 - Clamp handling in both strategies
+- Custom state initializer via subclassing
 """
 
 import os
@@ -36,9 +37,9 @@ from fabricpc.core.initializers import (
 )
 from fabricpc.graph.state_initializer import (
     StateInitBase,
-    register_state_init,
-    get_state_init_class,
-    list_state_init_types,
+    GlobalStateInit,
+    NodeDistributionStateInit,
+    FeedforwardStateInit,
     initialize_graph_state,
 )
 
@@ -69,40 +70,6 @@ def simple_graph_structure(rng_key):
     return structure
 
 
-class TestStateInitRegistry:
-    """Test suite for state initializer registry operations."""
-
-    def test_list_state_init_types(self):
-        """Test listing registered state init types."""
-        types = list_state_init_types()
-
-        # Should include built-in types
-        assert "global" in types
-        assert "node_distribution" in types
-        assert "feedforward" in types
-
-    def test_get_state_init_class(self):
-        """Test getting state init class by type."""
-        dist_class = get_state_init_class("node_distribution")
-
-        assert dist_class is not None
-        assert hasattr(dist_class, "initialize_state")
-
-    def test_get_state_init_class_case_insensitive(self):
-        """Test that type lookup is case-insensitive."""
-        assert get_state_init_class("node_Distribution") == get_state_init_class(
-            "node_distribution"
-        )
-        assert get_state_init_class("FEEDFORWARD") == get_state_init_class(
-            "feedforward"
-        )
-
-    def test_get_unknown_type_raises(self):
-        """Test that unknown type raises ValueError."""
-        with pytest.raises(ValueError, match="Unknown"):
-            get_state_init_class("nonexistent_state_init")
-
-
 class TestDistributionStateInit:
     """Test suite for GlobalStateInit."""
 
@@ -123,10 +90,7 @@ class TestDistributionStateInit:
             batch_size,
             rng_key,
             clamps,
-            state_init_config={
-                "type": "global",
-                "initializer": NormalInitializer(std=0.1),
-            },
+            state_init=GlobalStateInit(initializer=NormalInitializer(std=0.1)),
         )
 
         # Verify state structure
@@ -160,7 +124,7 @@ class TestDistributionStateInit:
             batch_size,
             rng_key,
             clamps,
-            state_init_config={"type": "global", "initializer": ZerosInitializer()},
+            state_init=GlobalStateInit(initializer=ZerosInitializer()),
         )
 
         # Hidden should be all zeros
@@ -198,9 +162,7 @@ class TestDistributionStateInit:
             batch_size,
             rng_key,
             clamps,
-            state_init_config={
-                "type": "node_distribution",
-            },
+            state_init=NodeDistributionStateInit(),
         )
 
         # Hidden should be uniform(-1, 1) due to node-level override
@@ -228,7 +190,7 @@ class TestFeedforwardStateInit:
                 batch_size,
                 rng_key,
                 clamps,
-                state_init_config={"type": "feedforward"},
+                state_init=FeedforwardStateInit(),
                 params=None,  # No params provided
             )
 
@@ -247,7 +209,7 @@ class TestFeedforwardStateInit:
             batch_size,
             rng_key,
             clamps,
-            state_init_config={"type": "feedforward"},
+            state_init=FeedforwardStateInit(),
             params=params,
         )
 
@@ -293,7 +255,7 @@ class TestFeedforwardStateInit:
             batch_size,
             rng_key,
             clamps,
-            state_init_config={"type": "feedforward"},
+            state_init=FeedforwardStateInit(),
             params=params,
         )
 
@@ -322,7 +284,7 @@ class TestClampHandling:
             batch_size,
             rng_key,
             clamps,
-            state_init_config={"type": "node_distribution"},
+            state_init=NodeDistributionStateInit(),
         )
 
         # Clamped nodes should have exact clamped values
@@ -344,7 +306,7 @@ class TestClampHandling:
             batch_size,
             rng_key,
             clamps,
-            state_init_config={"type": "feedforward"},
+            state_init=FeedforwardStateInit(),
             params=params,
         )
 
@@ -366,7 +328,7 @@ class TestClampHandling:
             batch_size,
             rng_key,
             clamps,
-            state_init_config={"type": "feedforward"},
+            state_init=FeedforwardStateInit(),
             params=params,
         )
 
@@ -391,7 +353,7 @@ class TestConvenienceFunctions:
         y = jax.random.normal(rng_key, (batch_size, 10))
         clamps = {"input": x, "output": y}
 
-        # Use the convenience function
+        # Use the convenience function (defaults to structure config)
         state = initialize_graph_state(
             structure, batch_size, rng_key, clamps=clamps, params=params
         )
@@ -403,19 +365,20 @@ class TestConvenienceFunctions:
 
 
 class TestCustomStateInit:
-    """Test custom state initializer registration."""
+    """Test custom state initializer via subclassing."""
 
-    def test_register_custom_state_init(self, simple_graph_structure, rng_key):
-        """Test registering and using a custom state initializer."""
+    def test_custom_state_init_subclass(self, simple_graph_structure, rng_key):
+        """Test creating and using a custom state initializer by subclassing."""
+        from fabricpc.core.types import GraphState, NodeState
 
-        @register_state_init("test_custom_state")
-        class TestCustomStateInit(StateInitBase):
+        class ConstantFillStateInit(StateInitBase):
+            def __init__(self, fill_value=99.0):
+                super().__init__(fill_value=fill_value)
+
             @staticmethod
             def initialize_state(
                 structure, batch_size, rng_key, clamps, config, params=None
             ):
-                from fabricpc.core.types import GraphState, NodeState
-
                 fill_value = config.get("fill_value", 99.0)
                 node_state_dict = {}
 
@@ -439,9 +402,6 @@ class TestCustomStateInit:
 
                 return GraphState(nodes=node_state_dict, batch_size=batch_size)
 
-        # Verify registration
-        assert "test_custom_state" in list_state_init_types()
-
         structure = simple_graph_structure
         params = initialize_params(structure, rng_key)
 
@@ -455,7 +415,7 @@ class TestCustomStateInit:
             batch_size,
             rng_key,
             clamps,
-            state_init_config={"type": "test_custom_state", "fill_value": 42.0},
+            state_init=ConstantFillStateInit(fill_value=42.0),
         )
 
         # Hidden should be filled with 42.0
@@ -498,7 +458,7 @@ class TestFeedforwardZeroError:
             batch_size,
             rng_key,
             clamps,
-            state_init_config={"type": "feedforward"},
+            state_init=FeedforwardStateInit(),
             params=params,
         )
 
@@ -581,7 +541,7 @@ class TestFeedforwardZeroError:
             batch_size,
             rng_key,
             clamps,
-            state_init_config={"type": "feedforward"},
+            state_init=FeedforwardStateInit(),
             params=params,
         )
 
@@ -632,7 +592,7 @@ class TestFeedforwardZeroError:
             batch_size,
             rng_key,
             clamps,
-            state_init_config={"type": "feedforward"},
+            state_init=FeedforwardStateInit(),
             params=params,
         )
 
@@ -672,14 +632,14 @@ class TestStateInitDeterminism:
             batch_size,
             rng_key,
             clamps,
-            state_init_config={"type": "node_distribution"},
+            state_init=NodeDistributionStateInit(),
         )
         state2 = initialize_graph_state(
             structure,
             batch_size,
             rng_key,
             clamps,
-            state_init_config={"type": "node_distribution"},
+            state_init=NodeDistributionStateInit(),
         )
 
         # Should produce identical results
@@ -702,7 +662,7 @@ class TestStateInitDeterminism:
             batch_size,
             rng_key,
             clamps,
-            state_init_config={"type": "feedforward"},
+            state_init=FeedforwardStateInit(),
             params=params,
         )
         state2 = initialize_graph_state(
@@ -710,7 +670,7 @@ class TestStateInitDeterminism:
             batch_size,
             rng_key,
             clamps,
-            state_init_config={"type": "feedforward"},
+            state_init=FeedforwardStateInit(),
             params=params,
         )
 

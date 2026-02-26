@@ -188,7 +188,6 @@ class TestInference:
             batch_size,
             state_key,
             clamps=clamps,
-            state_init_config=structure.config["graph_state_initializer"],
             params=params,
         )
 
@@ -252,7 +251,6 @@ class TestInference:
             batch_size,
             state_key,
             clamps=clamps,
-            state_init_config=structure.config["graph_state_initializer"],
             params=params,
         )
         final_state = run_inference(

@@ -183,7 +183,6 @@ def train_step_autoregressive(
         batch_size,
         rng_key,
         clamps=clamps,
-        state_init_config=structure.config["graph_state_initializer"],
         params=params,
     )
 
@@ -384,7 +383,6 @@ def _generation_step(
         batch_size,
         init_key,
         clamps=clamps,
-        state_init_config=structure.config["graph_state_initializer"],
         params=params,
     )
     if infer_steps > 0:
@@ -594,7 +592,6 @@ def _eval_step_autoregressive(
         batch_size,
         rng_key,
         clamps=clamps,
-        state_init_config=structure.config["graph_state_initializer"],
         params=params,
     )
     if infer_steps > 0:

@@ -450,7 +450,6 @@ class NodeBase(ABC):
         energy_cls = type(energy_obj)
         config = energy_obj.config
 
-        # TODO - refactor removed get_energy_and_gradient(), we want to compute value and gradient together
         energy = energy_cls.energy(state.z_latent, state.z_mu, config)
         grad = energy_cls.grad_latent(state.z_latent, state.z_mu, config)
 

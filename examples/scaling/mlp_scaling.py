@@ -55,7 +55,7 @@ from typing import List, Dict, Tuple, Optional
 
 from fabricpc.nodes import Linear
 from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params
+from fabricpc.graph import initialize_params, FeedforwardStateInit
 from fabricpc.core.activations import IdentityActivation, SigmoidActivation
 from fabricpc.training.train import train_step
 from fabricpc.training.train_backprop import train_step_backprop
@@ -152,7 +152,7 @@ def create_mlp_model(
         nodes=nodes,
         edges=edges,
         task_map=TaskMap(x=input_node, y=output_node),
-        graph_state_initializer={"type": "feedforward"},
+        graph_state_initializer=FeedforwardStateInit(),
     )
     params = initialize_params(structure, rng_key)
     return params, structure

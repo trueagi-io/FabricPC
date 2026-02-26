@@ -496,10 +496,37 @@ structure = graph(
 )
 params = initialize_params(structure, rng_key)
 
-Revisions to the refactorization:
+
+## Further refactorization:
+
   Removed get_activation, get_activation_fn, and get_activation_deriv from the codebase. Changes:
   - fabricpc/core/activations.py — Deleted the 3 functions and the "Convenience Functions" section. Removed unused Callable/Tuple imports.
   - fabricpc/core/__init__.py — Removed from import and __all__.
   - fabricpc/nodes/linear.py:325 — compute_gain_mod_error now calls type(activation).derivative(x, activation.config) directly.
   - fabricpc/nodes/transformer.py:217 — FFN activation now calls type(internal_activation).forward(x, internal_activation.config) directly.
   Removed class registries entirely
+
+The state initializer refactor is complete. Here's a summary of all changes:                                                                                                                                                             
+                                                                                                                                                                                                                                           
+  Core changes:                                                                                                                                                                                                                            
+  - fabricpc/graph/state_initializer.py — Added __init__(**config) to StateInitBase and typed constructors to all 3 concrete classes. Removed the entire registry (_state_init_registry, register_state_init, get_state_init_class, list_state_init_types). Updated initialize_graph_state() parameter from state_init_config: Dict to state_init: StateInitBase.
+  - fabricpc/graph/__init__.py — Removed registry exports, added GlobalStateInit, NodeDistributionStateInit, FeedforwardStateInit.                                                                                                         
+  - fabricpc/builder/graph_builder.py — Default changed from {"type": "feedforward"} to FeedforwardStateInit(). Updated docstring.                                                                                                         
+                                                                                                                                                                                                                                           
+  Caller updates (removed state_init_config= kwarg, now uses default from structure config):                                                                                                                                               
+  - fabricpc/training/train.py — 2 call sites                                                                                                                                                                                              
+  - fabricpc/training/multi_gpu.py — 2 call sites                                                                                                                                                                                          
+  - fabricpc/training/train_autoregressive.py — 3 call sites                                                                                                                                                                               
+  - fabricpc/training/train_backprop.py — isinstance check for validation                                                                                                                                                                  
+  - fabricpc/utils/dashboarding/inference_tracking.py — 1 call site                                                                                                                                                                        
+                                                                                                                                                                                                                                           
+  Tests:                                                                                                                                                                                                                                   
+  - tests/test_state_initializer.py — Full rewrite: removed registry tests, all state_init_config={"type": "..."} → state_init=ConcreteClass(), custom init test uses subclassing instead of @register_state_init                          
+  - tests/test_fabricpc.py — 2 call sites                                                                                                                                                                                                  
+  - tests/test_fabricpc_extended.py — 1 call site                                                                                                                                                                                          
+  - tests/test_train_backprop.py — Removed dict configs, added GlobalStateInit import for invalid init test                                                                                                                                
+                                                                                                                                                                                                                                           
+  Examples:                                                                                                                                                                                                                                
+  - Removed graph_state_initializer={"type": "feedforward"} from mnist_aim_tracking.py, mnist_advanced.py, scaling/mlp_scaling.py, transformer_demo.py (all now use the default)                                                           
+                                                                                                                                                                                                                                           
+  130 tests pass. Zero remaining state_init_config references or dict-style configs in source, tests, or examples. 

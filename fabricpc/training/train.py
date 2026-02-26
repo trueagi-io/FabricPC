@@ -56,7 +56,6 @@ def get_graph_param_gradient(
         batch_size,
         rng_key,
         clamps=clamps,
-        state_init_config=structure.config["graph_state_initializer"],
         params=params,
     )
 
@@ -289,7 +288,6 @@ def eval_step(
         batch_size,
         rng_key,
         clamps=clamps,
-        state_init_config=structure.config["graph_state_initializer"],
         params=params,
     )
 

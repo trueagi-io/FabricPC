@@ -8,10 +8,18 @@ This module provides:
 
 State initializers determine how latent states are initialized across
 the entire graph before inference begins.
+
+Usage:
+    from fabricpc.graph.state_initializer import FeedforwardStateInit
+
+    structure = graph(
+        nodes=[...], edges=[...], task_map=...,
+        graph_state_initializer=FeedforwardStateInit(),
+    )
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Type, List
+from typing import Dict, Any
 
 import jax
 import jax.numpy as jnp
@@ -35,8 +43,21 @@ class StateInitBase(ABC):
     State initializers determine how latent states are initialized across
     the entire graph before inference begins.
 
-    All methods are static for JAX compatibility (pure functions, no state).
+    Custom state initializers extend this class:
+
+        class MyInit(StateInitBase):
+            def __init__(self, fill_value=0.0):
+                super().__init__(fill_value=fill_value)
+
+            @staticmethod
+            def initialize_state(structure, batch_size, rng_key, clamps, config, params=None):
+                ...
+
+    All computation methods are static for JAX compatibility (pure functions, no state).
     """
+
+    def __init__(self, **config):
+        self.config = config
 
     @staticmethod
     @abstractmethod
@@ -56,7 +77,7 @@ class StateInitBase(ABC):
             batch_size: Batch size
             rng_key: JAX random key
             clamps: Dictionary of clamped values, keyed on node names
-            config: State initialization configuration
+            config: State initialization configuration (from instance .config)
             params: GraphParams (may be required for some strategies)
 
         Returns:
@@ -66,70 +87,23 @@ class StateInitBase(ABC):
 
 
 # =============================================================================
-# State Initializer Registry (simplified)
-# =============================================================================
-
-_state_init_registry: Dict[str, Type[StateInitBase]] = {}
-
-
-def register_state_init(init_type: str):
-    """
-    Decorator to register a state initializer.
-
-    Args:
-        init_type: Unique identifier for this state init type (case-insensitive)
-    """
-
-    def decorator(cls):
-        _state_init_registry[init_type.lower()] = cls
-        return cls
-
-    return decorator
-
-
-def get_state_init_class(init_type: str) -> Type[StateInitBase]:
-    """
-    Get a state initializer class by its registered type name.
-
-    Args:
-        init_type: The registered state init type (case-insensitive)
-
-    Returns:
-        The state initializer class
-
-    Raises:
-        ValueError: If state init type is not registered
-    """
-    cls = _state_init_registry.get(init_type.lower())
-    if cls is None:
-        available = list(_state_init_registry.keys())
-        raise ValueError(
-            f"Unknown state init type '{init_type}'. Available: {available}"
-        )
-    return cls
-
-
-def list_state_init_types() -> List[str]:
-    """Return list of all registered state init types."""
-    return list(_state_init_registry.keys())
-
-
-# =============================================================================
 # Built-in State Initialization Strategies
 # =============================================================================
 
 
-@register_state_init("global")
 class GlobalStateInit(StateInitBase):
     """
     Initialize states from a distribution.
     Each node's state is initialized using a graph-level initializer applied to all nodes.
     Processes nodes independently (no dependencies between nodes).
 
-    Config options:
-        - initializer: Initializer config for all nodes
-                              (default: {"type": "normal", "mean": 0.0, "std": 0.05})
+    Args:
+        initializer: InitializerBase instance for all nodes
+                     (default: NormalInitializer(mean=0.0, std=0.05))
     """
+
+    def __init__(self, initializer=None):
+        super().__init__(initializer=initializer)
 
     @staticmethod
     def initialize_state(
@@ -177,13 +151,15 @@ class GlobalStateInit(StateInitBase):
         return GraphState(nodes=node_state_dict, batch_size=batch_size)
 
 
-@register_state_init("node_distribution")
 class NodeDistributionStateInit(StateInitBase):
     """
     Initialize states from a distribution using node level configs for initializer.
     Each node's state is initialized using its configured latent_init.
     Processes nodes independently (no dependencies between nodes).
     """
+
+    def __init__(self):
+        super().__init__()
 
     @staticmethod
     def initialize_state(
@@ -226,7 +202,6 @@ class NodeDistributionStateInit(StateInitBase):
         return GraphState(nodes=node_state_dict, batch_size=batch_size)
 
 
-@register_state_init("feedforward")
 class FeedforwardStateInit(StateInitBase):
     """
     Initialize states via feedforward propagation through the network.
@@ -238,6 +213,9 @@ class FeedforwardStateInit(StateInitBase):
 
     Requires params to be provided to compute projections.
     """
+
+    def __init__(self):
+        super().__init__()
 
     @staticmethod
     def initialize_state(
@@ -332,7 +310,7 @@ def initialize_graph_state(
     batch_size: int,
     rng_key: jax.Array,
     clamps: Dict[str, jnp.ndarray] = None,
-    state_init_config: Dict[str, Any] = None,
+    state_init: StateInitBase = None,
     params: GraphParams = None,
 ) -> GraphState:
     """
@@ -343,7 +321,7 @@ def initialize_graph_state(
         batch_size: Batch size
         rng_key: JAX random key
         clamps: Dictionary of clamped values
-        state_init_config: State initialization config with "type" for a StateInitBase like object.
+        state_init: StateInitBase instance (default: from structure config)
         params: GraphParams (required for feedforward init)
 
     Returns:
@@ -352,18 +330,15 @@ def initialize_graph_state(
     Example:
         state = initialize_graph_state(
             structure, batch_size, key, clamps,
-            {"type": "feedforward"},
+            state_init=FeedforwardStateInit(),
             params=params
         )
     """
     clamps = clamps or {}
 
-    if state_init_config is None:
-        state_init_config = structure.config["graph_state_initializer"]
+    if state_init is None:
+        state_init = structure.config["graph_state_initializer"]
 
-    init_type = state_init_config["type"]
-    init_class = get_state_init_class(init_type)
-
-    return init_class.initialize_state(
-        structure, batch_size, rng_key, clamps, state_init_config, params
+    return type(state_init).initialize_state(
+        structure, batch_size, rng_key, clamps, state_init.config, params
     )

@@ -33,10 +33,13 @@ def validate_feedforward_init(structure: GraphStructure):
     Raises:
         ValueError if incompatible.
     """
-    initializer_type = structure.config["graph_state_initializer"].get("type", "")
-    if initializer_type != "feedforward":
+    from fabricpc.graph.state_initializer import FeedforwardStateInit
+
+    init = structure.config["graph_state_initializer"]
+    if not isinstance(init, FeedforwardStateInit):
         raise ValueError(
-            f"GraphState initializer must be 'feedforward' for backprop training, got '{initializer_type}'"
+            f"GraphState initializer must be FeedforwardStateInit for backprop training, "
+            f"got {type(init).__name__}"
         )
 
 
@@ -77,7 +80,6 @@ def compute_forward_pass(
         batch_size,
         rng_key,
         clamps=clamps,
-        state_init_config=structure.config["graph_state_initializer"],
         params=params,
     )
     return state
@@ -284,7 +286,6 @@ def compute_loss_autoregressive(
         batch_size,
         rng_key,
         clamps=clamps,
-        state_init_config=structure.config["graph_state_initializer"],
         params=params,
     )
 

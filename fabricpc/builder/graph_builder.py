@@ -84,8 +84,8 @@ def graph(nodes, edges, task_map, graph_state_initializer=None):
         nodes: List of NodeBase instances
         edges: List of Edge instances
         task_map: TaskMap instance or dict mapping task names to node names
-        graph_state_initializer: Optional dict configuring state initialization
-            (default: {"type": "feedforward"})
+        graph_state_initializer: Optional StateInitBase instance
+            (default: FeedforwardStateInit())
 
     Returns:
         GraphStructure with finalized nodes, edges, and topology
@@ -188,8 +188,10 @@ def graph(nodes, edges, task_map, graph_state_initializer=None):
         raise TypeError(f"task_map must be TaskMap or dict, got {type(task_map)}")
 
     # 7. Build GraphStructure
+    from fabricpc.graph.state_initializer import FeedforwardStateInit
+
     gs_config = {
-        "graph_state_initializer": graph_state_initializer or {"type": "feedforward"},
+        "graph_state_initializer": graph_state_initializer or FeedforwardStateInit(),
     }
 
     return GraphStructure(
