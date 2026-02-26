@@ -32,7 +32,6 @@ from fabricpc.core.inference import run_inference
 from fabricpc.training import train_step
 from fabricpc.training.optimizers import create_optimizer
 from fabricpc.nodes import Linear
-from fabricpc.nodes.base import _get_node_class_from_info
 from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.core.activations import (
     IdentityActivation,
@@ -382,7 +381,7 @@ class TestForwardMethods:
         for node_name, node in structure.nodes.items():
             node_info = node.node_info
             if node_info.in_degree > 0:  # Skip source nodes
-                node_class = _get_node_class_from_info(node_info)
+                node_class = node_info.node_class
                 node_state = state.nodes[node_name]
 
                 # Collect edge inputs
@@ -424,7 +423,7 @@ class TestForwardMethods:
         for node_name, node in structure.nodes.items():
             node_info = node.node_info
             if node_info.in_degree > 0:  # Skip source nodes
-                node_class = _get_node_class_from_info(node_info)
+                node_class = node_info.node_class
                 node_state = state.nodes[node_name]
                 node_params = params.nodes[node_name]
 

@@ -3,9 +3,9 @@ Example: Custom Conv2D Node
 =====================================
 
 This example demonstrates:
-1. Creating a custom node type using _register_node_class
+1. Creating a custom node type by subclassing NodeBase
 2. Implementing forward pass using JAX's lax.conv
-3. Using the new object-oriented API for node configuration
+3. Using the object-oriented API for node configuration
 4. Training on MNIST using the standard train_pcn/evaluate_pcn methods
 
 Run with: python examples/custom_node.py
@@ -30,8 +30,6 @@ from fabricpc.nodes import Linear
 from fabricpc.nodes.base import (
     NodeBase,
     SlotSpec,
-    _register_node_class,
-    _get_node_class_from_info,
 )
 from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.graph import initialize_params
@@ -190,15 +188,11 @@ class Conv2DNode(NodeBase):
         )
 
         # Compute energy
-        node_class = _get_node_class_from_info(node_info)
+        node_class = node_info.node_class
         state = node_class.energy_functional(state, node_info)
         total_energy = jnp.sum(state.energy)
 
         return total_energy, state
-
-
-# Register the custom node class
-_register_node_class(Conv2DNode)
 
 
 # ==============================================================================
@@ -330,11 +324,10 @@ def main():
     print("Custom node example complete!")
     print("\nKey takeaways:")
     print("  1. Create custom nodes by subclassing NodeBase")
-    print("  2. Use _register_node_class() to register with the library")
-    print("  3. Set DEFAULT_ACTIVATION, DEFAULT_ENERGY, DEFAULT_LATENT_INIT")
-    print("  4. Implement get_slots(), initialize_params(), and forward()")
-    print("  5. Use object-oriented API with graph() for network construction")
-    print("  6. Use train_pcn/evaluate_pcn for standard training workflow")
+    print("  2. Set DEFAULT_ACTIVATION, DEFAULT_ENERGY, DEFAULT_LATENT_INIT")
+    print("  3. Implement get_slots(), initialize_params(), and forward()")
+    print("  4. Use object-oriented API with graph() for network construction")
+    print("  5. Use train_pcn/evaluate_pcn for standard training workflow")
     print("=" * 70)
 
 

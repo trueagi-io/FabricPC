@@ -329,17 +329,7 @@ class NodeBase(ABC):
                 - NodeState: updated node state (z_mu, pre_activation, etc.)
                 - gradient_wrt_inputs: dictionary of gradients w.r.t. each input edge
         """
-        # The node class is the class that owns this node_info
-        # We use the class from node_info to dispatch the correct forward()
-        # This works because forward_inference is called on the node instance
-        # stored in structure.nodes[name], which is the correct class
-
-        # Get the node class for dispatching
-        # Since we're called as: node.forward_inference(..., node.node_info, ...)
-        # But forward_inference is static, we need the class.
-        # Since this is a static method on NodeBase, and it needs to call
-        # the correct subclass's forward(), we look up the class from a module-level helper.
-        node_class = _get_node_class_from_info(node_info)
+        node_class = node_info.node_class
 
         # Handle terminal nodes
         if node_info.in_degree == 0:
@@ -418,7 +408,7 @@ class NodeBase(ABC):
                 - NodeState: updated node state (z_mu, pre_activation, etc.)
                 - params_grad: NodeParams containing weight and bias gradients
         """
-        node_class = _get_node_class_from_info(node_info)
+        node_class = node_info.node_class
 
         # Use JAX's value_and_grad to compute gradients w.r.t. params
         (total_energy, new_state), params_grad = jax.value_and_grad(
@@ -457,27 +447,3 @@ class NodeBase(ABC):
         state = state._replace(energy=energy, latent_grad=latent_grad)
 
         return state
-
-
-# =========================================================================
-# Module-level helper for dispatching to correct node class
-# =========================================================================
-
-# Registry of node class name -> class, populated at import time
-_node_class_map: Dict[str, type] = {}
-
-
-def _register_node_class(cls):
-    """Register a node class for dispatch. Called by subclass modules."""
-    _node_class_map[cls.__name__] = cls
-
-
-def _get_node_class_from_info(node_info: NodeInfo) -> type:
-    """Look up the node class from node_info.node_type (which stores __name__)."""
-    cls = _node_class_map.get(node_info.node_type)
-    if cls is None:
-        raise ValueError(
-            f"Unknown node type '{node_info.node_type}'. "
-            f"Available: {list(_node_class_map.keys())}"
-        )
-    return cls

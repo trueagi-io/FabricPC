@@ -37,6 +37,7 @@ class NodeInfo:
     name: str
     shape: Tuple[int, ...]  # Output shape excluding batch dimension
     node_type: str  # "linear", "transformer", etc. (kept for debugging/display)
+    node_class: type  # The node class (Linear, TransformerBlock, etc.)
     node_config: Dict[str, Any]  # Extra config (use_bias, flatten_input, etc.)
     activation: Any  # ActivationBase instance
     energy: Any  # EnergyFunctional instance

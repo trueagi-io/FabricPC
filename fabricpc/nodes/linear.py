@@ -22,8 +22,6 @@ from fabricpc.nodes.base import (
     NodeBase,
     SlotSpec,
     FlattenInputMixin,
-    _register_node_class,
-    _get_node_class_from_info,
 )
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.activations import IdentityActivation
@@ -219,7 +217,7 @@ class Linear(FlattenInputMixin, NodeBase):
         state = state._replace(pre_activation=pre_activation, z_mu=z_mu, error=error)
 
         # Compute energy, accumulate the self-latent gradient
-        node_class = _get_node_class_from_info(node_info)
+        node_class = node_info.node_class
         state = node_class.energy_functional(state, node_info)
 
         total_energy = jnp.sum(state.energy)
@@ -268,9 +266,7 @@ class LinearExplicitGrad(Linear):
         is_clamped: bool,
     ) -> Tuple[NodeState, Dict[str, jnp.ndarray]]:
         """Forward pass with explicit gradient computation."""
-        from fabricpc.nodes.base import _get_node_class_from_info
-
-        node_class = _get_node_class_from_info(node_info)
+        node_class = node_info.node_class
 
         # Forward pass to get new state
         _, state = node_class.forward(params, inputs, state, node_info)
@@ -320,9 +316,7 @@ class LinearExplicitGrad(Linear):
         node_info: NodeInfo,
     ) -> Tuple[NodeState, NodeParams]:
         """Forward pass with explicit weight gradient computation."""
-        from fabricpc.nodes.base import _get_node_class_from_info
-
-        node_class = _get_node_class_from_info(node_info)
+        node_class = node_info.node_class
 
         # Forward pass to get new state
         _, state = node_class.forward(params, inputs, state, node_info)
@@ -370,8 +364,3 @@ class LinearExplicitGrad(Linear):
 
         state = state._replace(substructure={"gain_mod_error": gain_mod_error})
         return state
-
-
-# Register node classes for dispatch
-_register_node_class(Linear)
-_register_node_class(LinearExplicitGrad)

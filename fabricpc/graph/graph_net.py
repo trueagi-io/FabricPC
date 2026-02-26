@@ -20,7 +20,6 @@ from fabricpc.core.types import (
     GraphState,
     GraphStructure,
 )
-from fabricpc.nodes.base import _get_node_class_from_info
 from fabricpc.utils.helpers import update_node_in_state
 from fabricpc.core.inference import gather_inputs
 
@@ -54,8 +53,7 @@ def compute_local_weight_gradients(
 
         in_edges_data = gather_inputs(node_info, structure, final_state)
 
-        # Get node class for dispatch
-        node_class = _get_node_class_from_info(node_info)
+        node_class = node_info.node_class
 
         # Compute local gradients using node's method
         node_state, grad_params = node_class.forward_learning(
@@ -108,8 +106,7 @@ def initialize_params(
             node_params[node_name] = NodeParams(weights={}, biases={})
             continue
 
-        # Get node class for dispatch
-        node_class = _get_node_class_from_info(node_info)
+        node_class = node_info.node_class
 
         # Get the input shapes for each edge (full shapes for conv support)
         input_shapes = {}

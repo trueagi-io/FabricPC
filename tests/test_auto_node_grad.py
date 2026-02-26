@@ -18,9 +18,7 @@ from fabricpc.core.types import NodeState, NodeParams, NodeInfo
 from fabricpc.core.inference import run_inference, gather_inputs
 from fabricpc.nodes import (
     Linear,
-    Linear,
     LinearExplicitGrad,
-    _get_node_class_from_info,
 )
 from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.graph import initialize_params
@@ -105,6 +103,7 @@ class TestLinearAutoGradNode:
             name="dst",
             shape=(output_dim,),
             node_type="Linear",
+            node_class=Linear,
             node_config={"use_bias": True, "flatten_input": False},
             activation=activation_inst,
             energy=GaussianEnergy(),
@@ -121,6 +120,7 @@ class TestLinearAutoGradNode:
             name="dst",
             shape=(output_dim,),
             node_type="LinearExplicitGrad",
+            node_class=LinearExplicitGrad,
             node_config={"use_bias": True, "flatten_input": False},
             activation=activation_inst,
             energy=GaussianEnergy(),
@@ -202,6 +202,7 @@ class TestLinearAutoGradNode:
             name="dst",
             shape=(output_dim,),
             node_type="Linear",
+            node_class=Linear,
             node_config={"use_bias": True, "flatten_input": False},
             activation=activation_inst,
             energy=GaussianEnergy(),
@@ -218,6 +219,7 @@ class TestLinearAutoGradNode:
             name="dst",
             shape=(output_dim,),
             node_type="LinearExplicitGrad",
+            node_class=LinearExplicitGrad,
             node_config={"use_bias": True, "flatten_input": False},
             activation=activation_inst,
             energy=GaussianEnergy(),
@@ -336,6 +338,7 @@ class TestLinearAutoGradNode:
                 name=node_info.name,
                 shape=node_info.shape,
                 node_type="LinearExplicitGrad",
+                node_class=LinearExplicitGrad,
                 node_config=node_info.node_config,
                 activation=node_info.activation,
                 energy=node_info.energy,
@@ -377,15 +380,15 @@ class TestLinearAutoGradNode:
 
 
 class TestLinearAutoGradNodeRegistration:
-    """Test that LinearExplicitGrad is properly registered."""
+    """Test that LinearExplicitGrad is a subclass of Linear."""
 
-    def test_node_type_registered(self):
-        """Test that LinearExplicitGrad node type is registered."""
-        # Create a NodeInfo with node_type="LinearExplicitGrad"
+    def test_node_class_on_node_info(self):
+        """Test that node_class field on NodeInfo works for dispatch."""
         node_info = NodeInfo(
             name="test",
             shape=(4,),
             node_type="LinearExplicitGrad",
+            node_class=LinearExplicitGrad,
             node_config={"use_bias": True, "flatten_input": False},
             activation=TanhActivation(),
             energy=GaussianEnergy(),
@@ -396,8 +399,8 @@ class TestLinearAutoGradNodeRegistration:
             in_edges=(),
             out_edges=(),
         )
-        node_class = _get_node_class_from_info(node_info)
-        assert node_class is LinearExplicitGrad
+        assert node_info.node_class is LinearExplicitGrad
+        assert issubclass(LinearExplicitGrad, Linear)
 
     def test_network_creation_with_autograd_nodes(self, rng_key):
         """Test that a network can be created using LinearExplicitGrad nodes."""

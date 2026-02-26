@@ -229,7 +229,6 @@ class FeedforwardStateInit(StateInitBase):
         """Initialize states via feedforward propagation."""
         from fabricpc.core.initializers import initialize
         from fabricpc.core.inference import gather_inputs
-        from fabricpc.nodes.base import _get_node_class_from_info
 
         if params is None:
             raise ValueError("FeedforwardStateInit requires params to be provided")
@@ -270,7 +269,7 @@ class FeedforwardStateInit(StateInitBase):
             if node_info.in_degree > 0:
                 node_state = state.nodes[node_name]
                 node_params = params.nodes[node_name]
-                node_class = _get_node_class_from_info(node_info)
+                node_class = node_info.node_class
                 edge_inputs = gather_inputs(node_info, structure, state)
 
                 _, projected = node_class.forward(

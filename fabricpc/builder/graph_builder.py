@@ -164,6 +164,7 @@ def graph(nodes, edges, task_map, graph_state_initializer=None):
             name=name,
             shape=node.shape,
             node_type=type(node).__name__,
+            node_class=type(node),
             node_config=node._extra_config,
             activation=activation,
             energy=energy,

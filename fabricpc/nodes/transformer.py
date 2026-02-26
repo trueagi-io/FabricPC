@@ -6,7 +6,7 @@
 import jax
 import jax.numpy as jnp
 
-from fabricpc.nodes.base import NodeBase, NodeParams, SlotSpec, _register_node_class
+from fabricpc.nodes.base import NodeBase, NodeParams, SlotSpec
 from fabricpc.core.activations import IdentityActivation, GeluActivation
 from fabricpc.core.energy import GaussianEnergy
 from fabricpc.core.initializers import NormalInitializer
@@ -302,9 +302,7 @@ class TransformerBlock(NodeBase):
         )
 
         # Compute energy, accumulate the self-latent gradient
-        from fabricpc.nodes.base import _get_node_class_from_info
-
-        node_class = _get_node_class_from_info(node_info)
+        node_class = node_info.node_class
         state = node_class.energy_functional(state, node_info)
 
         total_energy = jnp.sum(state.energy)
@@ -389,7 +387,3 @@ class TransformerBlock(NodeBase):
         }
 
         return projection, substructure
-
-
-# Register node class for dispatch
-_register_node_class(TransformerBlock)

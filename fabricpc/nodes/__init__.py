@@ -12,11 +12,8 @@ from fabricpc.nodes.base import (
     Slot,
     NodeBase,
     FlattenInputMixin,
-    _register_node_class,
-    _get_node_class_from_info,
 )
 
-# Import concrete node classes (also triggers _register_node_class calls)
 from fabricpc.nodes.linear import Linear, LinearExplicitGrad
 from fabricpc.nodes.transformer import TransformerBlock
 
@@ -34,7 +31,4 @@ __all__ = [
     "Linear",
     "LinearExplicitGrad",
     "TransformerBlock",
-    # Internal dispatch helpers
-    "_register_node_class",
-    "_get_node_class_from_info",
 ]
