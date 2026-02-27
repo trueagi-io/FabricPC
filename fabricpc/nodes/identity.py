@@ -1,9 +1,9 @@
 """
 Identity node implementation for JAX predictive coding networks.
 
-The IdentityNode passes input through unchanged with no transformation and no
-learnable parameters. This is useful for input nodes or auxiliary nodes that
-serve as conduits for data without learning.
+The IdentityNode passes input through unchanged with no transformation, no
+activation and no learnable parameters. This is useful for input nodes or
+auxiliary nodes that serve as conduits for data without learning.
 
 When multiple inputs are connected, they are summed together.
 """
@@ -91,25 +91,21 @@ class IdentityNode(NodeBase):
 
         node_class = get_node_class(node_info.node_type)
 
-        if node_info.in_degree == 0:
-            # Source node: no inputs, prediction equals latent state
-            z_mu = state.z_latent
-            pre_activation = jnp.zeros_like(state.z_latent)
-            error = jnp.zeros_like(state.z_latent)
-        else:
-            # Sum all inputs
-            z_mu = None
-            for edge_key, x in inputs.items():
-                if z_mu is None:
-                    z_mu = x
-                else:
-                    z_mu = z_mu + x
 
-            # For identity node, pre_activation equals z_mu (no activation transform)
-            pre_activation = z_mu
+        # Sum all inputs
+            
+        z_mu = None
+        for edge_key, x in inputs.items():
+            if z_mu is None:
+                z_mu = x
+            else:
+                z_mu = z_mu + x
 
-            # Compute prediction error
-            error = state.z_latent - z_mu
+        # For identity node, pre_activation equals z_mu (no activation transform)
+        pre_activation = z_mu
+
+        # Compute prediction error
+        error = state.z_latent - z_mu
 
         # Update node state
         state = state._replace(
