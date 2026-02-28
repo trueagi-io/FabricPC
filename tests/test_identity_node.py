@@ -82,7 +82,9 @@ class TestIdentityNode:
         # Create inputs
         keys = jax.random.split(rng_key, num_inputs + 1)
         edge_keys = [f"src{i}->node:in" for i in range(num_inputs)]
-        inputs = {k: jax.random.normal(keys[i], full_shape) for i, k in enumerate(edge_keys)}
+        inputs = {
+            k: jax.random.normal(keys[i], full_shape) for i, k in enumerate(edge_keys)
+        }
 
         state = make_state(keys[-1], batch_size, node_shape)
         node_info = make_node_info("node", node_shape, edge_keys)
