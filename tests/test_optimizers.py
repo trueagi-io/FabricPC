@@ -1,0 +1,112 @@
+#!/usr/bin/env python3
+"""
+Tests for optimizer creation and update behavior.
+"""
+
+import os
+
+os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+os.environ.setdefault("JAX_TRACEBACK_FILTERING", "off")
+
+import pytest
+import jax
+import jax.numpy as jnp
+import optax
+
+from fabricpc.training.optimizers import create_optimizer
+from fabricpc.training import train_step
+from fabricpc.nodes import Linear
+from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.graph import initialize_params
+from fabricpc.core.activations import SigmoidActivation
+
+jax.config.update("jax_platform_name", "cpu")
+
+
+@pytest.fixture
+def rng_key():
+    return jax.random.PRNGKey(0)
+
+
+def test_create_optimizer_ngd_diag_updates():
+    params = {"w": jnp.ones((4, 3)), "b": jnp.ones((3,))}
+    grads = jax.tree_util.tree_map(lambda p: jnp.full_like(p, 0.1), params)
+
+    optimizer = create_optimizer(
+        {"type": "ngd_diag", "lr": 1e-2, "fisher_decay": 0.9, "damping": 1e-3}
+    )
+    opt_state = optimizer.init(params)
+    updates, _ = optimizer.update(grads, opt_state, params)
+    new_params = optax.apply_updates(params, updates)
+
+    assert jnp.all(jnp.isfinite(new_params["w"]))
+    assert not jnp.allclose(new_params["w"], params["w"])
+
+
+def test_create_optimizer_ngd_layerwise_updates():
+    params = {"w": jnp.ones((5, 2)), "b": jnp.ones((2,))}
+    grads = jax.tree_util.tree_map(lambda p: jnp.full_like(p, 0.05), params)
+
+    optimizer = create_optimizer(
+        {"type": "ngd_layerwise", "lr": 1e-2, "fisher_decay": 0.9, "damping": 1e-3}
+    )
+    opt_state = optimizer.init(params)
+    updates, _ = optimizer.update(grads, opt_state, params)
+    new_params = optax.apply_updates(params, updates)
+
+    assert jnp.all(jnp.isfinite(new_params["w"]))
+    assert not jnp.allclose(new_params["w"], params["w"])
+
+
+@pytest.mark.parametrize("opt_type", ["ngd_diag", "ngd_layerwise"])
+def test_natural_gradients_work_in_train_step(rng_key, opt_type):
+    x_node = Linear(shape=(6,), name="x")
+    hidden = Linear(shape=(4,), activation=SigmoidActivation(), name="hidden")
+    y_node = Linear(shape=(3,), activation=SigmoidActivation(), name="y")
+    structure = graph(
+        nodes=[x_node, hidden, y_node],
+        edges=[
+            Edge(source=x_node, target=hidden.slot("in")),
+            Edge(source=hidden, target=y_node.slot("in")),
+        ],
+        task_map=TaskMap(x=x_node, y=y_node),
+    )
+    params = initialize_params(structure, rng_key)
+
+    optimizer = create_optimizer(
+        {"type": opt_type, "lr": 1e-3, "fisher_decay": 0.95, "damping": 1e-3}
+    )
+    opt_state = optimizer.init(params)
+
+    batch_size = 8
+    key_x, key_y = jax.random.split(rng_key)
+    batch = {
+        "x": jax.random.normal(key_x, (batch_size, 6)),
+        "y": jax.random.normal(key_y, (batch_size, 3)),
+    }
+
+    updated_params, _, energy, _ = train_step(
+        params,
+        opt_state,
+        batch,
+        structure,
+        optimizer,
+        rng_key,
+        infer_steps=3,
+        eta_infer=0.1,
+    )
+
+    old_w = params.nodes["hidden"].weights["x->hidden:in"]
+    new_w = updated_params.nodes["hidden"].weights["x->hidden:in"]
+
+    assert not jnp.isnan(energy)
+    assert energy > 0
+    assert not jnp.allclose(old_w, new_w)
+
+
+def test_natural_gradient_hparams_validation():
+    with pytest.raises(ValueError, match="fisher_decay"):
+        create_optimizer({"type": "ngd_diag", "lr": 1e-3, "fisher_decay": 1.1})
+
+    with pytest.raises(ValueError, match="damping"):
+        create_optimizer({"type": "ngd_layerwise", "lr": 1e-3, "damping": 0.0})

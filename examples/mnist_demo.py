@@ -15,8 +15,18 @@ import os  # Set environment variables before importing JAX
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("JAX_PLATFORMS", "cuda")  # "cpu", "cuda" or "tpu"
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Suppress XLA warnings
-os.environ["XLA_FLAGS"] = "--xla_gpu_deterministic_ops=true"
 
+# Keep deterministic kernels and default to disabling Triton GEMM, which can
+# trigger CUDA runtime errors on some GPUs for small/irregular matmuls.
+_xla_flags = os.environ.get("XLA_FLAGS", "")
+if "--xla_gpu_deterministic_ops=true" not in _xla_flags:
+    _xla_flags = (_xla_flags + " --xla_gpu_deterministic_ops=true").strip()
+if os.environ.get("FABRICPC_DISABLE_TRITON_GEMM", "1") == "1":
+    if "--xla_gpu_enable_triton_gemm=false" not in _xla_flags:
+        _xla_flags = (_xla_flags + " --xla_gpu_enable_triton_gemm=false").strip()
+os.environ["XLA_FLAGS"] = _xla_flags
+
+import argparse
 import jax
 from fabricpc.nodes import Linear
 from fabricpc.builder import Edge, TaskMap, graph
@@ -60,16 +70,79 @@ structure = graph(
 )
 
 # Training hyperparameters
-train_config = {
+TRAIN_CONFIG_TEMPLATE = {
     "num_epochs": 20,       # Number of training epochs
     "infer_steps": 20,      # Inference steps
     "eta_infer": 0.05,      # Inference learning rate
-    "optimizer": {"type": "adam", "lr": 0.001, "weight_decay": 0.001},
+    "optimizer": {},  # set at runtime from CLI/env
 }
 batch_size = 200
 
 # fmt: on
+
+OPTIMIZER_PRESETS = {
+    "adam": {"type": "adam", "lr": 0.001, "weight_decay": 0.001},
+    "adamw": {"type": "adamw", "lr": 0.001, "weight_decay": 0.001},
+    "sgd": {"type": "sgd", "lr": 0.01, "momentum": 0.9, "weight_decay": 0.001},
+    "ngd_diag": {
+        "type": "ngd_diag",
+        # "lr": 0.001,
+        "lr": 0.0003,
+        "fisher_decay": 0.95,
+        "damping": 1e-3,
+        "weight_decay": 0.001,
+    },
+    "ngd_layerwise": {
+        "type": "ngd_layerwise",
+        "lr": 0.001,
+        "fisher_decay": 0.95,
+        "damping": 1e-3,
+        "weight_decay": 0.001,
+    },
+}
+
+
+def parse_args() -> argparse.Namespace:
+    """
+    Parse CLI args.
+
+    Env fallback:
+        FABRICPC_OPTIMIZER={adam|adamw|sgd|ngd_diag|ngd_layerwise}
+    """
+    default_optimizer = os.environ.get("FABRICPC_OPTIMIZER", "ngd_diag")
+    parser = argparse.ArgumentParser(description="FabricPC MNIST demo")
+    parser.add_argument(
+        "--optimizer",
+        default=default_optimizer,
+        help=(
+            "Optimizer preset to use. "
+            f"Choices: {', '.join(OPTIMIZER_PRESETS.keys())}. "
+            "CLI flag overrides FABRICPC_OPTIMIZER."
+        ),
+    )
+    args = parser.parse_args()
+    if args.optimizer.lower() not in OPTIMIZER_PRESETS:
+        valid = ", ".join(OPTIMIZER_PRESETS.keys())
+        parser.error(f"unknown optimizer '{args.optimizer}'. valid choices: {valid}")
+    return args
+
+
+def get_optimizer_config(name: str) -> dict:
+    """Return optimizer config preset by name."""
+    key = name.lower()
+    if key not in OPTIMIZER_PRESETS:
+        valid = ", ".join(OPTIMIZER_PRESETS.keys())
+        raise ValueError(f"unknown optimizer '{name}'. valid choices: {valid}")
+    return dict(OPTIMIZER_PRESETS[key])
+
+
 if __name__ == "__main__":
+    args = parse_args()
+
+    # Copy template and inject optimizer preset selected at runtime.
+    train_config = dict(TRAIN_CONFIG_TEMPLATE)
+    train_config["optimizer"] = get_optimizer_config(args.optimizer)
+
     master_rng_key = jax.random.PRNGKey(0)
 
     # Split keys for different stages
@@ -98,6 +171,7 @@ if __name__ == "__main__":
     # A model consists of two parts: the parameters (weights) and the structure (graph architecture). The training loop uses both to perform inference and learning.
 
     print("\nTraining (JIT compilation on first batch)...")
+    print(f"Using optimizer preset: {train_config['optimizer']['type']}")
     start_time = time.time()
     trained_params, energy_history, _ = train_pcn(
         params=params,

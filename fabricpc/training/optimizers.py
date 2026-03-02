@@ -4,6 +4,11 @@ Optimizer utilities using Optax.
 
 import optax
 
+from fabricpc.training.natural_gradients import (
+    scale_by_natural_gradient_diag,
+    scale_by_natural_gradient_layerwise,
+)
+
 
 def create_optimizer(config: dict) -> optax.GradientTransformation:
     """
@@ -11,7 +16,7 @@ def create_optimizer(config: dict) -> optax.GradientTransformation:
 
     Args:
         config: Optimizer configuration with keys:
-            - type: "adam", "sgd", "adamw"
+            - type: "adam", "sgd", "adamw", "ngd_diag", "ngd_layerwise"
             - lr: learning rate
             - weight_decay: optional weight decay (L2 regularization)
             - Other optimizer-specific parameters
@@ -37,6 +42,22 @@ def create_optimizer(config: dict) -> optax.GradientTransformation:
     elif opt_type == "sgd":
         momentum = config.get("momentum", 0.0)
         optimizer = optax.sgd(lr, momentum=momentum)
+    elif opt_type == "ngd_diag":
+        fisher_decay = config.get("fisher_decay", 0.95)
+        damping = config.get("damping", 1e-3)
+        optimizer = optax.chain(
+            scale_by_natural_gradient_diag(fisher_decay=fisher_decay, damping=damping),
+            optax.scale(-lr),
+        )
+    elif opt_type in ("ngd_layerwise", "ngd_layer"):
+        fisher_decay = config.get("fisher_decay", 0.95)
+        damping = config.get("damping", 1e-3)
+        optimizer = optax.chain(
+            scale_by_natural_gradient_layerwise(
+                fisher_decay=fisher_decay, damping=damping
+            ),
+            optax.scale(-lr),
+        )
     else:
         raise ValueError(f"unknown optimizer type: {opt_type}")
 

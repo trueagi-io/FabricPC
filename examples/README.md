@@ -10,6 +10,13 @@ pip install -e ".[dev,tfds,viz]"
 
 # Run MNIST demo
 python examples/mnist_demo.py
+
+# Choose optimizer preset at runtime (no code edits)
+python examples/mnist_demo.py --optimizer adam
+# or via environment variable
+FABRICPC_OPTIMIZER=ngd_layerwise python examples/mnist_demo.py
+# if your GPU hits Triton GEMM XLA runtime errors, disable it explicitly
+FABRICPC_DISABLE_TRITON_GEMM=1 python examples/mnist_demo.py --optimizer adam
 ```
 
 ## Examples
@@ -25,7 +32,7 @@ python examples/mnist_demo.py
 - Output layer: 10 units (class logits)
 
 **Configuration**:
-- Optimizer: Adam (lr=1e-3)
+- Optimizer: Natural Gradient (diag Fisher, lr=1e-3)
 - Inference: 20 steps @ eta=0.05
 - Training: 20 epochs, batch size 200
 
