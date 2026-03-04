@@ -109,7 +109,7 @@ def parse_args() -> argparse.Namespace:
     Env fallback:
         FABRICPC_OPTIMIZER={adam|adamw|sgd|ngd_diag|ngd_layerwise}
     """
-    default_optimizer = os.environ.get("FABRICPC_OPTIMIZER", "ngd_diag")
+    default_optimizer = os.environ.get("FABRICPC_OPTIMIZER", "adam")
     parser = argparse.ArgumentParser(description="FabricPC MNIST demo")
     parser.add_argument(
         "--optimizer",
