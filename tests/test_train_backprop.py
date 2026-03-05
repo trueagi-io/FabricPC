@@ -11,6 +11,7 @@ os.environ.setdefault("JAX_TRACEBACK_FILTERING", "off")
 import pytest
 import jax
 import jax.numpy as jnp
+import optax
 
 from fabricpc.nodes import Linear
 from fabricpc.builder import Edge, TaskMap, graph
@@ -93,14 +94,14 @@ class TestTrainBackprop:
         """Test train_backprop returns correct outputs and updates parameters."""
         params, structure = graph_with_feedforward
         train_loader = make_mock_loader(rng_key, num_batches=4)
+        optimizer = optax.adam(0.01)
         config = {
             "num_epochs": 2,
-            "optimizer": {"type": "adam", "lr": 0.01},
             "loss_type": "cross_entropy",
         }
 
         trained_params, iter_results, epoch_results = train_backprop(
-            params, structure, train_loader, config, rng_key, verbose=False
+            params, structure, train_loader, optimizer, config, rng_key, verbose=False
         )
 
         # Verify return structure
@@ -129,7 +130,8 @@ class TestTrainBackprop:
         """Test train_backprop with epoch and iteration callbacks."""
         params, structure = graph_with_feedforward
         train_loader = make_mock_loader(rng_key, num_batches=2)
-        config = {"num_epochs": 2, "optimizer": {"type": "adam", "lr": 0.01}}
+        optimizer = optax.adam(0.01)
+        config = {"num_epochs": 2}
 
         epoch_calls = []
         iter_calls = []
@@ -146,6 +148,7 @@ class TestTrainBackprop:
             params,
             structure,
             train_loader,
+            optimizer,
             config,
             rng_key,
             verbose=False,
@@ -257,14 +260,20 @@ class TestIntegration:
             jax.random.PRNGKey(999), batch_size=8, num_batches=3
         )
 
+        optimizer = optax.adam(0.01)
         train_config = {
             "num_epochs": 5,
-            "optimizer": {"type": "adam", "lr": 0.01},
             "loss_type": "cross_entropy",
         }
 
         trained_params, iter_results, _ = train_backprop(
-            params, structure, train_loader, train_config, rng_key, verbose=False
+            params,
+            structure,
+            train_loader,
+            optimizer,
+            train_config,
+            rng_key,
+            verbose=False,
         )
 
         eval_config = {"loss_type": "cross_entropy"}

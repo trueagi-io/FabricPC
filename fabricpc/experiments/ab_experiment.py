@@ -7,12 +7,16 @@ training algorithms, or both).
 Example::
 
     from fabricpc.experiments import ExperimentArm, ABExperiment
+    import optax
+
+    optimizer = optax.adam(1e-3)
 
     arm_a = ExperimentArm(
         name="Lateral",
         model_factory=create_lateral_model,
         train_fn=train_pcn,
         eval_fn=evaluate_pcn,
+        optimizer=optimizer,
         train_config=pc_config,
     )
     arm_b = ExperimentArm(
@@ -20,6 +24,7 @@ Example::
         model_factory=create_mlp_model,
         train_fn=train_pcn,
         eval_fn=evaluate_pcn,
+        optimizer=optimizer,
         train_config=pc_config,
     )
 
@@ -40,6 +45,7 @@ import time
 
 import numpy as np
 import jax
+import optax
 
 from fabricpc.experiments.statistics import (
     descriptive_stats,
@@ -67,13 +73,15 @@ class ExperimentArm:
             (GraphParams, GraphStructure). Called fresh each trial.
         train_fn: Training function with signature matching train_pcn.
         eval_fn: Evaluation function with signature matching evaluate_pcn.
-        train_config: Training configuration dict.
+        optimizer: Optax optimizer (e.g., optax.adam(1e-3)).
+        train_config: Training configuration dict (scalar hyperparams only).
     """
 
     name: str
     model_factory: ModelFactory
     train_fn: TrainFn
     eval_fn: EvalFn
+    optimizer: optax.GradientTransformation
     train_config: dict
 
 
@@ -295,6 +303,7 @@ class ABExperiment:
             params,
             structure,
             train_loader,
+            arm.optimizer,
             arm.train_config,
             train_key,
             verbose=self.verbose,

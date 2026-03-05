@@ -224,6 +224,7 @@ def train_autoregressive(
     params: GraphParams,
     structure: GraphStructure,
     train_loader: Any,
+    optimizer: optax.GradientTransformation,
     config: dict,
     rng_key: jax.Array,
     verbose: bool = True,
@@ -237,8 +238,8 @@ def train_autoregressive(
         params: Initial parameters
         structure: Graph structure
         train_loader: Data loader yielding batches with 'x' and 'y' keys
+        optimizer: Optax optimizer (e.g., optax.adam(1e-3))
         config: Training configuration:
-            - optimizer: Optimizer config dict
             - num_epochs: Number of training epochs
             - infer_steps: Inference steps per training step
             - eta_infer: Inference learning rate
@@ -252,10 +253,6 @@ def train_autoregressive(
     Returns:
         Tuple of (trained_params, energy_history, epoch_results)
     """
-    from fabricpc.training.optimizers import create_optimizer
-
-    # Create optimizer
-    optimizer = create_optimizer(config.get("optimizer", {"type": "adam", "lr": 1e-3}))
     opt_state = optimizer.init(params)
 
     # Training hyperparameters

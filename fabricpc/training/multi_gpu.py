@@ -191,6 +191,7 @@ def train_pcn_multi_gpu(
     params: GraphParams,
     structure: GraphStructure,
     train_loader: Any,
+    optimizer: optax.GradientTransformation,
     config: dict,
     rng_key: jax.Array,
     verbose: bool = True,
@@ -202,6 +203,7 @@ def train_pcn_multi_gpu(
         params: Initial parameters (single device)
         structure: Graph structure
         train_loader: Data loader
+        optimizer: Optax optimizer (e.g., optax.adam(1e-3))
         config: Training configuration
         rng_key: JAX random key
         verbose: Whether to print progress
@@ -211,10 +213,9 @@ def train_pcn_multi_gpu(
 
     Example:
         >>> params = initialize_params(structure, jax.random.PRNGKey(0))
-        >>> trained = train_pcn_multi_gpu(params, structure, train_loader, config)
+        >>> optimizer = optax.adam(1e-3)
+        >>> trained = train_pcn_multi_gpu(params, structure, train_loader, optimizer, config)
     """
-    from fabricpc.training.optimizers import create_optimizer
-
     # Get available devices
     n_devices = jax.device_count()
     if verbose:
@@ -227,8 +228,6 @@ def train_pcn_multi_gpu(
                 "Only 1 device available, using multi-gpu training function with single device."
             )
 
-    # Create optimizer
-    optimizer = create_optimizer(config.get("optimizer", {"type": "adam", "lr": 1e-3}))
     opt_state = optimizer.init(params)
 
     # Replicate params and optimizer state across devices

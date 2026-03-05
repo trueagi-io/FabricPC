@@ -29,8 +29,8 @@ from fabricpc.graph.graph_net import compute_local_weight_gradients
 from fabricpc.graph import initialize_params
 from fabricpc.graph.state_initializer import initialize_graph_state
 from fabricpc.core.inference import run_inference
+import optax
 from fabricpc.training import train_step
-from fabricpc.training.optimizers import create_optimizer
 from fabricpc.nodes import Linear
 from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.core.activations import (
@@ -309,7 +309,7 @@ class TestTraining:
         }
 
         # Create optimizer
-        optimizer = create_optimizer({"type": "adam", "lr": 0.01})
+        optimizer = optax.adam(0.01)
         opt_state = optimizer.init(params)
 
         # Run training step

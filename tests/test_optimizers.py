@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Tests for optimizer creation and update behavior.
+Tests for natural gradient optimizer transforms and their integration with training.
 """
 
 import os
@@ -13,7 +13,10 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from fabricpc.training.optimizers import create_optimizer
+from fabricpc.training.optimizers import (
+    scale_by_natural_gradient_diag,
+    scale_by_natural_gradient_layerwise,
+)
 from fabricpc.training import train_step
 from fabricpc.nodes import Linear
 from fabricpc.builder import Edge, TaskMap, graph
@@ -28,12 +31,13 @@ def rng_key():
     return jax.random.PRNGKey(0)
 
 
-def test_create_optimizer_ngd_diag_updates():
+def test_ngd_diag_updates():
     params = {"w": jnp.ones((4, 3)), "b": jnp.ones((3,))}
     grads = jax.tree_util.tree_map(lambda p: jnp.full_like(p, 0.1), params)
 
-    optimizer = create_optimizer(
-        {"type": "ngd_diag", "lr": 1e-2, "fisher_decay": 0.9, "damping": 1e-3}
+    optimizer = optax.chain(
+        scale_by_natural_gradient_diag(fisher_decay=0.9, damping=1e-3),
+        optax.scale(-1e-2),
     )
     opt_state = optimizer.init(params)
     updates, _ = optimizer.update(grads, opt_state, params)
@@ -43,12 +47,13 @@ def test_create_optimizer_ngd_diag_updates():
     assert not jnp.allclose(new_params["w"], params["w"])
 
 
-def test_create_optimizer_ngd_layerwise_updates():
+def test_ngd_layerwise_updates():
     params = {"w": jnp.ones((5, 2)), "b": jnp.ones((2,))}
     grads = jax.tree_util.tree_map(lambda p: jnp.full_like(p, 0.05), params)
 
-    optimizer = create_optimizer(
-        {"type": "ngd_layerwise", "lr": 1e-2, "fisher_decay": 0.9, "damping": 1e-3}
+    optimizer = optax.chain(
+        scale_by_natural_gradient_layerwise(fisher_decay=0.9, damping=1e-3),
+        optax.scale(-1e-2),
     )
     opt_state = optimizer.init(params)
     updates, _ = optimizer.update(grads, opt_state, params)
@@ -58,8 +63,14 @@ def test_create_optimizer_ngd_layerwise_updates():
     assert not jnp.allclose(new_params["w"], params["w"])
 
 
-@pytest.mark.parametrize("opt_type", ["ngd_diag", "ngd_layerwise"])
-def test_natural_gradients_work_in_train_step(rng_key, opt_type):
+@pytest.mark.parametrize(
+    "ngd_transform",
+    [
+        lambda: scale_by_natural_gradient_diag(fisher_decay=0.95, damping=1e-3),
+        lambda: scale_by_natural_gradient_layerwise(fisher_decay=0.95, damping=1e-3),
+    ],
+)
+def test_natural_gradients_work_in_train_step(rng_key, ngd_transform):
     x_node = Linear(shape=(6,), name="x")
     hidden = Linear(shape=(4,), activation=SigmoidActivation(), name="hidden")
     y_node = Linear(shape=(3,), activation=SigmoidActivation(), name="y")
@@ -73,8 +84,9 @@ def test_natural_gradients_work_in_train_step(rng_key, opt_type):
     )
     params = initialize_params(structure, rng_key)
 
-    optimizer = create_optimizer(
-        {"type": opt_type, "lr": 1e-3, "fisher_decay": 0.95, "damping": 1e-3}
+    optimizer = optax.chain(
+        ngd_transform(),
+        optax.scale(-1e-3),
     )
     opt_state = optimizer.init(params)
 
@@ -106,7 +118,7 @@ def test_natural_gradients_work_in_train_step(rng_key, opt_type):
 
 def test_natural_gradient_hparams_validation():
     with pytest.raises(ValueError, match="fisher_decay"):
-        create_optimizer({"type": "ngd_diag", "lr": 1e-3, "fisher_decay": 1.1})
+        scale_by_natural_gradient_diag(fisher_decay=1.1)
 
     with pytest.raises(ValueError, match="damping"):
-        create_optimizer({"type": "ngd_layerwise", "lr": 1e-3, "damping": 0.0})
+        scale_by_natural_gradient_layerwise(damping=0.0)

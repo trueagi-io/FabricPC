@@ -9,7 +9,7 @@ import jax.numpy as jnp
 from fabricpc.nodes.base import NodeBase, NodeParams, SlotSpec
 from fabricpc.core.activations import IdentityActivation, GeluActivation
 from fabricpc.core.energy import GaussianEnergy
-from fabricpc.core.initializers import NormalInitializer
+from fabricpc.core.initializers import NormalInitializer, XavierInitializer, initialize
 from fabricpc.core.types import NodeState, NodeInfo
 from typing import Dict, Tuple, Any
 
@@ -185,21 +185,22 @@ class TransformerBlock(NodeBase):
 
         assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
 
+        weight_init = config.get("weight_init", None)
+        if weight_init is None:
+            weight_init = XavierInitializer()
+
         keys = jax.random.split(key, 8)
-        std = 0.02 * 1.0 / jnp.sqrt(embed_dim)
 
         return NodeParams(
             weights={
                 # Attention weights
-                "W_q": jax.random.normal(keys[0], (embed_dim, embed_dim)) * std,
-                "W_k": jax.random.normal(keys[1], (embed_dim, embed_dim)) * std,
-                "W_v": jax.random.normal(keys[2], (embed_dim, embed_dim)) * std,
-                "W_o": jax.random.normal(keys[3], (embed_dim, embed_dim)) * std,
+                "W_q": initialize(keys[0], (embed_dim, embed_dim), weight_init),
+                "W_k": initialize(keys[1], (embed_dim, embed_dim), weight_init),
+                "W_v": initialize(keys[2], (embed_dim, embed_dim), weight_init),
+                "W_o": initialize(keys[3], (embed_dim, embed_dim), weight_init),
                 # FFN weights
-                "W_ff1": jax.random.normal(keys[4], (embed_dim, ff_dim))
-                * std
-                * jnp.sqrt(ff_dim / embed_dim),
-                "W_ff2": jax.random.normal(keys[5], (ff_dim, embed_dim)) * std,
+                "W_ff1": initialize(keys[4], (embed_dim, ff_dim), weight_init),
+                "W_ff2": initialize(keys[5], (ff_dim, embed_dim), weight_init),
                 # LayerNorm parameters
                 "ln1_gamma": jnp.ones((1, 1, embed_dim)),
                 "ln2_gamma": jnp.ones((1, 1, embed_dim)),

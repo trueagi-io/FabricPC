@@ -36,7 +36,12 @@ from fabricpc.core.activations import (
     SoftmaxActivation,
 )
 from fabricpc.core.energy import CrossEntropyEnergy
+import optax
 from fabricpc.training import train_pcn, evaluate_pcn
+from fabricpc.training.natural_gradients import (
+    scale_by_natural_gradient_diag,
+    scale_by_natural_gradient_layerwise,
+)
 from fabricpc.utils.data.dataloader import MnistLoader
 import time
 
@@ -70,35 +75,31 @@ structure = graph(
 )
 
 # Training hyperparameters
-TRAIN_CONFIG_TEMPLATE = {
+train_config = {
     "num_epochs": 20,       # Number of training epochs
     "infer_steps": 20,      # Inference steps
     "eta_infer": 0.05,      # Inference learning rate
-    "optimizer": {},  # set at runtime from CLI/env
 }
 batch_size = 200
 
 # fmt: on
 
 OPTIMIZER_PRESETS = {
-    "adam": {"type": "adam", "lr": 0.001, "weight_decay": 0.001},
-    "adamw": {"type": "adamw", "lr": 0.001, "weight_decay": 0.001},
-    "sgd": {"type": "sgd", "lr": 0.01, "momentum": 0.9, "weight_decay": 0.001},
-    "ngd_diag": {
-        "type": "ngd_diag",
-        # "lr": 0.001,
-        "lr": 0.0003,
-        "fisher_decay": 0.95,
-        "damping": 1e-3,
-        "weight_decay": 0.001,
-    },
-    "ngd_layerwise": {
-        "type": "ngd_layerwise",
-        "lr": 0.001,
-        "fisher_decay": 0.95,
-        "damping": 1e-3,
-        "weight_decay": 0.001,
-    },
+    "adam": lambda: optax.chain(optax.add_decayed_weights(0.001), optax.adam(0.001)),
+    "adamw": lambda: optax.adamw(0.001, weight_decay=0.001),
+    "sgd": lambda: optax.chain(
+        optax.add_decayed_weights(0.001), optax.sgd(0.01, momentum=0.9)
+    ),
+    "ngd_diag": lambda: optax.chain(
+        optax.add_decayed_weights(0.001),
+        scale_by_natural_gradient_diag(fisher_decay=0.95, damping=1e-3),
+        optax.scale(-0.0003),
+    ),
+    "ngd_layerwise": lambda: optax.chain(
+        optax.add_decayed_weights(0.001),
+        scale_by_natural_gradient_layerwise(fisher_decay=0.95, damping=1e-3),
+        optax.scale(-0.001),
+    ),
 }
 
 
@@ -127,21 +128,19 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def get_optimizer_config(name: str) -> dict:
-    """Return optimizer config preset by name."""
+def get_optimizer(name: str) -> optax.GradientTransformation:
+    """Return optimizer preset by name."""
     key = name.lower()
     if key not in OPTIMIZER_PRESETS:
         valid = ", ".join(OPTIMIZER_PRESETS.keys())
         raise ValueError(f"unknown optimizer '{name}'. valid choices: {valid}")
-    return dict(OPTIMIZER_PRESETS[key])
+    return OPTIMIZER_PRESETS[key]()
 
 
 if __name__ == "__main__":
     args = parse_args()
 
-    # Copy template and inject optimizer preset selected at runtime.
-    train_config = dict(TRAIN_CONFIG_TEMPLATE)
-    train_config["optimizer"] = get_optimizer_config(args.optimizer)
+    optimizer = get_optimizer(args.optimizer)
 
     master_rng_key = jax.random.PRNGKey(0)
 
@@ -171,12 +170,13 @@ if __name__ == "__main__":
     # A model consists of two parts: the parameters (weights) and the structure (graph architecture). The training loop uses both to perform inference and learning.
 
     print("\nTraining (JIT compilation on first batch)...")
-    print(f"Using optimizer preset: {train_config['optimizer']['type']}")
+    print(f"Using optimizer preset: {args.optimizer}")
     start_time = time.time()
     trained_params, energy_history, _ = train_pcn(
         params=params,
         structure=structure,
         train_loader=train_loader,
+        optimizer=optimizer,
         config=train_config,
         rng_key=train_key,
         verbose=True,

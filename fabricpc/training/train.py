@@ -129,6 +129,7 @@ def train_pcn(
     params: GraphParams,
     structure: GraphStructure,
     train_loader: Any,
+    optimizer: optax.GradientTransformation,
     config: dict,
     rng_key: jax.Array,
     verbose: bool = True,
@@ -142,8 +143,8 @@ def train_pcn(
         params: Initial parameters
         structure: Graph structure
         train_loader: Data loader (iterable yielding batches)
+        optimizer: Optax optimizer (e.g., optax.adam(1e-3))
         config: Training configuration with keys:
-            - optimizer: optimizer config dict
             - num_epochs: Number of training epochs
             - infer_steps: number of inference steps
             - eta_infer: inference learning rate
@@ -163,18 +164,14 @@ def train_pcn(
         >>> rng_key = jax.random.PRNGKey(0)
         >>> params_key, train_key = jax.random.split(rng_key, 2)
         >>> params = initialize_params(structure, params_key)
+        >>> optimizer = optax.adam(1e-3)
         >>> train_config = {
-        ...     "optimizer": {"type": "adam", "lr": 1e-3},
         ...     "num_epochs": 10,
         ...     "infer_steps": 20,
         ...     "eta_infer": 0.1,
         ... }
-        >>> trained_params = train_pcn(params, structure, train_loader, train_config, train_key)
+        >>> trained_params = train_pcn(params, structure, train_loader, optimizer, train_config, train_key)
     """
-    from fabricpc.training.optimizers import create_optimizer
-
-    # Create optimizer
-    optimizer = create_optimizer(config.get("optimizer", {"type": "adam", "lr": 1e-3}))
     opt_state = optimizer.init(params)
 
     # Training hyperparameters

@@ -48,7 +48,8 @@ from fabricpc.core.activations import (
 )
 from fabricpc.core.energy import GaussianEnergy, CrossEntropyEnergy
 from fabricpc.core.initializers import NormalInitializer
-from fabricpc.training import create_optimizer, evaluate_pcn
+import optax
+from fabricpc.training import evaluate_pcn
 
 # Import dashboarding utilities
 from fabricpc.utils.dashboarding import (
@@ -120,10 +121,10 @@ structure = graph(
     graph_state_initializer=FeedforwardStateInit(),
 )
 
+optimizer = optax.adamw(0.001, weight_decay=0.001)
 train_config = {
     "infer_steps": 20,
     "eta_infer": 0.05,
-    "optimizer": {"type": "adam", "lr": 0.001, "weight_decay": 0.001},
 }
 batch_size = 200
 num_epochs = 1
@@ -169,7 +170,7 @@ if TRACKING_ENABLED:
 
     tracking_config = TrackingConfig(
         experiment_name="mnist_pcn_tracking",
-        run_name=f"5layer_lr{train_config['optimizer']['lr']}_infer{train_config['infer_steps']}",
+        run_name=f"5layer_lr0.001_infer{train_config['infer_steps']}",
         # Batch-level tracking
         track_batch_energy=True,
         track_batch_energy_per_node=True,
@@ -218,14 +219,13 @@ else:
 # ==============================================================================
 
 print(f"\n[Training Configuration]")
-print(f"  Optimizer: {train_config['optimizer']['type']}")
-print(f"  Learning rate: {train_config['optimizer']['lr']}")
+print(f"  Optimizer: adamw")
+print(f"  Learning rate: 0.001")
 print(f"  Inference steps: {train_config['infer_steps']}")
 
 infer_steps = train_config["infer_steps"]
 eta_infer = train_config["eta_infer"]
 
-optimizer = create_optimizer(train_config["optimizer"])
 opt_state = optimizer.init(params)
 
 # JIT compile training step with history

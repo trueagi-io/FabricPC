@@ -26,6 +26,7 @@ from fabricpc.core.activations import (
     SoftmaxActivation,
 )
 from fabricpc.core.energy import CrossEntropyEnergy
+import optax
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
 import time
@@ -62,11 +63,11 @@ structure = graph(
 )
 
 # Training hyperparameters
+optimizer = optax.adamw(0.001, weight_decay=0.001)
 train_config = {
     "num_epochs": 27,       # Number of training epochs
     "infer_steps": 20,      # Inference steps
     "eta_infer": 0.05,      # Inference learning rate
-    "optimizer": {"type": "adam", "lr": 0.001, "weight_decay": 0.001},
 }
 batch_size = 200
 
@@ -105,6 +106,7 @@ if __name__ == "__main__":
         params=params,
         structure=structure,
         train_loader=train_loader,
+        optimizer=optimizer,
         config=train_config,
         rng_key=train_key,
         verbose=True,

@@ -33,6 +33,7 @@ from fabricpc.core.activations import (
     SoftmaxActivation,
 )
 from fabricpc.core.energy import CrossEntropyEnergy
+import optax
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.experiments import ExperimentArm, ABExperiment
 from fabricpc.utils.data.dataloader import MnistLoader
@@ -40,11 +41,11 @@ from fabricpc.utils.data.dataloader import MnistLoader
 jax.config.update("jax_default_prng_impl", "threefry2x32")
 
 # Training hyperparameters (shared by both arms)
+optimizer = optax.adamw(0.001, weight_decay=0.001)
 train_config = {
     "num_epochs": 1,
     "infer_steps": 20,
     "eta_infer": 0.05,
-    "optimizer": {"type": "adam", "lr": 0.001, "weight_decay": 0.001},
 }
 batch_size = 200
 
@@ -135,6 +136,7 @@ def main():
         model_factory=create_lateral_model,
         train_fn=train_pcn,
         eval_fn=evaluate_pcn,
+        optimizer=optimizer,
         train_config=train_config,
     )
 
@@ -143,6 +145,7 @@ def main():
         model_factory=create_mlp_model,
         train_fn=train_pcn,
         eval_fn=evaluate_pcn,
+        optimizer=optimizer,
         train_config=train_config,
     )
 

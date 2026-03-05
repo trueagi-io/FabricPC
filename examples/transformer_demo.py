@@ -43,7 +43,7 @@ from fabricpc.core.activations import (
 )
 from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.core.initializers import NormalInitializer, KaimingInitializer
-from fabricpc.training.optimizers import create_optimizer
+import optax
 from fabricpc.training.train_autoregressive import (
     train_step_autoregressive,
     generate_autoregressive,
@@ -557,11 +557,11 @@ def main():
         print("\nAim not installed. Tracking disabled. Install with: pip install aim")
 
     # Training config for autoregressive training
+    optimizer = optax.adamw(LR, weight_decay=0.001)
     train_config = {
         "num_epochs": NUM_EPOCHS,
         "infer_steps": INFER_STEPS,
         "eta_infer": ETA_INFER,
-        "optimizer": {"type": "adam", "lr": LR, "weight_decay": 0.001},
         "use_causal_mask": True,  # Enable causal masking for autoregressive
     }
 
@@ -652,7 +652,6 @@ def main():
     # ==============================================================================
     # CUSTOM TRAINING LOOP (for Aim per-batch latent distribution tracking)
     # ==============================================================================
-    optimizer = create_optimizer(train_config["optimizer"])
     opt_state = optimizer.init(params)
 
     num_epochs = train_config["num_epochs"]

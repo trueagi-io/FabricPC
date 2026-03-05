@@ -38,6 +38,7 @@ from fabricpc.core.activations import (
     ReLUActivation,
 )
 from fabricpc.core.energy import CrossEntropyEnergy
+import optax
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.training.train_backprop import train_backprop, evaluate_backprop
 from fabricpc.experiments import ExperimentArm, ABExperiment
@@ -50,6 +51,7 @@ _mnist_demo = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mnist_demo)
 train_config = _mnist_demo.train_config
 batch_size = _mnist_demo.batch_size
+optimizer = optax.adamw(0.001, weight_decay=0.001)
 
 jax.config.update("jax_default_prng_impl", "threefry2x32")
 
@@ -139,6 +141,7 @@ def main():
         model_factory=create_pc_model,
         train_fn=train_pcn,
         eval_fn=evaluate_pcn,
+        optimizer=optimizer,
         train_config=train_config,
     )
 
@@ -147,6 +150,7 @@ def main():
         model_factory=create_backprop_model,
         train_fn=train_backprop,
         eval_fn=evaluate_backprop,
+        optimizer=optimizer,
         train_config=train_config,
     )
 

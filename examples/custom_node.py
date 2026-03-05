@@ -281,11 +281,13 @@ def main():
     print(f"Total parameters: {total_params:,}")
 
     # Training config (fewer epochs for demo)
+    import optax
+
+    optimizer = optax.adam(0.001)
     train_config = {
         "num_epochs": 3,  # Fewer epochs for demo
         "infer_steps": 10,  # Inference steps
         "eta_infer": 0.05,  # Inference learning rate
-        "optimizer": {"type": "adam", "lr": 0.001},
     }
     batch_size = 64  # Smaller batch for conv nets
 
@@ -301,6 +303,7 @@ def main():
         params=params,
         structure=structure,
         train_loader=train_loader,
+        optimizer=optimizer,
         config=train_config,
         rng_key=train_key,
         verbose=True,

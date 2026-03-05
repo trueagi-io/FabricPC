@@ -16,12 +16,14 @@ FabricPC is built on solid foundations:
 - Local Hebbian learning with Jacobian-based gradient computation
 
 This roadmap addresses:
-1. **New Node Types** - Transformer, Conv, Normalization layers
-2. **Advanced Solvers** - iPC, dynamic inference scheduling
-3. **N-Dimensional Tensor Support** - Beyond 2D matrices
-4. **Plugin Architecture** - Custom nodes without library modification
-5. **Hypergraph Support** - Hierarchical subgraph containers
-6. **Documentation & Demos** - Compelling examples for community adoption
+1. **New Node Types** - Transformer, Conv, Normalization layers (done)
+2. **Advanced Solvers** - iPC, dynamic inference scheduling (in progress)
+3. **N-Dimensional Tensor Support** - Beyond 2D matrices (done)
+4. **Plugin Architecture** - Custom nodes without library modification (done)
+5. **Hypergraph Support** - Hierarchical subgraph containers (planned)
+6. **Documentation & Demos** - Compelling examples for community adoption (in progress)
+7. **Performance Optimization** - Node parallelization
+8. **ML Workflow** Flax.linen (nesting module pytrees and nn.scan a block across layers), CLU or Grain (data loaders), and Orbax (checkpointing).
 
 ---
 
@@ -35,7 +37,7 @@ This roadmap addresses:
 - [x] Extend `NodeState` to support arbitrary shapes `(batch, *spatial_dims, channels)`
 - [x] Update `NodeInfo` with `shape: Tuple[int, ...]` instead of just `dim: int`
 - [x] Modify inference loop to handle tensor reshaping correctly
-- [x] Update `Linear` to flatten inputs for matmul, reshape outputs
+- [x] Update `Linear` to optionally flatten inputs for matmul, reshape outputs
 - [x] Ensure backward compatibility with existing 2D use cases
 - [x] Add comprehensive tests for n-dim shapes
 - [x] Plan for future convolutional node support using channels-last convention
@@ -1673,44 +1675,180 @@ def create_hierarchical_pc_network(
 
 ---
 
-## Phase 7: Performance and Testing
+## Phase 7: Performance Optimization
 
-### 7.1 Benchmarking Suite
+Node parallelization to reduce scaling from O(N^2) to O(N)
 
+## Phase 8: ML Workflow
+
+### 8.1 Flax.linen (nesting module pytrees and nn.scan a block across layers)
+
+nn.scan is particularly valuable for transformers - you can define one transformer block and scan it across layers, which dramatically reduces compile time and memory for the computation graph
 ```python
-# fabricpc/benchmarks/benchmark_suite.py
-"""
-Comprehensive benchmarking for FabricPC.
-"""
+class TransformerStack(nn.Module):
+    num_layers: int
+    
+    @nn.compact
+    def __call__(self, x):
+        ScanBlock = nn.scan(
+            TransformerBlock,
+            variable_axes={'params': 0},
+            split_rngs={'dropout': True},
+            length=self.num_layers,
+        )
+        x = ScanBlock()(x)
+        return x
+```
+This creates a single set of per-layer parameters stacked along axis 0, then scans the block computation across the layer dimension. One compiled block, N layers of execution—huge win for compile time and enables gradient checkpointing per-layer trivially.
 
-def benchmark_inference_speed():
-    """Benchmark inference iterations per second."""
-    pass
+Flax provides a module system that lets you define models in an object-oriented style while compiling down to pure functional JAX under the hood.
+The Linen API (flax.linen, aliased as nn)
+Flax's current API is called Linen. You define modules by subclassing nn.Module and implementing a __call__ method, which looks superficially like PyTorch:
+```python
+import flax.linen as nn
+import jax.numpy as jnp
 
-def benchmark_training_throughput():
-    """Benchmark samples per second during training."""
-    pass
+class MLP(nn.Module):
+    hidden_dim: int
+    output_dim: int
 
-def benchmark_memory_usage():
-    """Profile memory usage for various network sizes."""
-    pass
-
-def benchmark_scaling():
-    """Test scaling across GPUs/TPUs."""
-    pass
+    @nn.compact
+    def __call__(self, x):
+        x = nn.Dense(self.hidden_dim)(x)
+        x = nn.relu(x)
+        x = nn.Dense(self.output_dim)(x)
+        return x
+```
+The @nn.compact decorator is the key mechanism. It lets you define submodules inline (like those nn.Dense calls) rather than having to declare them in a separate setup() method. Flax intercepts those calls and auto-names them ("Dense_0", "Dense_1") to build the parameter tree.
+But here's where it diverges from PyTorch fundamentally: the module doesn't hold parameters. Instead, you do an explicit init step:
+```python
+model = MLP(hidden_dim=256, output_dim=10)
+params = model.init(rng_key, dummy_input)  # returns a frozen pytree
+output = model.apply(params, real_input)    # pure function call
 ```
 
-### 7.2 Test Coverage
+model.init() traces through the module, collects all parameter shapes and initializations, and returns them as a nested dict (a pytree). model.apply() takes those params as an explicit argument and runs the forward pass. Both are pure functions—no side effects, no hidden state. This means model.apply composes directly with jax.jit, jax.grad, jax.vmap without any wrapping or special handling.
+The parameter pytree structure
+The params object looks like:
+```python
+{
+    'params': {
+        'Dense_0': {'kernel': array(...), 'bias': array(...)},
+        'Dense_1': {'kernel': array(...), 'bias': array(...)},
+    }
+}
+```
+This is just a nested dict of JAX arrays. You can inspect it, serialize it, slice it, transform it with jax.tree_util—there's no opaque object wrapping. This transparency is a major feature for research: you can write custom initialization schemes, parameter-specific learning rates, or selective freezing by directly manipulating the pytree with standard tree operations.
+Mutable state handling
+For things like batch norm running statistics or dropout RNG, Flax uses a "variable collections" system. Parameters live in the 'params' collection, batch stats in 'batch_stats', etc. You pass them in and get updated collections back:
+```python
+variables = model.init(rng_key, dummy_input)
+# variables = {'params': {...}, 'batch_stats': {...}}
 
-**Required Tests**:
-- [ ] Unit tests for each node type
-- [ ] Integration tests for graph construction
-- [ ] Gradient correctness tests (numerical vs analytical)
-- [ ] Solver convergence tests
-- [ ] Multi-GPU correctness tests
-- [ ] Serialization round-trip tests
-- [ ] API compatibility tests
-- [ ] Performance regression tests
+output, updated_state = model.apply(
+    variables, x,
+    mutable=['batch_stats']  # which collections can be modified
+)
+```
+This keeps the functional contract: state goes in, updated state comes out. No hidden mutation. The mutable argument explicitly declares what's allowed to change, which makes the dataflow visible.
+What Flax adds over raw JAX
+The concrete things you'd otherwise have to build yourself:
+Hierarchical parameter namespacing — in raw JAX, you'd manage a flat dict or manually nest dicts. Flax's module system gives you automatic hierarchical naming that mirrors your model architecture, making checkpoint loading, parameter inspection, and transfer learning straightforward.
+Shape inference — Flax defers parameter creation until the first input is traced (during init), so Dense layers don't need you to specify input dimensions. This is similar to PyTorch's LazyLinear but is the default behavior.
+RNG management — JAX's explicit PRNG is powerful but threading different RNG streams (one for dropout, one for initialization) through a deep model is tedious. Flax's module system handles RNG splitting and routing:
+```python
+output = model.apply(params, x, rngs={'dropout': dropout_key})
+```
+Each module that needs randomness gets an automatically-split key from the appropriate stream.
+
+### 8.2 Orbax (checkpointing).
+
+In JAX, your training state is a pytree—a nested dict of arrays, potentially sharded across multiple devices or hosts. Saving this isn't as simple as pickle.dump() because you need to handle: arrays distributed across GPUs/TPUs that need to be gathered or saved in-place per-shard, asynchronous writes that don't block training, atomic checkpoint completion (no half-written states), and managing a rolling window of checkpoints over thousands of training steps. Orbax provides a layered abstraction stack for all of this.
+The abstraction layers (bottom to top)
+At the lowest level, Orbax uses TensorStore as its storage backend. TensorStore handles the actual I/O of array data GitHub, using the OCDBT format by default—a key-value store optimized for large tensors. Each array leaf in your pytree gets serialized independently, which means individual parameters can be read back without loading the entire checkpoint. This is what enables partial restoration and cross-topology loading.
+Above that sit TypeHandlers, which define how each leaf type in the pytree gets serialized and deserialized. jax.Array, np.ndarray, Python scalars, and strings all have their own handlers. The handler knows how to take a sharded jax.Array distributed across 8 GPUs and write each shard's data, plus metadata about the sharding specification, dtype, and shape. On restore, the handler reads the stored data and reconstitutes the array with whatever sharding you specify—which can differ from the original save topology.
+CheckpointHandler sits above TypeHandlers. StandardCheckpointHandler is the default for pytrees and is capable of saving and restoring pytrees with leaves of type Python scalar, np.ndarray, and jax.Array Readthedocs. The handler walks the pytree, dispatches each leaf to the appropriate TypeHandler, and coordinates the overall save/restore. CompositeCheckpointHandler lets you bundle multiple logically distinct objects—say, training state as a pytree plus metadata as JSON—into a single checkpoint directory with different serialization strategies per item.
+Checkpointer wraps a handler and adds atomicity and async support. StandardCheckpointer always saves asynchronously Readthedocs—it copies array data to host memory on a background thread and writes to disk without blocking the training loop. The atomicity mechanism works by writing to a temporary directory first, then doing an atomic rename once everything is committed. If the process crashes mid-write, the temporary directory is detected and cleaned up on the next startup, so you never end up with a corrupted checkpoint.
+The basic API looks like:
+```python
+import orbax.checkpoint as ocp
+
+with ocp.StandardCheckpointer() as ckptr:
+    ckptr.save(path / 'step_1000', train_state)
+    # non-blocking, returns immediately
+    
+    ckptr.wait_until_finished()  # block if you need to
+    
+    restored = ckptr.restore(path / 'step_1000', abstract_state)
+```
+
+The `abstract_state` on restore is important mechanistically—you provide a pytree of `jax.ShapeDtypeStruct` objects that tell Orbax what shape, dtype, and *sharding* to restore into. This is how you handle topology changes: you save from 4 GPUs and restore onto 8 by providing an abstract state with the new sharding spec.
+
+**CheckpointManager** is the highest-level API, designed for training loop integration. It keeps track of multiple checkpointable objects with a directory structure organized by step number :
+```
+checkpoints/
+  0/
+    params/
+    metadata/
+  500/
+    params/
+    metadata/
+  1000/
+    ...
+```
+It provides customization options including save_decision_policy (determines when to save), preservation_policy (determines which checkpoints to keep), step_format_fixed_length for formatted step directories, and cleanup_tmp_directories for automatic cleanup of incomplete saves Readthedocs. A typical training loop integration:
+```python
+options = ocp.CheckpointManagerOptions(
+    save_interval_steps=500,
+    max_to_keep=3,  # rolling window
+)
+
+with ocp.CheckpointManager(ckpt_dir, options=options) as mngr:
+    for step in range(num_steps):
+        train_state = train_step(train_state, batch)
+        
+        mngr.save(step, args=ocp.args.StandardSave(train_state))
+        # only actually writes every 500 steps per policy
+        # automatically deletes old checkpoints beyond max_to_keep
+```
+The manager handles the bookkeeping: tracking which steps exist, deleting old checkpoints (respecting the max_to_keep window), and providing latest_step() / all_steps() queries for resumption logic.
+Composite checkpoints let you save heterogeneous state with different serialization:
+```python
+mngr.save(step, args=ocp.args.Composite(
+    state=ocp.args.StandardSave(train_state),    # pytree → TensorStore
+    metadata=ocp.args.JsonSave(run_config),       # dict → JSON file
+))
+```
+Each item gets its own subdirectory and handler, but they're managed atomically as a single checkpoint step.
+The async mechanism in detail
+The save operation does not block—it copies data from device to host memory and writes asynchronously Readthedocs. Mechanistically, the AsyncCheckpointer launches a background thread that performs the actual I/O. The training loop continues computing while writes happen in the background. If you call save() again before the previous save finishes, Orbax queues the new save and ensures ordering. wait_until_finished() blocks until all pending writes complete—you'd use this before evaluation or at program shutdown.
+Multi-host / distributed restore optimization
+For large-scale distributed training, rather than every device independently fetching the entire checkpoint from storage (like GCS), Orbax supports single-replica restore where only one replica downloads the checkpoint and then broadcasts it to all other replicas via high-speed interconnects Google Cloud. To handle the memory overhead, Orbax breaks the checkpoint into smaller chunks and broadcasts them sequentially, respecting user-defined memory limits to avoid OOM errors Google Cloud.
+
+
+### 8.3 Grain (data loaders)
+
+Grain — data loading and preprocessing
+Grain is a Python library for reading and processing data for training and evaluating JAX models. It is flexible, fast, and deterministic. GitHub
+This is a full data pipeline library—analogous to PyTorch's DataLoader but designed around JAX's functional and distributed paradigms. The core problems it solves:
+Deterministic data iteration. Grain emphasizes resilience to preemptions by maintaining minimal checkpoint sizes and enabling seamless resumption. Medium The IndexSampler generates a deterministic sequence of indices given a seed. If training gets preempted, Grain can checkpoint just the sampler state (essentially an integer offset), and on restart, it produces the exact same data sequence from where it left off. This is critical for reproducibility—you get bit-identical training runs regardless of interruptions.
+True global shuffling. When paired with a random-access file format like ArrayRecord, Grain can perform true global shuffling across the entire dataset even when it doesn't fit in host memory. Google Developers This is different from the approximate shuffling most pipelines do (shuffle filenames, then shuffle a small buffer). Grain generates shuffled index sequences and reads records by random access, so every element has equal probability of appearing at any position.
+Declarative pipeline API. You compose transformations as a chain:
+```python
+dataset = (
+    grain.MapDataset.source(data_source)
+    .shuffle(seed=42)
+    .map(preprocess_fn)
+    .batch(batch_size=32)
+)
+```
+Each operation is a lazy transformation that gets applied per-element during iteration. The DataLoader wraps this with multi-worker prefetching so CPU preprocessing overlaps with GPU computation.
+Orbax integration for pipeline checkpointing. Grain provides PyGrainCheckpointHandler specifically for checkpointing the DataLoader's iterator, and it's recommended to use with Orbax, which can checkpoint both the input pipeline and model together in a multi-host environment. Readthedocs
+In a typical JAX training loop:
+- Grain feeds data in
+- Orbax saves checkpoints of both the model state and the Grain iterator state
+- Optax handles the optimizer
+- Flax provides the model
 
 ---
 

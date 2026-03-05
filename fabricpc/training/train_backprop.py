@@ -126,6 +126,7 @@ def train_backprop(
     params: GraphParams,
     structure: GraphStructure,
     train_loader: Any,
+    optimizer: optax.GradientTransformation,
     config: dict,
     rng_key: jax.Array,
     verbose: bool = True,
@@ -142,8 +143,8 @@ def train_backprop(
         params: Initial parameters
         structure: Graph structure
         train_loader: Data loader yielding batches
+        optimizer: Optax optimizer (e.g., optax.adam(1e-3))
         config: Training configuration:
-            - optimizer: Optimizer config dict (type, lr, weight_decay)
             - num_epochs: Number of training epochs
             - loss_type: "cross_entropy" or "mse" (default: "cross_entropy")
         rng_key: JAX random key
@@ -156,21 +157,17 @@ def train_backprop(
 
     Example:
         >>> params = initialize_params(structure, rng_key)
+        >>> optimizer = optax.adam(1e-3)
         >>> train_config = {
         ...     "num_epochs": 10,
-        ...     "optimizer": {"type": "adam", "lr": 1e-3},
         ...     "loss_type": "cross_entropy",
         ... }
         >>> trained_params, losses, _ = train_backprop(
-        ...     params, structure, train_loader, train_config, rng_key
+        ...     params, structure, train_loader, optimizer, train_config, rng_key
         ... )
     """
-    from fabricpc.training.optimizers import create_optimizer
-
     validate_feedforward_init(structure)
 
-    # Create optimizer
-    optimizer = create_optimizer(config.get("optimizer", {"type": "adam", "lr": 1e-3}))
     opt_state = optimizer.init(params)
 
     # Training hyperparameters
@@ -358,6 +355,7 @@ def train_backprop_autoregressive(
     params: GraphParams,
     structure: GraphStructure,
     train_loader: Any,
+    optimizer: optax.GradientTransformation,
     config: dict,
     rng_key: jax.Array,
     verbose: bool = True,
@@ -374,8 +372,8 @@ def train_backprop_autoregressive(
         params: Initial parameters
         structure: Graph structure
         train_loader: Data loader yielding batches with 'x' and 'y' keys
+        optimizer: Optax optimizer (e.g., optax.adam(1e-3))
         config: Training configuration:
-            - optimizer: Optimizer config dict
             - num_epochs: Number of training epochs
             - use_causal_mask: Whether to use causal masking (default True)
         rng_key: JAX random key
@@ -386,12 +384,8 @@ def train_backprop_autoregressive(
     Returns:
         Tuple of (trained_params, loss_history, epoch_results)
     """
-    from fabricpc.training.optimizers import create_optimizer
-
     validate_feedforward_init(structure)
 
-    # Create optimizer
-    optimizer = create_optimizer(config.get("optimizer", {"type": "adam", "lr": 1e-3}))
     opt_state = optimizer.init(params)
 
     # Training hyperparameters

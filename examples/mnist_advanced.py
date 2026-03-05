@@ -31,7 +31,8 @@ from fabricpc.graph import initialize_params, FeedforwardStateInit
 from fabricpc.core.activations import IdentityActivation, SigmoidActivation
 from fabricpc.core.energy import GaussianEnergy
 from fabricpc.core.initializers import NormalInitializer
-from fabricpc.training import train_step, create_optimizer, evaluate_pcn
+import optax
+from fabricpc.training import train_step, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
 
 # Set random seed and split for different stages
@@ -89,10 +90,10 @@ structure = graph(
 )
 
 # More sophisticated training configuration
+optimizer = optax.adamw(0.001, weight_decay=0.001)
 train_config = {
     "infer_steps": 20,  # More inference steps for deeper network
     "eta_infer": 0.05,  # Inference learning rate
-    "optimizer": {"type": "adam", "lr": 0.001, "weight_decay": 0.001},
 }
 batch_size = 200
 num_epochs = 10
@@ -140,17 +141,15 @@ print(f"  Train batches: {len(train_loader)}")
 # ==============================================================================
 
 print(f"\n[Training Configuration]")
-print(f"  Optimizer: {train_config['optimizer']['type']}")
-print(f"  Learning rate: {train_config['optimizer']['lr']}")
-print(f"  Weight decay: {train_config['optimizer']['weight_decay']}")
+print(f"  Optimizer: adamw")
+print(f"  Learning rate: 0.001")
+print(f"  Weight decay: 0.001")
 print(f"  Inference steps: {train_config['infer_steps']}")
 print(f"  Inference eta: {train_config['eta_infer']}")
 
 infer_steps = train_config["infer_steps"]
 eta_infer = train_config["eta_infer"]
 
-# Create optimizer
-optimizer = create_optimizer(train_config["optimizer"])
 opt_state = optimizer.init(params)
 
 # JIT compile training step

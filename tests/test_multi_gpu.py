@@ -20,6 +20,7 @@ import pytest
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 
 from fabricpc.nodes import Linear
 from fabricpc.builder import Edge, TaskMap, graph
@@ -85,10 +86,15 @@ def simple_structure():
 
 
 @pytest.fixture
+def optimizer():
+    """Optimizer for training."""
+    return optax.adam(1e-3)
+
+
+@pytest.fixture
 def train_config():
     """Training configuration."""
     return {
-        "optimizer": {"type": "adam", "lr": 1e-3},
         "num_epochs": 1,
         "infer_steps": 18,
         "eta_infer": 0.05,
@@ -130,7 +136,7 @@ class TestMultiGPUTraining:
     """Test suite for multi-GPU training numerical similarity."""
 
     def test_both_methods_run_successfully(
-        self, simple_structure, train_config, rng_key
+        self, simple_structure, optimizer, train_config, rng_key
     ):
         """Test that both training methods run without errors."""
         # Split keys for different uses
@@ -155,6 +161,7 @@ class TestMultiGPUTraining:
             params_single,
             simple_structure,
             train_loader,
+            optimizer,
             train_config,
             train_key1,
             verbose=False,
@@ -165,6 +172,7 @@ class TestMultiGPUTraining:
             params_multi,
             simple_structure,
             train_loader,
+            optimizer,
             train_config,
             train_key2,
             verbose=False,
@@ -178,7 +186,9 @@ class TestMultiGPUTraining:
         assert set(trained_single.nodes.keys()) == set(params.nodes.keys())
         assert set(trained_multi.nodes.keys()) == set(params.nodes.keys())
 
-    def test_both_methods_reduce_energy(self, simple_structure, train_config, rng_key):
+    def test_both_methods_reduce_energy(
+        self, simple_structure, optimizer, train_config, rng_key
+    ):
         """Test that both training methods reduce energy over training."""
         model_key, train_key1, train_key2, data_key, eval_key = jax.random.split(
             rng_key, 5
@@ -203,6 +213,7 @@ class TestMultiGPUTraining:
             params_single,
             simple_structure,
             train_loader,
+            optimizer,
             train_config,
             train_key1,
             verbose=False,
@@ -213,6 +224,7 @@ class TestMultiGPUTraining:
             params_multi,
             simple_structure,
             train_loader,
+            optimizer,
             train_config,
             train_key2,
             verbose=False,
@@ -252,7 +264,9 @@ class TestMultiGPUTraining:
             metrics_multi["energy"]
         ), "Multi-GPU eval energy should be finite"
 
-    def test_numerical_similarity(self, simple_structure, train_config, rng_key):
+    def test_numerical_similarity(
+        self, simple_structure, optimizer, train_config, rng_key
+    ):
         """
         Test that train_pcn_multi_gpu with a single shard produces numerically
         identical results to train_pcn.
@@ -282,6 +296,7 @@ class TestMultiGPUTraining:
             params_single,
             simple_structure,
             train_loader,
+            optimizer,
             train_config,
             train_key,
             verbose=False,
@@ -290,6 +305,7 @@ class TestMultiGPUTraining:
             params_multi,
             simple_structure,
             train_loader,
+            optimizer,
             train_config,
             train_key,
             verbose=False,
@@ -338,7 +354,7 @@ class TestMultiGPUTraining:
         )
 
     def test_parameter_magnitudes_similar(
-        self, simple_structure, train_config, rng_key
+        self, simple_structure, optimizer, train_config, rng_key
     ):
         """Test that final parameter magnitudes are in similar ranges."""
         model_key, train_key, data_key = jax.random.split(rng_key, 3)
@@ -364,6 +380,7 @@ class TestMultiGPUTraining:
             params_single,
             simple_structure,
             train_loader,
+            optimizer,
             train_config,
             train_key1,
             verbose=False,
@@ -372,6 +389,7 @@ class TestMultiGPUTraining:
             params_multi,
             simple_structure,
             train_loader,
+            optimizer,
             train_config,
             train_key2,
             verbose=False,
