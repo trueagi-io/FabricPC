@@ -35,6 +35,7 @@ Activations are instantiated with their parameters:
     z_mu = type(act).forward(x, act.config)
 """
 
+import types
 from abc import ABC, abstractmethod
 from typing import Dict, Any
 import jax.numpy as jnp
@@ -76,7 +77,7 @@ class ActivationBase(ABC):
     """
 
     def __init__(self, **config):
-        self.config = config
+        self.config = types.MappingProxyType(config)  # Immutable dictionary
 
     @staticmethod
     @abstractmethod

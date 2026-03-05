@@ -45,6 +45,7 @@ def make_node_info(name, node_shape, in_edges, scale=1.0):
         activation=IdentityActivation(),
         energy=GaussianEnergy(),
         latent_init=NormalInitializer(),
+        weight_init=None,
         slots={"in": None},
         in_degree=len(in_edges),
         out_degree=0,
@@ -73,7 +74,11 @@ class TestIdentityNode:
     def test_no_learnable_parameters(self, rng_key):
         """IdentityNode should have no weights or biases."""
         params = IdentityNode.initialize_params(
-            rng_key, node_shape=(10,), input_shapes={"a->b:in": (8,)}, config={}
+            rng_key,
+            node_shape=(10,),
+            input_shapes={"a->b:in": (8,)},
+            weight_init=None,
+            config={},
         )
         assert len(params.weights) == 0
         assert len(params.biases) == 0

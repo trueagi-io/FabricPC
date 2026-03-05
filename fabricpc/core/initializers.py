@@ -30,6 +30,7 @@ Initializers are instantiated with their parameters:
     init = KaimingInitializer(mode="fan_out", nonlinearity="relu")
 """
 
+import types
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Tuple
 
@@ -65,7 +66,7 @@ class InitializerBase(ABC):
     """
 
     def __init__(self, **config):
-        self.config = config
+        self.config = types.MappingProxyType(config)  # Immutable dictionary
 
     @staticmethod
     @abstractmethod

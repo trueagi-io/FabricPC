@@ -61,10 +61,6 @@ class Conv2DNode(NodeBase):
         padding: str - "VALID" or "SAME" (default: "SAME")
     """
 
-    DEFAULT_ACTIVATION = ReLUActivation
-    DEFAULT_ENERGY = GaussianEnergy
-    DEFAULT_LATENT_INIT = NormalInitializer
-
     def __init__(
         self,
         shape,
@@ -72,11 +68,19 @@ class Conv2DNode(NodeBase):
         kernel_size,
         stride=(1, 1),
         padding="SAME",
+        activation=ReLUActivation(),
+        energy=GaussianEnergy(),
+        latent_init=NormalInitializer(),
+        weight_init=NormalInitializer(),
         **kwargs,
     ):
         super().__init__(
             shape=shape,
             name=name,
+            activation=activation,
+            energy=energy,
+            latent_init=latent_init,
+            weight_init=weight_init,
             kernel_size=kernel_size,
             stride=stride,
             padding=padding,
@@ -93,7 +97,8 @@ class Conv2DNode(NodeBase):
         key: jax.Array,
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
-        config: Dict[str, Any],
+        weight_init=None,
+        config: Dict[str, Any] = {},
     ) -> NodeParams:
         """
         Initialize convolution kernels and biases.
@@ -104,8 +109,6 @@ class Conv2DNode(NodeBase):
         kernel_size = config.get("kernel_size")
         out_channels = node_shape[-1]  # Last dim is channels (NHWC)
 
-        # Get weight initialization config
-        weight_init = config.get("weight_init", None)
         if weight_init is None:
             weight_init = NormalInitializer(mean=0.0, std=0.05)
 
@@ -327,7 +330,7 @@ def main():
     print("Custom node example complete!")
     print("\nKey takeaways:")
     print("  1. Create custom nodes by subclassing NodeBase")
-    print("  2. Set DEFAULT_ACTIVATION, DEFAULT_ENERGY, DEFAULT_LATENT_INIT")
+    print("  2. Set defaults for activation, energy, latent_init in __init__")
     print("  3. Implement get_slots(), initialize_params(), and forward()")
     print("  4. Use object-oriented API with graph() for network construction")
     print("  5. Use train_pcn/evaluate_pcn for standard training workflow")

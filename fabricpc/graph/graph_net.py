@@ -117,7 +117,11 @@ def initialize_params(
 
         # Initialize parameters of the node
         params_obj = node_class.initialize_params(
-            keys[key_idx], node_info.shape, input_shapes, node_info.node_config
+            keys[key_idx],
+            node_info.shape,
+            input_shapes,
+            node_info.weight_init,
+            node_info.node_config,
         )
         key_idx += 1
         node_params[node_name] = params_obj

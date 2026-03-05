@@ -42,6 +42,7 @@ class NodeInfo:
     activation: Any  # ActivationBase instance
     energy: Any  # EnergyFunctional instance
     latent_init: Any  # InitializerBase instance or None
+    weight_init: Any  # InitializerBase instance or None
     slots: Dict[str, SlotInfo]  # {"in": SlotInfo, ...}
     in_degree: int  # Number of incoming edges
     out_degree: int  # Number of outgoing edges

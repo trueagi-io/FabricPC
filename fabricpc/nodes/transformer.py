@@ -3,6 +3,8 @@
 # We experiment with a sequence of block nodes and compare to backprop.
 # Then we progressively break down the block node into its components for a fully-PC approach: multi-head attention, feedforward, layer norm, residual connections
 
+from __future__ import annotations
+
 import jax
 import jax.numpy as jnp
 
@@ -11,7 +13,12 @@ from fabricpc.core.activations import IdentityActivation, GeluActivation
 from fabricpc.core.energy import GaussianEnergy
 from fabricpc.core.initializers import NormalInitializer, XavierInitializer, initialize
 from fabricpc.core.types import NodeState, NodeInfo
-from typing import Dict, Tuple, Any
+from typing import Dict, Optional, Tuple, Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fabricpc.core.activations import ActivationBase
+    from fabricpc.core.energy import EnergyFunctional
+    from fabricpc.core.initializers import InitializerBase
 
 # =============================================================================
 # Rotary Position Embeddings (RoPE)
@@ -127,25 +134,21 @@ class TransformerBlock(NodeBase):
         weight_init: InitializerBase for weights
     """
 
-    DEFAULT_ACTIVATION = IdentityActivation
-    DEFAULT_ENERGY = GaussianEnergy
-    DEFAULT_LATENT_INIT = NormalInitializer
-
     def __init__(
         self,
-        shape,
-        name,
-        activation=None,
-        energy=None,
-        internal_activation=None,
-        num_heads=8,
-        ff_dim=None,
-        dropout_rate=0.0,
-        pre_norm=True,
-        use_rope=True,
-        rope_theta=10000.0,
-        weight_init=None,
-        latent_init=None,
+        shape: Tuple[int, ...],
+        name: str,
+        activation: Optional[ActivationBase] = IdentityActivation(),
+        energy: Optional[EnergyFunctional] = GaussianEnergy(),
+        internal_activation: Optional[ActivationBase] = None,
+        num_heads: int = 8,
+        ff_dim: Optional[int] = None,
+        dropout_rate: float = 0.0,
+        pre_norm: bool = True,
+        use_rope: bool = True,
+        rope_theta: float = 10000.0,
+        weight_init: Optional[InitializerBase] = XavierInitializer(),
+        latent_init: Optional[InitializerBase] = NormalInitializer(),
     ):
         super().__init__(
             shape=shape,
@@ -153,6 +156,7 @@ class TransformerBlock(NodeBase):
             activation=activation,
             energy=energy,
             latent_init=latent_init,
+            weight_init=weight_init,
             internal_activation=internal_activation or GeluActivation(),
             num_heads=num_heads,
             ff_dim=ff_dim,
@@ -160,7 +164,6 @@ class TransformerBlock(NodeBase):
             pre_norm=pre_norm,
             use_rope=use_rope,
             rope_theta=rope_theta,
-            weight_init=weight_init,
         )
 
     @staticmethod
@@ -175,7 +178,8 @@ class TransformerBlock(NodeBase):
         key: jax.Array,
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
-        config: Dict[str, Any],
+        weight_init: Optional[InitializerBase] = None,
+        config: Dict[str, Any] = {},
     ) -> NodeParams:
 
         num_heads = config.get("num_heads", 8)
@@ -185,7 +189,6 @@ class TransformerBlock(NodeBase):
 
         assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
 
-        weight_init = config.get("weight_init", None)
         if weight_init is None:
             weight_init = XavierInitializer()
 

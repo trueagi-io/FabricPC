@@ -35,6 +35,7 @@ Energy functionals are instantiated with their parameters:
     energy = CrossEntropyEnergy(eps=1e-7)
 """
 
+import types
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Tuple
 
@@ -77,7 +78,7 @@ class EnergyFunctional(ABC):
     """
 
     def __init__(self, **config):
-        self.config = config
+        self.config = types.MappingProxyType(config)  # Immutable dictionary
 
     @staticmethod
     @abstractmethod

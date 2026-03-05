@@ -90,10 +90,6 @@ def graph(nodes, edges, task_map, graph_state_initializer=None):
     Returns:
         GraphStructure with finalized nodes, edges, and topology
     """
-    from fabricpc.core.activations import IdentityActivation
-    from fabricpc.core.energy import GaussianEnergy
-    from fabricpc.core.initializers import NormalInitializer
-
     # 1. Build EdgeInfo objects from Edge objects
     edge_infos = {}
     for edge in edges:
@@ -141,34 +137,16 @@ def graph(nodes, edges, task_map, graph_state_initializer=None):
                     f"in node '{name}'. Available slots: {list(slots.keys())}"
                 )
 
-        # Resolve activation/energy/latent_init: use node's instance, or class default
-        activation = node._activation
-        if activation is None:
-            default_act = getattr(type(node), "DEFAULT_ACTIVATION", None)
-            activation = default_act() if default_act else IdentityActivation()
-
-        energy = node._energy
-        if energy is None:
-            default_energy = getattr(type(node), "DEFAULT_ENERGY", None)
-            energy = default_energy() if default_energy else GaussianEnergy()
-
-        latent_init = node._latent_init
-        if latent_init is None:
-            default_init = getattr(type(node), "DEFAULT_LATENT_INIT", None)
-            if default_init is not None:
-                latent_init = default_init()
-            else:
-                latent_init = NormalInitializer()
-
         node_info = NodeInfo(
             name=name,
             shape=node.shape,
             node_type=type(node).__name__,
             node_class=type(node),
             node_config=node._extra_config,
-            activation=activation,
-            energy=energy,
-            latent_init=latent_init,
+            activation=node._activation,
+            energy=node._energy,
+            latent_init=node._latent_init,
+            weight_init=node._weight_init,
             slots=slots,
             in_degree=len(in_edges),
             out_degree=len(out_edges),

@@ -249,35 +249,36 @@ def create_transformer_model(
                 name=f"transformer_{i}",
             )
         )
-        # Scale to prevent explosion with multiple skips
-        block_skip_nodes.append(
-            IdentityNode(
-                shape=(seq_len, embed_dim),
-                name=f"block_skip_{i}",
-                scale=(1.0 / num_blocks),
-            )
-        )
-        summing_nodes.append(
-            IdentityNode(
-                shape=(seq_len, embed_dim),
-                name=f"summing_skip_{i}",
-                scale=(0.1 / (1 + num_blocks)),
-            )
-        )
-    nodes = nodes + xmfr_blocks + block_skip_nodes + summing_nodes
+        # # Scale to prevent explosion with multiple skips
+        # block_skip_nodes.append(
+        #     IdentityNode(
+        #         shape=(seq_len, embed_dim),
+        #         name=f"block_skip_{i}",
+        #         scale=(1.0 / num_blocks),
+        #     )
+        # )
+        # summing_nodes.append(
+        #     IdentityNode(
+        #         shape=(seq_len, embed_dim),
+        #         name=f"summing_skip_{i}",
+        #         scale=(0.1 / (1 + num_blocks)),
+        #     )
+        # )
+    nodes = nodes + xmfr_blocks  # + block_skip_nodes + summing_nodes
 
     # Connections transformer blocks and skip connections
     prev_node = embed
     for i in range(num_blocks):
         edges.append(Edge(source=prev_node, target=xmfr_blocks[i].slot("in")))
         edges.append(Edge(source=mask_node, target=xmfr_blocks[i].slot("mask")))
-        edges.append(Edge(source=xmfr_blocks[i], target=summing_nodes[i].slot("in")))
+        # edges.append(Edge(source=xmfr_blocks[i], target=summing_nodes[i].slot("in")))
 
-        # Add a redundant skip connection to assist the inference phase in convergence
-        for j in range(i, num_blocks):
-            edges.append(Edge(source=prev_node, target=summing_nodes[j].slot("in")))
+        # # Add a redundant skip connection to assist the inference phase in convergence
+        # for j in range(i, num_blocks):
+        #     edges.append(Edge(source=prev_node, target=summing_nodes[j].slot("in")))
 
-        prev_node = summing_nodes[i]
+        # prev_node = summing_nodes[i]
+        prev_node = xmfr_blocks[i]
 
     # Output projection layer
     output_node = Linear(
@@ -452,11 +453,11 @@ def main():
     SEQ_LEN = 128        # Sequence length
     EMBED_DIM = 128      # Embedding dimension
     NUM_HEADS = 8       # Attention heads
-    NUM_BLOCKS = 2      # Transformer blocks
+    NUM_BLOCKS = 1      # Transformer blocks
     FF_DIM = 512        # Feedforward hidden dimension
     ROPE_THETA = 500.0    # RoPE frequency
     BATCH_SIZE = 128     # Batch size
-    NUM_EPOCHS = 0.1      # Training epochs
+    NUM_EPOCHS = 1.0      # Training epochs
     INFER_STEPS = 10    # Inference iterations per step
     ETA_INFER = 0.01    # Inference learning rate
     LR = 1e-3           # Weight learning rate
@@ -557,7 +558,10 @@ def main():
         print("\nAim not installed. Tracking disabled. Install with: pip install aim")
 
     # Training config for autoregressive training
-    optimizer = optax.adamw(LR, weight_decay=0.001)
+    optimizer = optax.chain(
+        optax.clip_by_global_norm(1.0),
+        optax.adamw(LR, weight_decay=0.001),
+    )
     train_config = {
         "num_epochs": NUM_EPOCHS,
         "infer_steps": INFER_STEPS,

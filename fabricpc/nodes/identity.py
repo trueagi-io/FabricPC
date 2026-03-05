@@ -8,7 +8,9 @@ auxiliary nodes that serve as conduits for data without learning.
 When multiple inputs are connected, they are summed together.
 """
 
-from typing import Dict, Any, Tuple
+from __future__ import annotations
+
+from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING
 import jax
 import jax.numpy as jnp
 
@@ -17,6 +19,11 @@ from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.activations import IdentityActivation
 from fabricpc.core.energy import GaussianEnergy
 from fabricpc.core.initializers import NormalInitializer
+
+if TYPE_CHECKING:
+    from fabricpc.core.activations import ActivationBase
+    from fabricpc.core.energy import EnergyFunctional
+    from fabricpc.core.initializers import InitializerBase
 
 
 class IdentityNode(NodeBase):
@@ -30,17 +37,13 @@ class IdentityNode(NodeBase):
     - Useful for input nodes or passthrough connections
     """
 
-    DEFAULT_ACTIVATION = IdentityActivation
-    DEFAULT_ENERGY = GaussianEnergy
-    DEFAULT_LATENT_INIT = NormalInitializer
-
     def __init__(
         self,
-        shape,
-        name,
-        activation=None,
-        energy=None,
-        latent_init=None,
+        shape: Tuple[int, ...],
+        name: str,
+        activation: Optional[ActivationBase] = IdentityActivation(),
+        energy: Optional[EnergyFunctional] = GaussianEnergy(),
+        latent_init: Optional[InitializerBase] = NormalInitializer(),
         scale: float = 1.0,  # Optional fixed scaling factor of the node output (default 1.0, no scaling)
     ):
         """
@@ -75,7 +78,8 @@ class IdentityNode(NodeBase):
         key: jax.Array,
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
-        config: Dict[str, Any],
+        weight_init: Optional[InitializerBase] = None,
+        config: Dict[str, Any] = {},
     ) -> NodeParams:
         """
         Initialize parameters for identity node (none needed).
@@ -84,6 +88,7 @@ class IdentityNode(NodeBase):
             key: JAX random key (unused)
             node_shape: Output shape of this node (unused)
             input_shapes: Dictionary with edge keys to source shapes (unused)
+            weight_init: InitializerBase instance (unused, identity has no weights)
             config: Node configuration dictionary
 
         Returns:

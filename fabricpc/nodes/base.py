@@ -10,20 +10,20 @@ User Extensibility
 Users can create custom nodes by extending NodeBase:
 
     class MyNode(NodeBase):
-        DEFAULT_ACTIVATION = IdentityActivation
-        DEFAULT_ENERGY = GaussianEnergy
-        DEFAULT_LATENT_INIT = NormalInitializer
-
-        def __init__(self, shape, name, activation=None, energy=None, **kwargs):
+        def __init__(self, shape, name,
+                     activation=IdentityActivation(),
+                     energy=GaussianEnergy(),
+                     latent_init=NormalInitializer(),
+                     **kwargs):
             super().__init__(shape=shape, name=name, activation=activation,
-                             energy=energy, **kwargs)
+                             energy=energy, latent_init=latent_init, **kwargs)
 
         @staticmethod
         def get_slots():
             return {"in": SlotSpec(name="in", is_multi_input=True)}
 
         @staticmethod
-        def initialize_params(key, node_shape, input_shapes, config):
+        def initialize_params(key, node_shape, input_shapes, weight_init, config):
             ...
 
         @staticmethod
@@ -31,13 +31,21 @@ Users can create custom nodes by extending NodeBase:
             ...
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING
 import copy
+import types
 import jax
 import jax.numpy as jnp
 from dataclasses import dataclass
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo, SlotInfo, EdgeInfo
+
+if TYPE_CHECKING:
+    from fabricpc.core.activations import ActivationBase
+    from fabricpc.core.energy import EnergyFunctional
+    from fabricpc.core.initializers import InitializerBase
 
 
 @dataclass(frozen=True)
@@ -137,25 +145,18 @@ class NodeBase(ABC):
     Nodes are instantiated with their configuration, then finalized by the
     graph() builder which attaches topology info via copy-on-finalize.
 
-    Class-level defaults (override in subclasses):
-        DEFAULT_ACTIVATION: Activation class (e.g., IdentityActivation)
-        DEFAULT_ENERGY: Energy class (e.g., GaussianEnergy)
-        DEFAULT_LATENT_INIT: Initializer class (e.g., NormalInitializer)
+    Subclasses set concrete default instances for activation, energy, latent_init,
+    and weight_init in their ``__init__`` parameter defaults.
     """
-
-    # Subclasses should override these with activation/energy/initializer CLASSES (not instances)
-    # The graph builder will call these with () to create instances if the user didn't provide one
-    DEFAULT_ACTIVATION = None  # Set in subclass, e.g., IdentityActivation
-    DEFAULT_ENERGY = None  # Set in subclass, e.g., GaussianEnergy
-    DEFAULT_LATENT_INIT = None  # Set in subclass, e.g., NormalInitializer
 
     def __init__(
         self,
-        shape,
-        name,
-        activation=None,
-        energy=None,
-        latent_init=None,
+        shape: Tuple[int, ...],
+        name: str,
+        activation: Optional[ActivationBase] = None,
+        energy: Optional[EnergyFunctional] = None,
+        latent_init: Optional[InitializerBase] = None,
+        weight_init: Optional[InitializerBase] = None,
         **extra_config,
     ):
         """
@@ -164,9 +165,10 @@ class NodeBase(ABC):
         Args:
             shape: Output shape tuple (excluding batch dimension)
             name: Node name. Automatically prefixed with current GraphNamespace.
-            activation: ActivationBase instance, or None (uses class DEFAULT_ACTIVATION)
-            energy: EnergyFunctional instance, or None (uses class DEFAULT_ENERGY)
-            latent_init: InitializerBase instance, or None (uses class DEFAULT_LATENT_INIT)
+            activation: ActivationBase instance, or None
+            energy: EnergyFunctional instance, or None
+            latent_init: InitializerBase instance, or None
+            weight_init: InitializerBase instance, or None
             **extra_config: Node-specific config (use_bias, flatten_input, etc.)
         """
         from fabricpc.builder.namespace import _get_current_namespace
@@ -177,7 +179,10 @@ class NodeBase(ABC):
         self._activation = activation
         self._energy = energy
         self._latent_init = latent_init
-        self._extra_config = extra_config
+        self._weight_init = weight_init
+        self._extra_config = types.MappingProxyType(
+            extra_config
+        )  # Immutable dictionary
         self._node_info = None  # Set by graph builder (copy-on-finalize)
 
     @property
@@ -257,6 +262,7 @@ class NodeBase(ABC):
         key: jax.Array,  # from jax.random.PRNGKey
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],  # edge_key -> source shape
+        weight_init: Optional[InitializerBase],
         config: Dict[str, Any],
     ) -> NodeParams:
         """
@@ -266,6 +272,7 @@ class NodeBase(ABC):
             key: JAX random key
             node_shape: Output shape of this node (excluding batch dimension)
             input_shapes: Dictionary mapping edge keys to source node shapes
+            weight_init: InitializerBase instance for weight initialization, or None
             config: Node configuration (may contain initialization settings)
 
         Returns:

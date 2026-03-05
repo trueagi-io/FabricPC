@@ -49,7 +49,7 @@ Epoch 20/20, energy: 0.0026
 Avg Training time: 1.37 seconds per epoch
 
 Evaluating...
-Test Accuracy: 98.06%
+Test Accuracy: 98.05%
 ```
 
 ### `PC_backprop_compare.py`
