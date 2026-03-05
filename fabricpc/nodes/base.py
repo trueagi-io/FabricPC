@@ -280,6 +280,7 @@ class NodeBase(ABC):
         """
         pass
 
+    # TODO return only the projected value z_mu and compute energy and gradients in a wrapper method.
     @staticmethod
     @abstractmethod
     def forward(
@@ -308,6 +309,7 @@ class NodeBase(ABC):
     # Default implementations - can be overridden for explicit gradients
     # =========================================================================
 
+    # TODO rename to forward_and_latent_gradients() or something to clarify that this is the method used during inference to compute both the forward pass and the gradients w.r.t. inputs for updating latents of in-neighbors.
     @staticmethod
     def forward_inference(
         params: NodeParams,
@@ -391,6 +393,7 @@ class NodeBase(ABC):
 
         return new_state, input_grads
 
+    # TODO rename to forward_and_weight_gradients() or something to clarify that this is the method used during training to compute both the forward pass and the gradients w.r.t. weights for learning.
     @staticmethod
     def forward_learning(
         params: NodeParams,
@@ -424,6 +427,7 @@ class NodeBase(ABC):
 
         return new_state, params_grad
 
+    # TODO Refactor to separate method for computing energy and latent gradients, since this is also needed during inference when we don't want to compute the weight gradients.
     @staticmethod
     def energy_functional(state: NodeState, node_info: NodeInfo) -> NodeState:
         """

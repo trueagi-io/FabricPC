@@ -17,6 +17,7 @@ from fabricpc.nodes import Linear
 from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.graph import initialize_params
 from fabricpc.core.activations import ReLUActivation, SoftmaxActivation
+from fabricpc.core.inference import InferenceSGD
 from fabricpc.graph.state_initializer import GlobalStateInit
 from fabricpc.training.train_backprop import (
     train_backprop,
@@ -69,6 +70,7 @@ def graph_with_feedforward(rng_key):
             Edge(source=hidden, target=output.slot("in")),
         ],
         task_map=TaskMap(x=input_node, y=output),
+        inference=InferenceSGD(),
     )
     params = initialize_params(structure, rng_key)
     return params, structure
@@ -171,6 +173,7 @@ class TestTrainBackprop:
                 Edge(source=input_node, target=output.slot("in")),
             ],
             task_map=TaskMap(x=input_node, y=output),
+            inference=InferenceSGD(),
             graph_state_initializer=GlobalStateInit(),  # Not feedforward
         )
 
@@ -252,6 +255,7 @@ class TestIntegration:
                 Edge(source=hidden, target=output.slot("in")),
             ],
             task_map=TaskMap(x=input_node, y=output),
+            inference=InferenceSGD(),
         )
         params = initialize_params(structure, rng_key)
 

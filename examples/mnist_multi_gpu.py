@@ -35,6 +35,7 @@ from fabricpc.core.activations import (
     SoftmaxActivation,
 )
 from fabricpc.core.energy import CrossEntropyEnergy
+from fabricpc.core.inference import InferenceSGD
 import optax
 from fabricpc.training import train_pcn_multi_gpu, evaluate_pcn_multi_gpu
 from fabricpc.utils.data.dataloader import MnistLoader
@@ -62,13 +63,12 @@ structure = graph(
         Edge(source=hidden2, target=class_node.slot("in")),
     ],
     task_map=TaskMap(x=pixels, y=class_node),
+    inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
 )
 
 optimizer = optax.adamw(0.001, weight_decay=0.001)
 train_config = {
     "num_epochs": 20,
-    "infer_steps": 20,
-    "eta_infer": 0.05,
 }
 
 # fmt: on
@@ -135,7 +135,7 @@ print(f"\n[Training Configuration]")
 print(f"  Epochs: {train_config['num_epochs']}")
 print(f"  Optimizer: adamw")
 print(f"  Learning rate: 0.001")
-print(f"  Inference steps: {train_config['infer_steps']}")
+print(f"  Inference steps: {structure.config['inference'].config['infer_steps']}")
 
 print(f"\n[Training on {n_devices} device(s)]")
 print("  (First batch will be slow due to pmap compilation)\n")

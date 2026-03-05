@@ -22,6 +22,7 @@ from fabricpc.nodes import Linear
 from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.graph import initialize_params
 from fabricpc.core.activations import SigmoidActivation
+from fabricpc.core.inference import InferenceSGD
 
 jax.config.update("jax_platform_name", "cpu")
 
@@ -81,6 +82,7 @@ def test_natural_gradients_work_in_train_step(rng_key, ngd_transform):
             Edge(source=hidden, target=y_node.slot("in")),
         ],
         task_map=TaskMap(x=x_node, y=y_node),
+        inference=InferenceSGD(),
     )
     params = initialize_params(structure, rng_key)
 
@@ -104,8 +106,6 @@ def test_natural_gradients_work_in_train_step(rng_key, ngd_transform):
         structure,
         optimizer,
         rng_key,
-        infer_steps=3,
-        eta_infer=0.1,
     )
 
     old_w = params.nodes["hidden"].weights["x->hidden:in"]

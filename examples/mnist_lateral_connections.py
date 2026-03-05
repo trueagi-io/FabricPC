@@ -33,6 +33,7 @@ from fabricpc.core.activations import (
     SoftmaxActivation,
 )
 from fabricpc.core.energy import CrossEntropyEnergy
+from fabricpc.core.inference import InferenceSGD
 import optax
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.experiments import ExperimentArm, ABExperiment
@@ -44,8 +45,6 @@ jax.config.update("jax_default_prng_impl", "threefry2x32")
 optimizer = optax.adamw(0.001, weight_decay=0.001)
 train_config = {
     "num_epochs": 1,
-    "infer_steps": 20,
-    "eta_infer": 0.05,
 }
 batch_size = 200
 
@@ -91,6 +90,7 @@ def create_lateral_model(rng_key):
             Edge(source=hidden2_lateral, target=hidden2.slot("in")),
         ],
         task_map=TaskMap(x=pixels, y=output),
+        inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
     )
     params = initialize_params(structure, rng_key)
     return params, structure
@@ -111,6 +111,7 @@ def create_mlp_model(rng_key):
             Edge(source=hidden2, target=output.slot("in")),
         ],
         task_map=TaskMap(x=pixels, y=output),
+        inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
     )
     params = initialize_params(structure, rng_key)
     return params, structure

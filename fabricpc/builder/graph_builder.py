@@ -1,8 +1,12 @@
 """Graph builder that assembles nodes and edges into a GraphStructure."""
 
-from typing import List, Dict, Any, Optional
+import types
+from typing import List, Dict, Any, Optional, Tuple, Union
 from fabricpc.core.types import GraphStructure, NodeInfo, EdgeInfo, SlotInfo
+from fabricpc.core.inference import InferenceBase
 from fabricpc.builder.edge import Edge, SlotRef
+from fabricpc.nodes.base import NodeBase
+from fabricpc.graph.state_initializer import StateInitBase
 
 
 class TaskMap:
@@ -12,19 +16,20 @@ class TaskMap:
     """
 
     def __init__(self, **kwargs):
-        self._map = {}
+        mapping: Dict[str, str] = {}
         for key, value in kwargs.items():
             if isinstance(value, str):
-                self._map[key] = value
+                mapping[key] = value
             else:
                 # NodeBase instance
-                self._map[key] = value.name
+                mapping[key] = value.name
+        self._map = types.MappingProxyType(mapping)  # Immutable dictionary
 
-    def to_dict(self):
+    def to_dict(self) -> Dict[str, str]:
         return dict(self._map)
 
 
-def _build_slots(node, in_edges):
+def _build_slots(node: NodeBase, in_edges: Dict[str, EdgeInfo]) -> Dict[str, SlotInfo]:
     """Build SlotInfo objects from node's slot specs and incoming edges."""
     slot_specs = type(node).get_slots()
     slots = {}
@@ -50,7 +55,9 @@ def _build_slots(node, in_edges):
     return slots
 
 
-def _topological_sort(nodes, edge_infos):
+def _topological_sort(
+    nodes: Dict[str, NodeBase], edge_infos: Dict[str, EdgeInfo]
+) -> Tuple[str, ...]:
     """BFS-based topological sort."""
     in_degree = {name: node.node_info.in_degree for name, node in nodes.items()}
     queue = [name for name, deg in in_degree.items() if deg == 0]
@@ -73,7 +80,13 @@ def _topological_sort(nodes, edge_infos):
     return tuple(result)
 
 
-def graph(nodes, edges, task_map, graph_state_initializer=None):
+def graph(
+    nodes: List[NodeBase],
+    edges: List[Edge],
+    task_map: TaskMap,
+    inference: InferenceBase,
+    graph_state_initializer: Optional[StateInitBase] = None,
+) -> GraphStructure:
     """
     Build a GraphStructure from node objects, edge objects, and a task map.
 
@@ -84,6 +97,7 @@ def graph(nodes, edges, task_map, graph_state_initializer=None):
         nodes: List of NodeBase instances
         edges: List of Edge instances
         task_map: TaskMap instance or dict mapping task names to node names
+        inference: InferenceBase instance for inference algorithm
         graph_state_initializer: Optional StateInitBase instance
             (default: FeedforwardStateInit())
 
@@ -171,6 +185,7 @@ def graph(nodes, edges, task_map, graph_state_initializer=None):
 
     gs_config = {
         "graph_state_initializer": graph_state_initializer or FeedforwardStateInit(),
+        "inference": inference,
     }
 
     return GraphStructure(

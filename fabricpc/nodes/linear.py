@@ -275,7 +275,7 @@ class LinearExplicitGrad(Linear):
         _, state = node_class.forward(params, inputs, state, node_info)
 
         # Gain-modulated error computation
-        state = node_class.compute_gain_mod_error(state, node_info)
+        gain_mod_error = node_class.compute_gain_mod_error(state, node_info)
 
         # Determine the energy functional to use
         energy_obj = node_info.energy
@@ -289,7 +289,7 @@ class LinearExplicitGrad(Linear):
             if energy_type == "GaussianEnergy":
                 if flatten_input:
                     gain_mod_error_flat = FlattenInputMixin.flatten_input(
-                        state.substructure["gain_mod_error"]
+                        gain_mod_error
                     )
                     grad_flat = -jnp.matmul(
                         gain_mod_error_flat, params.weights[edge_key].T
@@ -299,7 +299,7 @@ class LinearExplicitGrad(Linear):
                     )
                 else:
                     grad_contribution = -jnp.matmul(
-                        state.substructure["gain_mod_error"],
+                        gain_mod_error,
                         params.weights[edge_key].T,
                     )
             else:
@@ -325,7 +325,7 @@ class LinearExplicitGrad(Linear):
         _, state = node_class.forward(params, inputs, state, node_info)
 
         # Gain-modulated error computation
-        state = node_class.compute_gain_mod_error(state, node_info)
+        gain_mod_error = node_class.compute_gain_mod_error(state, node_info)
 
         flatten_input = node_info.node_config.get("flatten_input", False)
         weight_grads = {}
@@ -335,35 +335,30 @@ class LinearExplicitGrad(Linear):
         for edge_key, in_tensor in inputs.items():
             if flatten_input:
                 in_flat = FlattenInputMixin.flatten_input(in_tensor)
-                gain_mod_error_flat = FlattenInputMixin.flatten_input(
-                    state.substructure["gain_mod_error"]
-                )
+                gain_mod_error_flat = FlattenInputMixin.flatten_input(gain_mod_error)
                 grad_w = -jnp.matmul(in_flat.T, gain_mod_error_flat)
             else:
                 in_shape = in_tensor.shape
-                err_shape = state.substructure["gain_mod_error"].shape
+                err_shape = gain_mod_error.shape
                 in_flat = in_tensor.reshape(-1, in_shape[-1])
-                err_flat = state.substructure["gain_mod_error"].reshape(
-                    -1, err_shape[-1]
-                )
+                err_flat = gain_mod_error.reshape(-1, err_shape[-1])
                 grad_w = -jnp.matmul(in_flat.T, err_flat)
             weight_grads[edge_key] = grad_w
 
         # Bias gradient
         if "b" in params.biases:
-            grad_b = -jnp.sum(
-                state.substructure["gain_mod_error"], axis=0, keepdims=True
-            )
+            grad_b = -jnp.sum(gain_mod_error, axis=0, keepdims=True)
             bias_grads["b"] = grad_b
 
         return state, NodeParams(weights=weight_grads, biases=bias_grads)
 
     @staticmethod
-    def compute_gain_mod_error(state: NodeState, node_info: NodeInfo) -> NodeState:
-        """Compute gain-modulated error for this node."""
+    def compute_gain_mod_error(state: NodeState, node_info: NodeInfo) -> jnp.ndarray:
+        """Compute gain-modulated error for this node.
+
+        Returns:
+            gain_mod_error array (error * activation derivative)
+        """
         activation = node_info.activation
         f_prime = type(activation).derivative(state.pre_activation, activation.config)
-        gain_mod_error = state.error * f_prime
-
-        state = state._replace(substructure={"gain_mod_error": gain_mod_error})
-        return state
+        return state.error * f_prime

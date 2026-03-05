@@ -40,6 +40,7 @@ from fabricpc.core.activations import (
 )
 from fabricpc.core.energy import GaussianEnergy
 from fabricpc.core.initializers import NormalInitializer, initialize
+from fabricpc.core.inference import InferenceSGD
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.training import train_pcn, evaluate_pcn
 
@@ -249,6 +250,7 @@ def create_conv_mnist_structure():
             Edge(source=conv2, target=output_node.slot("in")),
         ],
         task_map=TaskMap(x=input_node, y=output_node),
+        inference=InferenceSGD(eta_infer=0.05, infer_steps=10),
     )
 
     return structure
@@ -289,8 +291,6 @@ def main():
     optimizer = optax.adam(0.001)
     train_config = {
         "num_epochs": 3,  # Fewer epochs for demo
-        "infer_steps": 10,  # Inference steps
-        "eta_infer": 0.05,  # Inference learning rate
     }
     batch_size = 64  # Smaller batch for conv nets
 

@@ -30,6 +30,7 @@ Example:
     ...         Edge(source=hidden, target=output.slot("in")),
     ...     ],
     ...     task_map=TaskMap(x=input_node, y=output),
+    ...     inference=InferenceSGD(eta_infer=0.05, infer_steps=10),
     ... )
     >>> params = initialize_params(structure, rng_key)
     >>> trained_params, history, _ = train_pcn(params, structure, train_loader, config)

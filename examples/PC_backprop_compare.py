@@ -38,6 +38,7 @@ from fabricpc.core.activations import (
     ReLUActivation,
 )
 from fabricpc.core.energy import CrossEntropyEnergy
+from fabricpc.core.inference import InferenceSGD
 import optax
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.training.train_backprop import train_backprop, evaluate_backprop
@@ -94,6 +95,7 @@ def create_pc_model(rng_key):
             Edge(source=hidden2, target=output.slot("in")),
         ],
         task_map=TaskMap(x=pixels, y=output),
+        inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
     )
     params = initialize_params(structure, rng_key)
     return params, structure
@@ -118,6 +120,7 @@ def create_backprop_model(rng_key):
             Edge(source=hidden2, target=output.slot("in")),
         ],
         task_map=TaskMap(x=pixels, y=output),
+        inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
     )
     params = initialize_params(structure, rng_key)
     return params, structure

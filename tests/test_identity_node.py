@@ -64,7 +64,6 @@ def make_state(rng_key, batch_size, node_shape):
         energy=jnp.zeros((batch_size,)),
         pre_activation=jnp.zeros(full_shape),
         latent_grad=jnp.zeros(full_shape),
-        substructure={},
     )
 
 

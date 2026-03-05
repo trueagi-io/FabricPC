@@ -22,6 +22,7 @@ from fabricpc.core.types import NodeState, GraphState
 from fabricpc.nodes import Linear
 from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.graph import initialize_params
+from fabricpc.core.inference import InferenceSGD
 from fabricpc.core.activations import (
     SigmoidActivation,
     ReLUActivation,
@@ -29,10 +30,16 @@ from fabricpc.core.activations import (
     IdentityActivation,
 )
 from fabricpc.graph.state_initializer import initialize_graph_state
-from fabricpc.core.inference import run_inference
 
 # Set up JAX
 jax.config.update("jax_platform_name", "cpu")
+
+
+def with_inference(structure, **kwargs):
+    """Return structure with modified inference config for testing."""
+    new_config = dict(structure.config)
+    new_config["inference"] = InferenceSGD(**kwargs)
+    return structure._replace(config=new_config)
 
 
 class TestValidation:
@@ -48,6 +55,7 @@ class TestValidation:
                 nodes=[x1, x2],
                 edges=[],
                 task_map=TaskMap(),
+                inference=InferenceSGD(),
             )
 
     def test_self_edge_disallowed(self):
@@ -59,6 +67,7 @@ class TestValidation:
                 nodes=[n1],
                 edges=[Edge(source=n1, target=n1.slot("in"))],
                 task_map=TaskMap(),
+                inference=InferenceSGD(),
             )
 
     def test_nonexistent_node_in_edge(self):
@@ -73,6 +82,7 @@ class TestValidation:
                     Edge(source=a, target=nonexistent.slot("in"))
                 ],  # But edge references 'nonexistent'
                 task_map=TaskMap(),
+                inference=InferenceSGD(),
             )
 
 
@@ -89,6 +99,7 @@ class TestShapeConsistency:
             nodes=[a, b],
             edges=[Edge(source=a, target=b.slot("in"))],
             task_map=TaskMap(x=a, y=b),
+            inference=InferenceSGD(),
         )
         return structure
 
@@ -143,8 +154,9 @@ class TestShapeConsistency:
         state = initialize_graph_state(
             structure, batch_size, rng_key, clamps=clamps, params=params
         )
-        state = run_inference(
-            params, state, clamps, structure, infer_steps=1, eta_infer=0.1
+        struct_mod = with_inference(structure, eta_infer=0.1, infer_steps=1)
+        state = type(struct_mod.config["inference"]).run_inference(
+            params, state, clamps, struct_mod
         )
 
         # After projection, z_mu for node b should be (batch_size, 3)
@@ -172,6 +184,7 @@ class TestPropertyBased:
             nodes=[a, b],
             edges=[Edge(source=a, target=b.slot("in"))],
             task_map=TaskMap(x=a, y=b),
+            inference=InferenceSGD(),
         )
 
         rng_key = jax.random.PRNGKey(42)
@@ -211,6 +224,7 @@ class TestPropertyBased:
             nodes=[input_node, output_node],
             edges=[Edge(source=input_node, target=output_node.slot("in"))],
             task_map=TaskMap(x=input_node, y=output_node),
+            inference=InferenceSGD(),
         )
 
         rng_key = jax.random.PRNGKey(42)
@@ -227,8 +241,11 @@ class TestPropertyBased:
         )
 
         # Run inference - should not raise
-        final_state = run_inference(
-            params, initial_state, clamps, structure, infer_steps, eta_infer
+        struct_mod = with_inference(
+            structure, eta_infer=eta_infer, infer_steps=infer_steps
+        )
+        final_state = type(struct_mod.config["inference"]).run_inference(
+            params, initial_state, clamps, struct_mod
         )
 
         # Verify state is valid
@@ -256,6 +273,7 @@ class TestComplexGraphs:
                 Edge(source=input_node, target=output_node.slot("in")),
             ],
             task_map=TaskMap(x=input_node, y=output_node),
+            inference=InferenceSGD(),
         )
 
         rng_key = jax.random.PRNGKey(42)
@@ -282,11 +300,13 @@ class TestComplexGraphs:
         )
 
         # Run 1 step to get initial energy (energy is computed during inference)
-        state_after_1_step = run_inference(
-            params, state, clamps, structure, infer_steps=1, eta_infer=0.1
+        struct_mod_1 = with_inference(structure, eta_infer=0.1, infer_steps=1)
+        state_after_1_step = type(struct_mod_1.config["inference"]).run_inference(
+            params, state, clamps, struct_mod_1
         )
-        final_state = run_inference(
-            params, state, clamps, structure, infer_steps=10, eta_infer=0.1
+        struct_mod_10 = with_inference(structure, eta_infer=0.1, infer_steps=10)
+        final_state = type(struct_mod_10.config["inference"]).run_inference(
+            params, state, clamps, struct_mod_10
         )
 
         # Verify convergence (comparing 1 step vs 10 steps)
@@ -317,6 +337,7 @@ class TestComplexGraphs:
                 Edge(source=c, target=merger.slot("in")),
             ],
             task_map=TaskMap(x=a, y=merger),
+            inference=InferenceSGD(),
         )
 
         rng_key = jax.random.PRNGKey(42)
@@ -347,6 +368,7 @@ class TestEnergyDynamics:
                 Edge(source=h, target=y.slot("in")),
             ],
             task_map=TaskMap(input=x, output=y),
+            inference=InferenceSGD(),
         )
         return structure
 
@@ -369,9 +391,10 @@ class TestEnergyDynamics:
         energies = []
         current_state = state
 
+        struct_mod = with_inference(structure, eta_infer=0.1, infer_steps=1)
         for _ in range(10):
-            current_state = run_inference(
-                params, current_state, clamps, structure, infer_steps=1, eta_infer=0.1
+            current_state = type(struct_mod.config["inference"]).run_inference(
+                params, current_state, clamps, struct_mod
             )
             energy = sum(
                 jnp.sum(current_state.nodes[name].energy)
@@ -400,6 +423,7 @@ def test_different_node_types(node_type):
         nodes=[a, b],
         edges=[Edge(source=a, target=b.slot("in"))],
         task_map=TaskMap(x=a, y=b),
+        inference=InferenceSGD(),
     )
 
     rng_key = jax.random.PRNGKey(42)
@@ -419,6 +443,7 @@ def test_various_batch_sizes(batch_size):
         nodes=[input_node, output_node],
         edges=[Edge(source=input_node, target=output_node.slot("in"))],
         task_map=TaskMap(x=input_node, y=output_node),
+        inference=InferenceSGD(),
     )
 
     rng_key = jax.random.PRNGKey(42)
@@ -431,8 +456,9 @@ def test_various_batch_sizes(batch_size):
     state = initialize_graph_state(
         structure, batch_size, rng_key, clamps=clamps, params=params
     )
-    final_state = run_inference(
-        params, state, clamps, structure, infer_steps=5, eta_infer=0.1
+    struct_mod = with_inference(structure, eta_infer=0.1, infer_steps=5)
+    final_state = type(struct_mod.config["inference"]).run_inference(
+        params, state, clamps, struct_mod
     )
 
     # Verify shapes are maintained

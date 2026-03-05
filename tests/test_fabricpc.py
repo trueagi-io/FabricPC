@@ -28,7 +28,7 @@ from fabricpc.core.types import NodeState, NodeParams, GraphState
 from fabricpc.graph.graph_net import compute_local_weight_gradients
 from fabricpc.graph import initialize_params
 from fabricpc.graph.state_initializer import initialize_graph_state
-from fabricpc.core.inference import run_inference
+from fabricpc.core.inference import InferenceSGD
 import optax
 from fabricpc.training import train_step
 from fabricpc.nodes import Linear
@@ -48,6 +48,13 @@ from fabricpc.core.initializers import (
 
 # Set up JAX
 jax.config.update("jax_platform_name", "cpu")
+
+
+def with_inference(structure, **kwargs):
+    """Return structure with modified inference config for testing."""
+    new_config = dict(structure.config)
+    new_config["inference"] = InferenceSGD(**kwargs)
+    return structure._replace(config=new_config)
 
 
 @pytest.fixture
@@ -80,6 +87,7 @@ def sample_graph_structure(rng_key):
             Edge(source=hidden1, target=output_node.slot("in")),  # skip connection
         ],
         task_map=TaskMap(x=input_node, y=output_node),
+        inference=InferenceSGD(),
     )
 
     # Initialize params
@@ -196,18 +204,15 @@ class TestInference:
 
         # Run 1 step to get initial energy (energy is computed during inference, not init)
         eta_infer = 0.1
-        state_after_1_step = run_inference(
-            params, initial_state, clamps, structure, infer_steps=1, eta_infer=eta_infer
+        struct_1step = with_inference(structure, eta_infer=0.1, infer_steps=1)
+        state_after_1_step = type(struct_1step.config["inference"]).run_inference(
+            params, initial_state, clamps, struct_1step
         )
 
         # Run more steps for final state
-        final_state = run_inference(
-            params,
-            initial_state,
-            clamps,
-            structure,
-            infer_steps=20,
-            eta_infer=eta_infer,
+        struct_20step = with_inference(structure, eta_infer=0.1, infer_steps=20)
+        final_state = type(struct_20step.config["inference"]).run_inference(
+            params, initial_state, clamps, struct_20step
         )
 
         # Verify that latent gradients were computed
@@ -252,8 +257,9 @@ class TestInference:
             clamps=clamps,
             params=params,
         )
-        final_state = run_inference(
-            params, initial_state, clamps, structure, infer_steps=10, eta_infer=0.1
+        struct_10step = with_inference(structure, eta_infer=0.1, infer_steps=10)
+        final_state = type(struct_10step.config["inference"]).run_inference(
+            params, initial_state, clamps, struct_10step
         )
 
         # Compute local gradients
@@ -313,8 +319,6 @@ class TestTraining:
         opt_state = optimizer.init(params)
 
         # Run training step
-        infer_steps = 10
-        eta_infer = 0.1
         new_params, new_opt_state, energy, final_state = train_step(
             params,
             opt_state,
@@ -322,8 +326,6 @@ class TestTraining:
             structure,
             optimizer,
             rng_key,
-            infer_steps,
-            eta_infer,
         )
 
         # Verify parameters were updated
@@ -366,7 +368,6 @@ class TestForwardMethods:
                 error=jnp.zeros(full_shape),
                 energy=jnp.zeros((batch_size,)),
                 pre_activation=jnp.zeros(full_shape),
-                substructure={},
             )
 
         # Create dummy GraphState
@@ -478,6 +479,7 @@ def test_different_activations(activation_type, rng_key):
             Edge(source=hidden, target=output_node.slot("in")),
         ],
         task_map=TaskMap(x=input_node, y=output_node),
+        inference=InferenceSGD(),
     )
 
     # Initialize params
@@ -516,6 +518,7 @@ def test_different_weight_initializations(weight_init_type, rng_key):
             Edge(source=hidden, target=output_node.slot("in")),
         ],
         task_map=TaskMap(x=input_node, y=output_node),
+        inference=InferenceSGD(),
     )
 
     # Initialize params

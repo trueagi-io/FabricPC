@@ -24,12 +24,19 @@ from fabricpc.nodes import Linear
 from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.graph import initialize_params
 from fabricpc.graph.state_initializer import initialize_graph_state
-from fabricpc.core.inference import run_inference
+from fabricpc.core.inference import InferenceSGD
 import optax
 from fabricpc.training import train_step
 from fabricpc.core.activations import ReLUActivation, TanhActivation, SigmoidActivation
 
 jax.config.update("jax_platform_name", "cpu")
+
+
+def with_inference(structure, **kwargs):
+    """Return structure with modified inference config for testing."""
+    new_config = dict(structure.config)
+    new_config["inference"] = InferenceSGD(**kwargs)
+    return structure._replace(config=new_config)
 
 
 @pytest.fixture
@@ -54,6 +61,7 @@ class TestNDimShapes:
                 Edge(source=node_hidden, target=node_output.slot("in")),
             ],
             task_map=TaskMap(x=node_input, y=node_output),
+            inference=InferenceSGD(),
         )
         params = initialize_params(structure, rng_key)
 
@@ -84,8 +92,9 @@ class TestNDimShapes:
         state = initialize_graph_state(
             structure, batch_size, rng_key, clamps=clamps, params=params
         )
-        final_state = run_inference(
-            params, state, clamps, structure, infer_steps=5, eta_infer=0.1
+        struct_mod = with_inference(structure, eta_infer=0.1, infer_steps=5)
+        final_state = type(struct_mod.config["inference"]).run_inference(
+            params, state, clamps, struct_mod
         )
 
         # Verify output shapes
@@ -107,6 +116,7 @@ class TestNDimShapes:
                 Edge(source=node_hidden, target=node_output.slot("in")),
             ],
             task_map=TaskMap(x=node_image, y=node_output),
+            inference=InferenceSGD(),
         )
         params = initialize_params(structure, rng_key)
 
@@ -138,8 +148,9 @@ class TestNDimShapes:
         state = initialize_graph_state(
             structure, batch_size, rng_key, clamps=clamps, params=params
         )
-        final_state = run_inference(
-            params, state, clamps, structure, infer_steps=5, eta_infer=0.1
+        struct_mod = with_inference(structure, eta_infer=0.1, infer_steps=5)
+        final_state = type(struct_mod.config["inference"]).run_inference(
+            params, state, clamps, struct_mod
         )
 
         # Verify state shapes
@@ -162,6 +173,7 @@ class TestNDimShapes:
                 Edge(source=node_hidden, target=node_output.slot("in")),
             ],
             task_map=TaskMap(x=node_image, y=node_output),
+            inference=InferenceSGD(),
         )
         params = initialize_params(structure, rng_key)
 
@@ -184,8 +196,9 @@ class TestNDimShapes:
         state = initialize_graph_state(
             structure, batch_size, rng_key, clamps=clamps, params=params
         )
-        final_state = run_inference(
-            params, state, clamps, structure, infer_steps=5, eta_infer=0.1
+        struct_mod = with_inference(structure, eta_infer=0.1, infer_steps=5)
+        final_state = type(struct_mod.config["inference"]).run_inference(
+            params, state, clamps, struct_mod
         )
 
         # Verify state shapes
@@ -210,6 +223,7 @@ class TestNDimShapes:
                 Edge(source=node_hidden, target=node_output.slot("in")),
             ],
             task_map=TaskMap(x=node_rgb_image, y=node_output),
+            inference=InferenceSGD(),
         )
         params = initialize_params(structure, rng_key)
 
@@ -232,8 +246,9 @@ class TestNDimShapes:
         state = initialize_graph_state(
             structure, batch_size, rng_key, clamps=clamps, params=params
         )
-        final_state = run_inference(
-            params, state, clamps, structure, infer_steps=3, eta_infer=0.1
+        struct_mod = with_inference(structure, eta_infer=0.1, infer_steps=3)
+        final_state = type(struct_mod.config["inference"]).run_inference(
+            params, state, clamps, struct_mod
         )
 
         assert final_state.nodes["rgb_image"].z_latent.shape == (batch_size, 32, 32, 3)
@@ -258,6 +273,7 @@ class TestNDimShapes:
                 Edge(source=node_hidden2, target=node_output.slot("in")),
             ],
             task_map=TaskMap(x=node_image, y=node_output),
+            inference=InferenceSGD(),
         )
         params = initialize_params(structure, rng_key)
 
@@ -283,8 +299,9 @@ class TestNDimShapes:
         state = initialize_graph_state(
             structure, batch_size, rng_key, clamps=clamps, params=params
         )
-        final_state = run_inference(
-            params, state, clamps, structure, infer_steps=5, eta_infer=0.1
+        struct_mod = with_inference(structure, eta_infer=0.1, infer_steps=5)
+        final_state = type(struct_mod.config["inference"]).run_inference(
+            params, state, clamps, struct_mod
         )
 
         # Verify all intermediate shapes
@@ -310,6 +327,7 @@ class TestSameParamsDifferentBatchSizes:
                 Edge(source=node_hidden, target=node_output.slot("in")),
             ],
             task_map=TaskMap(x=node_input, y=node_output),
+            inference=InferenceSGD(),
         )
 
         # Create params ONCE
@@ -328,8 +346,9 @@ class TestSameParamsDifferentBatchSizes:
             )
 
             # Run inference
-            final_state = run_inference(
-                params, state, clamps, structure, infer_steps=5, eta_infer=0.1
+            struct_mod = with_inference(structure, eta_infer=0.1, infer_steps=5)
+            final_state = type(struct_mod.config["inference"]).run_inference(
+                params, state, clamps, struct_mod
             )
 
             # Verify shapes
@@ -366,6 +385,7 @@ class TestSameParamsDifferentBatchSizes:
                 Edge(source=node_hidden, target=node_output.slot("in")),
             ],
             task_map=TaskMap(x=node_image, y=node_output),
+            inference=InferenceSGD(),
         )
 
         # Create params ONCE
@@ -381,8 +401,9 @@ class TestSameParamsDifferentBatchSizes:
             state = initialize_graph_state(
                 structure, batch_size, key, clamps=clamps, params=params
             )
-            final_state = run_inference(
-                params, state, clamps, structure, infer_steps=5, eta_infer=0.1
+            struct_mod = with_inference(structure, eta_infer=0.1, infer_steps=5)
+            final_state = type(struct_mod.config["inference"]).run_inference(
+                params, state, clamps, struct_mod
             )
 
             # Verify shapes preserved
@@ -412,6 +433,7 @@ class TestNDimTraining:
                 Edge(source=node_hidden, target=node_output.slot("in")),
             ],
             task_map=TaskMap(x=node_image, y=node_output),
+            inference=InferenceSGD(),
         )
         params = initialize_params(structure, rng_key)
 
@@ -434,8 +456,6 @@ class TestNDimTraining:
             structure,
             optimizer,
             rng_key,
-            infer_steps=5,
-            eta_infer=0.1,
         )
 
         # Verify energy is valid
@@ -462,6 +482,7 @@ class TestNDimTraining:
                 Edge(source=node_hidden, target=node_output.slot("in")),
             ],
             task_map=TaskMap(x=node_image, y=node_output),
+            inference=InferenceSGD(),
         )
         params = initialize_params(structure, rng_key)
 
@@ -481,8 +502,6 @@ class TestNDimTraining:
             structure,
             optimizer,
             rng_key,
-            infer_steps=3,
-            eta_infer=0.1,
         )
 
         assert not jnp.isnan(energy)
@@ -507,6 +526,7 @@ class TestEnergyWithNDimShapes:
                 Edge(source=node_hidden, target=node_output.slot("in")),
             ],
             task_map=TaskMap(x=node_image, y=node_output),
+            inference=InferenceSGD(),
         )
         params = initialize_params(structure, rng_key)
 
@@ -520,8 +540,9 @@ class TestEnergyWithNDimShapes:
         )
 
         # Run 1 step to get initial energy (energy is computed during inference, not initialization)
-        initial_state = run_inference(
-            params, state, clamps, structure, infer_steps=1, eta_infer=0.1
+        struct_mod_1 = with_inference(structure, eta_infer=0.1, infer_steps=1)
+        initial_state = type(struct_mod_1.config["inference"]).run_inference(
+            params, state, clamps, struct_mod_1
         )
         initial_energy = sum(
             jnp.sum(initial_state.nodes[name].energy)
@@ -530,8 +551,9 @@ class TestEnergyWithNDimShapes:
         )
 
         # Run more inference steps
-        final_state = run_inference(
-            params, state, clamps, structure, infer_steps=20, eta_infer=0.1
+        struct_mod_20 = with_inference(structure, eta_infer=0.1, infer_steps=20)
+        final_state = type(struct_mod_20.config["inference"]).run_inference(
+            params, state, clamps, struct_mod_20
         )
 
         # Get final energy

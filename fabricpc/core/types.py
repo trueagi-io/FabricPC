@@ -106,7 +106,6 @@ class NodeState(NamedTuple):
         energy: Energy
         pre_activation: Pre-activation values (before activation function)
         latent_grad: Gradients w.r.t. latent states for inference updates
-        substructure: Dictionary of node internal states for complex nodes
     """
 
     z_latent: jnp.ndarray
@@ -115,7 +114,6 @@ class NodeState(NamedTuple):
     energy: jnp.ndarray  # per-sample energy, shape (batch_size,)
     pre_activation: jnp.ndarray
     latent_grad: jnp.ndarray  # For local gradient accumulation
-    substructure: Dict[str, jnp.ndarray]  # substructure of node internal states
 
 
 class GraphState(NamedTuple):
@@ -230,7 +228,6 @@ tree_util.register_pytree_node(
             ns.energy,
             ns.pre_activation,
             ns.latent_grad,
-            ns.substructure,
         ),
         None,
     ),

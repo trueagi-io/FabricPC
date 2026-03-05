@@ -27,6 +27,7 @@ from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.graph import initialize_params
 from fabricpc.core.activations import IdentityActivation, ReLUActivation
 from fabricpc.core.initializers import XavierInitializer
+from fabricpc.core.inference import InferenceSGD
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.training.multi_gpu import train_pcn_multi_gpu
 
@@ -80,6 +81,7 @@ def simple_structure():
             Edge(source=hidden4, target=output_node.slot("in")),
         ],
         task_map=TaskMap(x=input_node, y=output_node),
+        inference=InferenceSGD(),
     )
 
     return structure
@@ -96,8 +98,6 @@ def train_config():
     """Training configuration."""
     return {
         "num_epochs": 1,
-        "infer_steps": 18,
-        "eta_infer": 0.05,
     }
 
 
@@ -243,10 +243,7 @@ class TestMultiGPUTraining:
             input_shape, output_shape, batch_size=8, num_batches=2, rng_key=eval_key
         )
 
-        eval_config = {
-            "infer_steps": train_config["infer_steps"],
-            "eta_infer": train_config["eta_infer"],
-        }
+        eval_config = {}
 
         eval_key1, eval_key2 = jax.random.split(eval_key)
         metrics_single = evaluate_pcn(

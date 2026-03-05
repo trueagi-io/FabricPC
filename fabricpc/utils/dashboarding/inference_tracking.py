@@ -15,16 +15,14 @@ from fabricpc.core.types import (
     GraphStructure,
     NodeState,
 )
-from fabricpc.core.inference import inference_step
 
 
+# TODO clarify collect_every refers to either batches or inference steps
 def run_inference_with_history(
     params: GraphParams,
     initial_state: GraphState,
     clamps: Dict[str, jnp.ndarray],
     structure: GraphStructure,
-    infer_steps: int,
-    eta_infer: float = 0.1,
     collect_every: int = 1,
 ) -> Tuple[GraphState, List[Dict[str, Dict[str, jnp.ndarray]]]]:
     """Run inference and collect state history at specified intervals.
@@ -41,8 +39,6 @@ def run_inference_with_history(
         initial_state: Initial graph state.
         clamps: Dictionary of clamped values.
         structure: Graph structure.
-        infer_steps: Number of inference steps.
-        eta_infer: Inference learning rate.
         collect_every: Collect state every N steps (1 = every step).
 
     Returns:
@@ -50,11 +46,18 @@ def run_inference_with_history(
             - final_state: GraphState after convergence
             - state_history: List of dicts containing key metrics per step
     """
+    # Get infer_steps from structure's inference config
+    inference_obj = structure.config["inference"]
+    inference_cls = type(inference_obj)
+    config = inference_obj.config
+    infer_steps = config["infer_steps"]
 
     def scan_fn(
         state: GraphState, _: None
     ) -> Tuple[GraphState, Dict[str, Dict[str, jnp.ndarray]]]:
-        new_state = inference_step(params, state, clamps, structure, eta_infer)
+        new_state = inference_cls.inference_step(
+            params, state, clamps, structure, config
+        )
         # Extract key metrics for history (lightweight)
         # Reduce over batch dimension to get scalar metrics per step
         step_metrics = {
@@ -120,8 +123,6 @@ def run_inference_with_full_history(
     initial_state: GraphState,
     clamps: Dict[str, jnp.ndarray],
     structure: GraphStructure,
-    infer_steps: int,
-    eta_infer: float = 0.1,
 ) -> Tuple[GraphState, List[GraphState]]:
     """Run inference and collect full GraphState at each step.
 
@@ -133,18 +134,22 @@ def run_inference_with_full_history(
         initial_state: Initial graph state.
         clamps: Dictionary of clamped values.
         structure: Graph structure.
-        infer_steps: Number of inference steps.
-        eta_infer: Inference learning rate.
 
     Returns:
         Tuple of (final_state, state_history) where state_history
         is a list of GraphState objects.
     """
+    # Get infer_steps from structure's inference config
+    inference_obj = structure.config["inference"]
+    inference_cls = type(inference_obj)
+    config = inference_obj.config
+    infer_steps = config["infer_steps"]
+
     history: List[GraphState] = []
     state = initial_state
 
     for _ in range(infer_steps):
-        state = inference_step(params, state, clamps, structure, eta_infer)
+        state = inference_cls.inference_step(params, state, clamps, structure, config)
         history.append(state)
 
     return state, history
@@ -160,8 +165,6 @@ def train_step_with_history(
     structure: GraphStructure,
     optimizer: optax.GradientTransformation,
     rng_key: jax.Array,
-    infer_steps: int,
-    eta_infer: float = 0.1,
     collect_every: int = 1,
 ) -> Tuple[
     GraphParams,
@@ -186,8 +189,6 @@ def train_step_with_history(
         structure: Graph structure.
         optimizer: Optax optimizer.
         rng_key: JAX random key for state initialization.
-        infer_steps: Number of inference steps.
-        eta_infer: Inference learning rate.
         collect_every: Collect history every N inference steps (note: currently
             ignored inside JIT; subsample after with unstack_inference_history).
 
@@ -218,7 +219,7 @@ def train_step_with_history(
 
     # Run inference WITH history collection (returns stacked metrics)
     final_state, stacked_history = run_inference_with_history(
-        params, init_state, clamps, structure, infer_steps, eta_infer, collect_every
+        params, init_state, clamps, structure, collect_every
     )
 
     # Compute energy

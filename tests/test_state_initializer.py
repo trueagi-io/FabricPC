@@ -24,6 +24,7 @@ from fabricpc.nodes import Linear
 from fabricpc.nodes.transformer import TransformerBlock
 from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.graph import initialize_params
+from fabricpc.core.inference import InferenceSGD
 from fabricpc.core.activations import (
     IdentityActivation,
     ReLUActivation,
@@ -66,6 +67,7 @@ def simple_graph_structure(rng_key):
             Edge(source=hidden_node, target=output_node.slot("in")),
         ],
         task_map=TaskMap(x=input_node, y=output_node),
+        inference=InferenceSGD(),
     )
     return structure
 
@@ -148,6 +150,7 @@ class TestDistributionStateInit:
                 Edge(source=hidden_node, target=output_node.slot("in")),
             ],
             task_map=TaskMap(x=input_node, y=output_node),
+            inference=InferenceSGD(),
         )
 
         params = initialize_params(structure, rng_key)
@@ -241,6 +244,7 @@ class TestFeedforwardStateInit:
                 Edge(source=h3_node, target=output_node.slot("in")),
             ],
             task_map=TaskMap(x=input_node, y=output_node),
+            inference=InferenceSGD(),
         )
 
         params = initialize_params(structure, rng_key)
@@ -397,7 +401,6 @@ class TestCustomStateInit:
                         energy=jnp.zeros((batch_size,)),
                         pre_activation=jnp.zeros(shape),
                         latent_grad=jnp.zeros(shape),
-                        substructure={},
                     )
 
                 return GraphState(nodes=node_state_dict, batch_size=batch_size)
@@ -445,6 +448,7 @@ class TestFeedforwardZeroError:
                 Edge(source=h2_node, target=output_node.slot("in")),
             ],
             task_map=TaskMap(x=input_node, y=output_node),
+            inference=InferenceSGD(),
         )
 
         params = initialize_params(structure, rng_key)
@@ -521,6 +525,7 @@ class TestFeedforwardZeroError:
                 Edge(source=transformer_node, target=output_node.slot("in")),
             ],
             task_map=TaskMap(x=input_node, y=output_node, causal_mask=mask_node),
+            inference=InferenceSGD(),
         )
 
         params = initialize_params(structure, rng_key)
@@ -566,8 +571,6 @@ class TestFeedforwardZeroError:
         Test that inference with no output clamp does not change latent states
         when error is zero after feedforward init.
         """
-        from fabricpc.core.inference import run_inference
-
         input_node = Linear(shape=(16,), name="input")
         hidden_node = Linear(shape=(32,), activation=ReLUActivation(), name="hidden")
         output_node = Linear(shape=(8,), name="output")
@@ -579,6 +582,7 @@ class TestFeedforwardZeroError:
                 Edge(source=hidden_node, target=output_node.slot("in")),
             ],
             task_map=TaskMap(x=input_node, y=output_node),
+            inference=InferenceSGD(eta_infer=0.1, infer_steps=10),
         )
 
         params = initialize_params(structure, rng_key)
@@ -602,8 +606,8 @@ class TestFeedforwardZeroError:
         }
 
         # Run inference with no output clamp
-        final_state = run_inference(
-            params, state, clamps, structure, infer_steps=10, eta_infer=0.1
+        final_state = type(structure.config["inference"]).run_inference(
+            params, state, clamps, structure
         )
 
         # Latent states should not have changed since error was zero

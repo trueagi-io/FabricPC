@@ -21,7 +21,7 @@ import jax.numpy as jnp
 import optax
 
 from fabricpc.core.types import GraphParams, GraphState, GraphStructure, NodeParams
-from fabricpc.core.inference import run_inference, gather_inputs
+from fabricpc.core.inference import gather_inputs
 from fabricpc.graph.state_initializer import initialize_graph_state
 
 
@@ -122,8 +122,6 @@ def train_step_autoregressive(
     structure: GraphStructure,
     optimizer: optax.GradientTransformation,
     rng_key: jax.Array,
-    infer_steps: int,
-    eta_infer: float = 0.1,
     use_causal_mask: bool = True,
 ) -> Tuple[GraphParams, optax.OptState, float, float, GraphState]:
     """
@@ -146,8 +144,6 @@ def train_step_autoregressive(
             For causal masking, task_map should include "causal_mask" -> node_name
         optimizer: Optax optimizer
         rng_key: JAX random key
-        infer_steps: Number of inference steps
-        eta_infer: Inference learning rate
         use_causal_mask: Whether to apply causal masking
 
     Returns:
@@ -187,8 +183,8 @@ def train_step_autoregressive(
     )
 
     # Run inference
-    final_state = run_inference(
-        params, init_state, clamps, structure, infer_steps, eta_infer
+    final_state = type(structure.config["inference"]).run_inference(
+        params, init_state, clamps, structure
     )
 
     # Compute total energy (sum over non-source nodes)
@@ -241,8 +237,6 @@ def train_autoregressive(
         optimizer: Optax optimizer (e.g., optax.adam(1e-3))
         config: Training configuration:
             - num_epochs: Number of training epochs
-            - infer_steps: Inference steps per training step
-            - eta_infer: Inference learning rate
             - use_causal_mask: Whether to use causal masking (default True)
             - gradient_accumulation_steps: Steps to accumulate gradients (default 1)
         rng_key: JAX random key
@@ -256,8 +250,6 @@ def train_autoregressive(
     opt_state = optimizer.init(params)
 
     # Training hyperparameters
-    infer_steps = config.get("infer_steps", 20)
-    eta_infer = config.get("eta_infer", 0.1)
     num_epochs = config.get("num_epochs", 10)  # supports float (e.g. 1.5)
     use_causal_mask = config.get("use_causal_mask", True)
     grad_accum_steps = config.get("gradient_accumulation_steps", 1)
@@ -269,7 +261,7 @@ def train_autoregressive(
     # JIT compile training step
     jit_train_step = jax.jit(
         lambda p, o, b, k: train_step_autoregressive(
-            p, o, b, structure, optimizer, k, infer_steps, eta_infer, use_causal_mask
+            p, o, b, structure, optimizer, k, use_causal_mask
         )
     )
 
@@ -358,8 +350,6 @@ def _generation_step(
     seq_len: int,
     vocab_size: int,
     batch_size: int,
-    infer_steps: int,
-    eta_infer: float,
     temperature: float,
     top_k: Optional[int],
     top_p: Optional[float],
@@ -398,12 +388,9 @@ def _generation_step(
         clamps=clamps,
         params=params,
     )
-    if infer_steps > 0:
-        final_state = run_inference(
-            params, state, clamps, structure, infer_steps, eta_infer
-        )
-    else:
-        final_state = state
+    final_state = type(structure.config["inference"]).run_inference(
+        params, state, clamps, structure
+    )
 
     # Get output for the last position
     # z_mu contains the predicted output after activation (softmax for output node)
@@ -464,8 +451,6 @@ def generate_autoregressive(
     max_new_tokens: int,
     rng_key: jax.Array,
     temperature: float = 1.0,
-    infer_steps: int = 20,
-    eta_infer: float = 0.1,
     top_k: Optional[int] = None,
     top_p: Optional[float] = None,
 ) -> jnp.ndarray:
@@ -482,8 +467,6 @@ def generate_autoregressive(
         max_new_tokens: Number of new tokens to generate
         rng_key: JAX random key
         temperature: Sampling temperature (higher = more random, 1=neutral, <1=less random)
-        infer_steps: Inference steps per generation step
-        eta_infer: Inference learning rate
         top_k: If set, only sample from top-k tokens
         top_p: If set, use nucleus sampling with this probability threshold
 
@@ -532,8 +515,6 @@ def generate_autoregressive(
                 seq_len=seq_len,
                 vocab_size=vocab_size,
                 batch_size=batch_size,
-                infer_steps=infer_steps,
-                eta_infer=eta_infer,
                 temperature=temperature,
                 top_k=top_k,
                 top_p=top_p,
@@ -567,8 +548,6 @@ def _eval_step_autoregressive(
     structure: GraphStructure,
     batch: Dict[str, jnp.ndarray],
     rng_key: jax.Array,
-    infer_steps: int,
-    eta_infer: float,
     use_causal_mask: bool,
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
@@ -579,8 +558,6 @@ def _eval_step_autoregressive(
         structure: Graph structure
         batch: Batch with 'x' and 'y'
         rng_key: Random key
-        infer_steps: Number of inference steps
-        eta_infer: Inference learning rate
         use_causal_mask: Whether to use causal masking
 
     Returns:
@@ -607,12 +584,9 @@ def _eval_step_autoregressive(
         clamps=clamps,
         params=params,
     )
-    if infer_steps > 0:
-        final_state = run_inference(
-            params, state, clamps, structure, infer_steps, eta_infer
-        )
-    else:
-        final_state = state
+    final_state = type(structure.config["inference"]).run_inference(
+        params, state, clamps, structure
+    )
 
     # Compute loss and get predictions
     output_node = structure.task_map["y"]
@@ -644,15 +618,13 @@ def evaluate_autoregressive(
         params: Trained parameters
         structure: Graph structure
         test_loader: Test data loader
-        config: Evaluation config (infer_steps, eta_infer, use_causal_mask)
+        config: Evaluation config (use_causal_mask)
         rng_key: Random key
         debug: If True, print detailed diagnostics for first batch
 
     Returns:
         Dictionary of metrics
     """
-    infer_steps = config["infer_steps"]
-    eta_infer = config["eta_infer"]
     use_causal_mask = config["use_causal_mask"]
 
     output_node = structure.task_map.get("y")
@@ -671,9 +643,7 @@ def evaluate_autoregressive(
 
     # JIT compile the evaluation step
     jit_eval_step = jax.jit(
-        lambda p, b, k: _eval_step_autoregressive(
-            p, structure, b, k, infer_steps, eta_infer, use_causal_mask
-        )
+        lambda p, b, k: _eval_step_autoregressive(p, structure, b, k, use_causal_mask)
     )
 
     total_loss = 0.0

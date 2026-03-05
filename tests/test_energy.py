@@ -25,6 +25,7 @@ from fabricpc.core.energy import (
 from fabricpc.nodes import Linear
 from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.graph import initialize_params
+from fabricpc.core.inference import InferenceSGD
 
 jax.config.update("jax_platform_name", "cpu")
 
@@ -336,6 +337,7 @@ class TestIntegration:
             nodes=[input_node, output_node],
             edges=[Edge(source=input_node, target=output_node.slot("in"))],
             task_map=TaskMap(x=input_node, y=output_node),
+            inference=InferenceSGD(),
         )
 
         # Both nodes should have GaussianEnergy by default
@@ -353,6 +355,7 @@ class TestIntegration:
             nodes=[input_node, output_node],
             edges=[Edge(source=input_node, target=output_node.slot("in"))],
             task_map=TaskMap(x=input_node, y=output_node),
+            inference=InferenceSGD(),
         )
 
         assert isinstance(structure.nodes["input"].node_info.energy, GaussianEnergy)
@@ -369,6 +372,7 @@ class TestIntegration:
             nodes=[input_node, output_node],
             edges=[Edge(source=input_node, target=output_node.slot("in"))],
             task_map=TaskMap(x=input_node, y=output_node),
+            inference=InferenceSGD(),
         )
 
         assert isinstance(

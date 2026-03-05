@@ -15,7 +15,7 @@ import jax
 import jax.numpy as jnp
 
 from fabricpc.core.types import NodeState, NodeParams, NodeInfo
-from fabricpc.core.inference import run_inference, gather_inputs
+from fabricpc.core.inference import gather_inputs, InferenceSGD
 from fabricpc.nodes import (
     Linear,
     LinearExplicitGrad,
@@ -62,6 +62,7 @@ def create_graph(node_class, rng_key):
             Edge(source=hidden, target=output_node.slot("in")),
         ],
         task_map=TaskMap(x=input_node, y=output_node),
+        inference=InferenceSGD(eta_infer=0.1, infer_steps=5),
     )
     params = initialize_params(structure, rng_key)
     return params, structure
@@ -143,7 +144,6 @@ class TestLinearAutoGradNode:
             error=jnp.zeros((batch_size, output_dim)),
             energy=jnp.zeros((batch_size,)),
             pre_activation=jnp.zeros((batch_size, output_dim)),
-            substructure={},
         )
 
         # Compare forward_inference results
@@ -244,7 +244,6 @@ class TestLinearAutoGradNode:
             error=jnp.zeros((batch_size, output_dim)),
             energy=jnp.zeros((batch_size,)),
             pre_activation=jnp.zeros((batch_size, output_dim)),
-            substructure={},
         )
 
         # Compare forward_learning results
@@ -315,21 +314,11 @@ class TestLinearAutoGradNode:
         )
 
         # Run inference
-        state_linear = run_inference(
-            params_linear,
-            state_linear,
-            clamps,
-            structure_linear,
-            infer_steps=5,
-            eta_infer=0.1,
+        state_linear = type(structure_linear.config["inference"]).run_inference(
+            params_linear, state_linear, clamps, structure_linear
         )
-        state_autograd = run_inference(
-            params_autograd,
-            state_autograd,
-            clamps,
-            structure_autograd,
-            infer_steps=5,
-            eta_infer=0.1,
+        state_autograd = type(structure_autograd.config["inference"]).run_inference(
+            params_autograd, state_autograd, clamps, structure_autograd
         )
 
         # Compare gradients for each non-input node using forward_inference

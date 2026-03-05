@@ -145,7 +145,6 @@ class GlobalStateInit(StateInitBase):
                 energy=jnp.zeros((batch_size,)),
                 pre_activation=jnp.zeros(shape),
                 latent_grad=jnp.zeros(shape),
-                substructure={},
             )
 
         return GraphState(nodes=node_state_dict, batch_size=batch_size)
@@ -196,7 +195,6 @@ class NodeDistributionStateInit(StateInitBase):
                 energy=jnp.zeros((batch_size,)),
                 pre_activation=jnp.zeros(shape),
                 latent_grad=jnp.zeros(shape),
-                substructure={},
             )
 
         return GraphState(nodes=node_state_dict, batch_size=batch_size)
@@ -256,7 +254,6 @@ class FeedforwardStateInit(StateInitBase):
                 energy=jnp.zeros((batch_size,)),
                 pre_activation=jnp.zeros(shape),
                 latent_grad=jnp.zeros(shape),
-                substructure={},
             )
 
         state = GraphState(nodes=node_state_dict, batch_size=batch_size)

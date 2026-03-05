@@ -36,6 +36,7 @@ from fabricpc.core.activations import (
     SoftmaxActivation,
 )
 from fabricpc.core.energy import CrossEntropyEnergy
+from fabricpc.core.inference import InferenceSGD
 import optax
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.training.natural_gradients import (
@@ -72,13 +73,12 @@ structure = graph(
         Edge(source=hidden2, target=output.slot("in")),
     ],
     task_map=TaskMap(x=pixels, y=output),  # Tell the trainer which nodes are inputs and targets for supervised learning
+    inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
 )
 
 # Training hyperparameters
 train_config = {
     "num_epochs": 20,       # Number of training epochs
-    "infer_steps": 20,      # Inference steps
-    "eta_infer": 0.05,      # Inference learning rate
 }
 batch_size = 200
 

@@ -12,7 +12,6 @@ import jax.numpy as jnp
 import optax
 
 from fabricpc.core.types import GraphParams, GraphState, GraphStructure
-from fabricpc.core.inference import run_inference
 from fabricpc.graph.graph_net import compute_local_weight_gradients
 
 
@@ -21,8 +20,6 @@ def get_graph_param_gradient(
     batch: Dict[str, jnp.ndarray],
     structure: GraphStructure,
     rng_key: jax.Array,
-    infer_steps: int,
-    eta_infer: float = 0.1,
 ) -> Tuple[GraphParams, float, GraphState]:
     """
     Compute parameter gradients for a batch without updating parameters.
@@ -34,8 +31,6 @@ def get_graph_param_gradient(
         batch: Batch of data with task-specific keys
         structure: Graph structure
         rng_key: JAX random key for state initialization
-        infer_steps: Number of inference steps
-        eta_infer: Inference learning rate
 
     Returns:
         Tuple of (grads, energy, final_state)
@@ -61,8 +56,8 @@ def get_graph_param_gradient(
     )
 
     # Run inference to convergence
-    final_state = run_inference(
-        params, init_state, clamps, structure, infer_steps, eta_infer
+    final_state = type(structure.config["inference"]).run_inference(
+        params, init_state, clamps, structure
     )
 
     # Compute energy (ignore source nodes)
@@ -87,8 +82,6 @@ def train_step(
     structure: GraphStructure,
     optimizer: optax.GradientTransformation,
     rng_key: jax.Array,
-    infer_steps: int,
-    eta_infer: float = 0.1,
 ) -> Tuple[GraphParams, optax.OptState, float, GraphState]:
     """
     Single training step with local weight updates.
@@ -105,8 +98,6 @@ def train_step(
         structure: Graph structure
         optimizer: Optax optimizer
         rng_key: JAX random key for state initialization
-        infer_steps: Number of inference steps
-        eta_infer: Inference learning rate
 
     Returns:
         Tuple of (updated_params, updated_opt_state, energy, final_state)
@@ -114,7 +105,7 @@ def train_step(
 
     # Compute gradients
     grads, energy, final_state = get_graph_param_gradient(
-        params, batch, structure, rng_key, infer_steps, eta_infer
+        params, batch, structure, rng_key
     )
 
     # Update parameters using optimizer
@@ -146,8 +137,6 @@ def train_pcn(
         optimizer: Optax optimizer (e.g., optax.adam(1e-3))
         config: Training configuration with keys:
             - num_epochs: Number of training epochs
-            - infer_steps: number of inference steps
-            - eta_infer: inference learning rate
         rng_key: JAX random key (will be split for each batch)
         verbose: Whether to print progress
         epoch_callback: Optional function called at end of each epoch:
@@ -167,16 +156,12 @@ def train_pcn(
         >>> optimizer = optax.adam(1e-3)
         >>> train_config = {
         ...     "num_epochs": 10,
-        ...     "infer_steps": 20,
-        ...     "eta_infer": 0.1,
         ... }
         >>> trained_params = train_pcn(params, structure, train_loader, optimizer, train_config, train_key)
     """
     opt_state = optimizer.init(params)
 
     # Training hyperparameters
-    infer_steps = config.get("infer_steps", 20)
-    eta_infer = config.get("eta_infer", 0.1)
     num_epochs = config.get("num_epochs", 10)  # supports float (e.g. 1.5)
 
     # Support fractional epochs: e.g. 1.5 -> 2 loop iterations, last stops at 50%
@@ -185,9 +170,7 @@ def train_pcn(
 
     # Create JIT-compiled training step
     jit_train_step = jax.jit(
-        lambda p, o, b, k: train_step(
-            p, o, b, structure, optimizer, k, infer_steps, eta_infer
-        )
+        lambda p, o, b, k: train_step(p, o, b, structure, optimizer, k)
     )
 
     # Training loop
@@ -267,8 +250,6 @@ def eval_step(
     batch: Dict[str, jnp.ndarray],
     structure: GraphStructure,
     rng_key: jax.Array,
-    infer_steps: int,
-    eta_infer: float,
 ) -> Tuple[float, int, int]:
     """
     Single evaluation step (JIT-compilable).
@@ -278,8 +259,6 @@ def eval_step(
         batch: Batch data with 'x' and 'y' keys
         structure: Graph structure
         rng_key: Random key for initialization
-        infer_steps: Number of inference steps
-        eta_infer: Inference learning rate
 
     Returns:
         Tuple of (avg_energy, correct, batch_size)
@@ -305,8 +284,8 @@ def eval_step(
 
     # Run inference steps
     # TODO - can skip inference in evaluation mode (no labels) if 1. initialization method is feed-forward AND 2. the graph has no cycles.
-    final_state = run_inference(
-        params, state, clamps, structure, infer_steps, eta_infer
+    final_state = type(structure.config["inference"]).run_inference(
+        params, state, clamps, structure
     )
 
     # Compute total network energy
@@ -346,9 +325,7 @@ def evaluate_pcn(
         params: Trained parameters
         structure: Graph structure
         test_loader: Test data loader
-        config: Evaluation configuration with keys:
-            - infer_steps: number of inference steps
-            - eta_infer: inference learning rate
+        config: Evaluation configuration
         rng_key: JAX random key (will be split for each batch)
 
     Returns:
@@ -356,13 +333,8 @@ def evaluate_pcn(
         Note: energy is not a meaningful metric for evaluation, but we include internal node energy for completeness. Focus on accuracy or other task-specific metrics.
         Note: Energy will be zero in evaluation mode for graphs that are feed-forward in topology (no cycles) and use feed-forward initialization.
     """
-    infer_steps = config.get("infer_steps", 20)
-    eta_infer = config.get("eta_infer", 0.1)
-
     # Create JIT-compiled eval step
-    jit_eval_step = jax.jit(
-        lambda p, b, k: eval_step(p, b, structure, k, infer_steps, eta_infer)
-    )
+    jit_eval_step = jax.jit(lambda p, b, k: eval_step(p, b, structure, k))
 
     # Estimate number of batches
     try:

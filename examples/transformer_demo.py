@@ -43,6 +43,7 @@ from fabricpc.core.activations import (
 )
 from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.core.initializers import NormalInitializer, KaimingInitializer
+from fabricpc.core.inference import InferenceSGD
 import optax
 from fabricpc.training.train_autoregressive import (
     train_step_autoregressive,
@@ -200,6 +201,8 @@ def create_transformer_model(
     ff_dim: int,
     rope_theta: float,
     rng_key: jax.Array,
+    infer_steps: int = 10,
+    eta_infer: float = 0.01,
 ) -> Tuple:
     """
     Create a transformer language model using the new object-oriented API.
@@ -296,6 +299,7 @@ def create_transformer_model(
         edges=edges,
         task_map=TaskMap(x=input_node, y=output_node, causal_mask=mask_node),
         graph_state_initializer=FeedforwardStateInit(),
+        inference=InferenceSGD(eta_infer=eta_infer, infer_steps=infer_steps),
     )
     params = initialize_params(structure, rng_key)
     return structure, params
@@ -510,6 +514,8 @@ def main():
         ff_dim=FF_DIM,
         rope_theta=ROPE_THETA,
         rng_key=graph_key,
+        infer_steps=INFER_STEPS,
+        eta_infer=ETA_INFER,
     )
 
     total_params = sum(p.size for p in jax.tree_util.tree_leaves(params))
@@ -564,8 +570,6 @@ def main():
     )
     train_config = {
         "num_epochs": NUM_EPOCHS,
-        "infer_steps": INFER_STEPS,
-        "eta_infer": ETA_INFER,
         "use_causal_mask": True,  # Enable causal masking for autoregressive
     }
 
@@ -581,8 +585,6 @@ def main():
                     structure,
                     test_loader,
                     {
-                        "infer_steps": 0,
-                        "eta_infer": ETA_INFER,
                         "use_causal_mask": True,
                     },  # No inference steps for eval because model predicts feedforward
                     eval_rng,
@@ -673,8 +675,6 @@ def main():
                 structure,
                 optimizer,
                 k,
-                INFER_STEPS,
-                ETA_INFER,
                 use_causal_mask,
             )
         )

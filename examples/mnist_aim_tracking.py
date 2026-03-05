@@ -48,6 +48,7 @@ from fabricpc.core.activations import (
 )
 from fabricpc.core.energy import GaussianEnergy, CrossEntropyEnergy
 from fabricpc.core.initializers import NormalInitializer
+from fabricpc.core.inference import InferenceSGD
 import optax
 from fabricpc.training import evaluate_pcn
 
@@ -119,13 +120,11 @@ structure = graph(
     ],
     task_map=TaskMap(x=pixels, y=class_node),
     graph_state_initializer=FeedforwardStateInit(),
+    inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
 )
 
 optimizer = optax.adamw(0.001, weight_decay=0.001)
-train_config = {
-    "infer_steps": 20,
-    "eta_infer": 0.05,
-}
+train_config = {}
 batch_size = 200
 num_epochs = 1
 
@@ -170,7 +169,7 @@ if TRACKING_ENABLED:
 
     tracking_config = TrackingConfig(
         experiment_name="mnist_pcn_tracking",
-        run_name=f"5layer_lr0.001_infer{train_config['infer_steps']}",
+        run_name=f"5layer_lr0.001_infer{structure.config['inference'].config['infer_steps']}",
         # Batch-level tracking
         track_batch_energy=True,
         track_batch_energy_per_node=True,
@@ -221,10 +220,7 @@ else:
 print(f"\n[Training Configuration]")
 print(f"  Optimizer: adamw")
 print(f"  Learning rate: 0.001")
-print(f"  Inference steps: {train_config['infer_steps']}")
-
-infer_steps = train_config["infer_steps"]
-eta_infer = train_config["eta_infer"]
+print(f"  Inference steps: {structure.config['inference'].config['infer_steps']}")
 
 opt_state = optimizer.init(params)
 
@@ -238,8 +234,6 @@ jit_train_step = jax.jit(
         structure,
         optimizer,
         k,
-        infer_steps,
-        eta_infer,
         collect_every=5,  # Collect every 5th inference step
     )
 )

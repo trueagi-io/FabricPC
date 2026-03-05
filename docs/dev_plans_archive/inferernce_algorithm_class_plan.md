@@ -4,6 +4,8 @@
 
 Encapsulate `inference.py:run_inference()` and `inference_step()` into an extensible class hierarchy. The **latent update rule** (Phase 3 of inference) is the primary extension point. Users can swap inference algorithms (SGD, Adam, natural gradient, etc.) via:
 
+Implement gradient norm clipping in InferenceSGD latent_update().
+
 ```python
 structure = graph(
     nodes=[...], edges=[...], task_map=...,
@@ -61,7 +63,7 @@ class InferenceBase(ABC):
     """Abstract base class for inference algorithms."""
 
     def __init__(self, **config):
-        self.config = config
+        self.config = types.MappingProxyType(config)  # Immutable dictionary
 
     @staticmethod
     @abstractmethod
@@ -382,3 +384,36 @@ Remove `substructure: Dict[str, jnp.ndarray]` field from `NodeState` NamedTuple.
   - `tests/test_identity_node.py`
   - `tests/test_auto_node_grad.py`
   - `tests/test_state_initializer.py`
+
+
+#  Completed: Extensible Inference Abstraction + Substructure Removal                                                                                
+                                                                                                                                                    
+  What changed                                                                                                                                      
+                                                                                                                                                    
+  1. Removed substructure from NodeState (types.py, linear.py, transformer.py, state initializers, tests)                                           
+  - compute_gain_mod_error() now returns the value directly instead of storing in substructure                                                      
+  - Transformer _mha() dropped dead substructure return                                                                                             
+  - Removed substructure={} from all NodeState constructors                                                                                         
+                                                                                                                                                    
+  2. Added InferenceBase / InferenceSGD class hierarchy (inference.py)                                                                              
+  - Template Method pattern: latent_update() is the primary extension point                                                                         
+  - _forward_phase() extracts shared Phase 1-2 logic                                                                                                
+  - Backward-compatible run_inference() / inference_step() wrapper functions preserved                                                              
+                                                                                                                                                    
+  3. Integrated with graph() builder (graph_builder.py)                                                                                             
+  - New inference= parameter, defaults to InferenceSGD()                                                                                            
+  - Stored in GraphStructure.config["inference"]                                                                                                    
+                                                                                                                                                    
+  4. Migrated eta_infer and infer_steps from training config to inference object                                                                    
+  - Updated 4 training modules (train.py, multi_gpu.py, train_autoregressive.py, inference_tracking.py)                                             
+  - Updated 10 example files                                                                                                                        
+  - Updated 5 test files                                                                                                                            
+  - Both parameters are now properties of InferenceSGD, not training hyperparameters                                                                
+                                                                                                                                                    
+  New API                                                                                                                                           
+                                                                                                                                                    
+  structure = graph(                                                                                                                                
+      nodes=[...], edges=[...], task_map=...,                                                                                                       
+      inference=InferenceSGD(eta_infer=0.05, infer_steps=20),                                                                                       
+  )                                                                                                                                                 
+  train_config = {"num_epochs": 20}  # eta_infer/infer_steps gone   

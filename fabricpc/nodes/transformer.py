@@ -257,7 +257,7 @@ class TransformerBlock(NodeBase):
         )
 
         # Multi-Head Attention
-        attn_output, substructure_attn = TransformerBlock._mha(
+        attn_output = TransformerBlock._mha(
             x_norm1,
             mask,
             num_heads,
@@ -381,11 +381,4 @@ class TransformerBlock(NodeBase):
         pre_activation = jnp.matmul(attn_output, W_o) + b_o
         projection = activation_fn(pre_activation)
 
-        substructure = {
-            "attn_matrix": attn_matrix,
-            "Q": Q,
-            "K": K,
-            "V": V,
-        }
-
-        return projection, substructure
+        return projection

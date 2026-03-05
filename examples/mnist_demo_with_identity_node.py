@@ -26,6 +26,7 @@ from fabricpc.core.activations import (
     SoftmaxActivation,
 )
 from fabricpc.core.energy import CrossEntropyEnergy
+from fabricpc.core.inference import InferenceSGD
 import optax
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
@@ -60,14 +61,13 @@ structure = graph(
         Edge(source=hidden2, target=output.slot("in")),
     ],
     task_map=TaskMap(x=pixels, y=output),
+    inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
 )
 
 # Training hyperparameters
 optimizer = optax.adamw(0.001, weight_decay=0.001)
 train_config = {
     "num_epochs": 27,       # Number of training epochs
-    "infer_steps": 20,      # Inference steps
-    "eta_infer": 0.05,      # Inference learning rate
 }
 batch_size = 200
 

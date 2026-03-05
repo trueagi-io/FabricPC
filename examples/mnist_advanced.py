@@ -31,6 +31,7 @@ from fabricpc.graph import initialize_params, FeedforwardStateInit
 from fabricpc.core.activations import IdentityActivation, SigmoidActivation
 from fabricpc.core.energy import GaussianEnergy
 from fabricpc.core.initializers import NormalInitializer
+from fabricpc.core.inference import InferenceSGD
 import optax
 from fabricpc.training import train_step, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
@@ -87,14 +88,12 @@ structure = graph(
     ],
     task_map=TaskMap(x=pixels, y=class_node),
     graph_state_initializer=FeedforwardStateInit(),
+    inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
 )
 
 # More sophisticated training configuration
 optimizer = optax.adamw(0.001, weight_decay=0.001)
-train_config = {
-    "infer_steps": 20,  # More inference steps for deeper network
-    "eta_infer": 0.05,  # Inference learning rate
-}
+train_config = {}
 batch_size = 200
 num_epochs = 10
 
@@ -144,20 +143,15 @@ print(f"\n[Training Configuration]")
 print(f"  Optimizer: adamw")
 print(f"  Learning rate: 0.001")
 print(f"  Weight decay: 0.001")
-print(f"  Inference steps: {train_config['infer_steps']}")
-print(f"  Inference eta: {train_config['eta_infer']}")
-
-infer_steps = train_config["infer_steps"]
-eta_infer = train_config["eta_infer"]
+print(f"  Inference steps: {structure.config['inference'].config['infer_steps']}")
+print(f"  Inference eta: {structure.config['inference'].config['eta_infer']}")
 
 opt_state = optimizer.init(params)
 
 # JIT compile training step
 print(f"\n[Compiling JIT functions...]")
 jit_train_step = jax.jit(
-    lambda p, o, b, k: train_step(
-        p, o, b, structure, optimizer, k, infer_steps, eta_infer
-    )
+    lambda p, o, b, k: train_step(p, o, b, structure, optimizer, k)
 )
 
 # Training loop with detailed monitoring
