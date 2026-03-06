@@ -62,8 +62,8 @@ This is a research-first project.
 - APIs may change frequently until v1.0 release.
 - Any breaking changes are documented in the changelog.
 
-## License:
-Private until officially released. Please do not distribute.
+## License
+This project is licensed under the [MIT License](LICENSE).
 
 ## Building a model
 A model consists of structure and parameters.
