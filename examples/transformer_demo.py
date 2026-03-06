@@ -42,13 +42,22 @@ from fabricpc.core.activations import (
     GeluActivation,
 )
 from fabricpc.core.energy import CrossEntropyEnergy
-from fabricpc.core.initializers import NormalInitializer, KaimingInitializer
-from fabricpc.core.inference import InferenceSGD
+from fabricpc.core.initializers import (
+    NormalInitializer,
+    KaimingInitializer,
+    XavierInitializer,
+)
+from fabricpc.core.inference import InferenceSGDNormClip
 import optax
 from fabricpc.training.train_autoregressive import (
     train_step_autoregressive,
     generate_autoregressive,
     evaluate_autoregressive,
+    create_causal_mask,
+)
+from fabricpc.graph import initialize_graph_state
+from fabricpc.utils.dashboarding.inference_tracking import (
+    run_inference_with_full_history,
 )
 from fabricpc.training.train_backprop import (
     train_step_backprop_autoregressive,
@@ -229,7 +238,7 @@ def create_transformer_model(
     embed = Linear(
         shape=(seq_len, embed_dim),
         activation=IdentityActivation(),
-        weight_init=KaimingInitializer(mode="fan_out"),
+        weight_init=NormalInitializer(std=1.0 / jnp.sqrt(vocab_size)),
         name="embed",
     )
     mask_node = IdentityNode(shape=(1, seq_len, seq_len), name="mask")
@@ -274,13 +283,13 @@ def create_transformer_model(
     for i in range(num_blocks):
         edges.append(Edge(source=prev_node, target=xmfr_blocks[i].slot("in")))
         edges.append(Edge(source=mask_node, target=xmfr_blocks[i].slot("mask")))
-        # edges.append(Edge(source=xmfr_blocks[i], target=summing_nodes[i].slot("in")))
 
+        # edges.append(Edge(source=xmfr_blocks[i], target=summing_nodes[i].slot("in")))
         # # Add a redundant skip connection to assist the inference phase in convergence
         # for j in range(i, num_blocks):
         #     edges.append(Edge(source=prev_node, target=summing_nodes[j].slot("in")))
-
         # prev_node = summing_nodes[i]
+
         prev_node = xmfr_blocks[i]
 
     # Output projection layer
@@ -288,7 +297,7 @@ def create_transformer_model(
         shape=(seq_len, vocab_size),
         activation=SoftmaxActivation(),
         energy=CrossEntropyEnergy(),
-        weight_init=NormalInitializer(mean=0.0, std=0.02),
+        weight_init=NormalInitializer(std=1.0 / jnp.sqrt(embed_dim)),
         name="output",
     )
     nodes.append(output_node)
@@ -299,7 +308,9 @@ def create_transformer_model(
         edges=edges,
         task_map=TaskMap(x=input_node, y=output_node, causal_mask=mask_node),
         graph_state_initializer=FeedforwardStateInit(),
-        inference=InferenceSGD(eta_infer=eta_infer, infer_steps=infer_steps),
+        inference=InferenceSGDNormClip(
+            eta_infer=eta_infer, infer_steps=infer_steps, max_norm=0.5
+        ),
     )
     params = initialize_params(structure, rng_key)
     return structure, params
@@ -318,8 +329,6 @@ def generate_text(
     max_new_tokens: int = 100,
     rng_key: jax.Array = None,
     temperature: float = 0.8,
-    infer_steps: int = 30,
-    eta_infer: float = 0.01,
     top_k: int = None,
     top_p: float = None,
 ) -> List[str]:
@@ -337,8 +346,6 @@ def generate_text(
         max_new_tokens: Number of new tokens to generate per prompt
         rng_key: JAX random key
         temperature: Sampling temperature (higher = more random)
-        infer_steps: Number of inference steps
-        eta_infer: Inference learning rate
         top_k: If set, only sample from top-k tokens
         top_p: If set, use nucleus sampling with this probability threshold
 
@@ -374,8 +381,6 @@ def generate_text(
         max_new_tokens=max_new_tokens,
         rng_key=rng_key,
         temperature=temperature,
-        infer_steps=infer_steps,
-        eta_infer=eta_infer,
         top_k=top_k,
         top_p=top_p,
     )
@@ -462,8 +467,8 @@ def main():
     ROPE_THETA = 500.0    # RoPE frequency
     BATCH_SIZE = 128     # Batch size
     NUM_EPOCHS = 1.0      # Training epochs
-    INFER_STEPS = 10    # Inference iterations per step
-    ETA_INFER = 0.01    # Inference learning rate
+    INFER_STEPS = 11    # Inference iterations per step
+    ETA_INFER = 0.02    # Inference learning rate
     LR = 1e-3           # Weight learning rate
 
     # fmt: on
@@ -532,10 +537,10 @@ def main():
             track_batch_energy=True,
             track_batch_energy_per_node=False,
             track_weight_distributions=True,
-            track_latent_distributions=True,
-            track_activation_distributions=True,
-            weight_distribution_every_n_epochs=1,
-            latent_distribution_every_n_batches=50,
+            track_state_distributions=True,
+            weight_tracking_every_n_batches=50,
+            state_tracking_every_n_batches=50,
+            state_tracking_every_n_infer_steps=5,
         )
         tracker = AimExperimentTracker(config=tracking_config)
         tracker.log_hyperparams(
@@ -566,7 +571,7 @@ def main():
     # Training config for autoregressive training
     optimizer = optax.chain(
         optax.clip_by_global_norm(1.0),
-        optax.adamw(LR, weight_decay=0.001),
+        optax.adamw(LR, weight_decay=0.1),
     )
     train_config = {
         "num_epochs": NUM_EPOCHS,
@@ -725,22 +730,53 @@ def main():
                 # --- Aim per-batch tracking ---
                 if tracker is not None:
                     tracker.track_batch_energy(loss_val, epoch=epoch, batch=batch_idx)
-                    # Latent distributions (PC only — BP doesn't return GraphState)
-                    if final_state is not None:
-                        tracker.track_latent_distributions(
-                            final_state,
-                            epoch=epoch,
-                            batch=batch_idx,
-                            nodes=TRACKED_NODES,
+                    tracker.track_weight_distributions(
+                        params,
+                        structure,
+                        epoch=epoch,
+                        batch=batch_idx,
+                        nodes=TRACKED_NODES,
+                    )
+
+                    # State tracking — per inference step (PC only)
+                    should_track_state = (
+                        final_state is not None
+                        and batch_idx % tracker.config.state_tracking_every_n_batches
+                        == 0
+                    )
+                    if should_track_state:
+                        track_clamps = {}
+                        for task_name, task_value in batch.items():
+                            if task_name in structure.task_map:
+                                track_clamps[structure.task_map[task_name]] = task_value
+                        if use_causal_mask:
+                            seq_len = batch["x"].shape[1]
+                            cm = create_causal_mask(seq_len)[None, None, :, :]
+                            cm = jnp.broadcast_to(
+                                cm, (batch["x"].shape[0], 1, seq_len, seq_len)
+                            )
+                            track_clamps[structure.task_map["causal_mask"]] = cm
+
+                        track_init_state = initialize_graph_state(
+                            structure,
+                            batch["x"].shape[0],
+                            batch_keys[batch_idx],
+                            clamps=track_clamps,
+                            params=params,
                         )
+                        _, state_history = run_inference_with_full_history(
+                            params, track_init_state, track_clamps, structure
+                        )
+                        for infer_step_idx, step_state in enumerate(state_history):
+                            tracker.track_state(
+                                step_state,
+                                epoch=epoch,
+                                batch=batch_idx,
+                                infer_step=infer_step_idx,
+                                nodes=TRACKED_NODES,
+                            )
 
             energy_history.append(batch_energies)
-
-            # --- Aim per-epoch tracking ---
-            if tracker is not None:
-                tracker.track_weight_distributions(
-                    params, structure, epoch=epoch, nodes=TRACKED_NODES
-                )
 
             # Eval callback
             eval_results.append(
@@ -783,8 +819,6 @@ def main():
         max_new_tokens=20,
         rng_key=gen_key,
         temperature=0.8,
-        infer_steps=0,  # No inference steps needed for generation
-        eta_infer=ETA_INFER,
     )
 
     for prompt, generated in zip(prompts, generated_texts):
@@ -799,9 +833,12 @@ def main():
         print("\n[Aim Tracking Complete]")
         print("  Run 'aim up' to view the dashboard")
         print(f"  Tracked nodes: {TRACKED_NODES}")
-        print(f"  Weight distributions: per epoch (all weight keys per node)")
         print(
-            f"  Latent distributions: every {tracker.config.latent_distribution_every_n_batches} batches"
+            f"  Weight distributions: every {tracking_config.weight_tracking_every_n_batches} batches"
+        )
+        print(
+            f"  State tracking: every {tracking_config.state_tracking_every_n_batches} batches, "
+            f"every {tracking_config.state_tracking_every_n_infer_steps} infer steps"
         )
 
     # Summary

@@ -11,7 +11,7 @@ import jax.numpy as jnp
 from fabricpc.nodes.base import NodeBase, NodeParams, SlotSpec
 from fabricpc.core.activations import IdentityActivation, GeluActivation
 from fabricpc.core.energy import GaussianEnergy
-from fabricpc.core.initializers import NormalInitializer, XavierInitializer, initialize
+from fabricpc.core.initializers import NormalInitializer, KaimingInitializer, initialize
 from fabricpc.core.types import NodeState, NodeInfo
 from typing import Dict, Optional, Tuple, Any, TYPE_CHECKING
 
@@ -147,7 +147,7 @@ class TransformerBlock(NodeBase):
         pre_norm: bool = True,
         use_rope: bool = True,
         rope_theta: float = 10000.0,
-        weight_init: Optional[InitializerBase] = XavierInitializer(),
+        weight_init: Optional[InitializerBase] = KaimingInitializer(),
         latent_init: Optional[InitializerBase] = NormalInitializer(),
     ):
         super().__init__(
@@ -189,21 +189,54 @@ class TransformerBlock(NodeBase):
 
         assert embed_dim % num_heads == 0, "embed_dim must be divisible by num_heads"
 
-        if weight_init is None:
-            weight_init = XavierInitializer()
-
         keys = jax.random.split(key, 8)
 
+        #
+        """
+        Weight      | Init std                    | Rationale
+        ------------|-----------------------------|---------------------------------
+        W_q         | 1/√d_model                  | Unit variance Q after projection
+        W_k         | 1/√d_model                  | Unit variance K after projection  
+        W_v         | 1/√d_model                  | Unit variance V after projection
+        W_o         | 1/(√d_model · √(2N))        | Residual stream variance control
+        W_ff1       | √(2/d_model)  [He]          | Compensate for ReLU/GELU zeroing
+        W_ff2       | 1/(√d_ff · √(2N))           | Residual stream variance control
+        ln*_gamma   | 1.0 (ones)                  | Identity at init
+        ln*_beta    | 0.0 (zeros)                 | No shift at init
+        all biases  | 0.0 (zeros)                 | No variance contribution at init
+        """
+
+        n_blocks = 1  # TODO - make this dynamic based on config
         return NodeParams(
             weights={
                 # Attention weights
-                "W_q": initialize(keys[0], (embed_dim, embed_dim), weight_init),
-                "W_k": initialize(keys[1], (embed_dim, embed_dim), weight_init),
-                "W_v": initialize(keys[2], (embed_dim, embed_dim), weight_init),
-                "W_o": initialize(keys[3], (embed_dim, embed_dim), weight_init),
+                "W_q": initialize(
+                    keys[0],
+                    (embed_dim, embed_dim),
+                    NormalInitializer(std=1.0 / jnp.sqrt(embed_dim)),
+                ),
+                "W_k": initialize(
+                    keys[1],
+                    (embed_dim, embed_dim),
+                    NormalInitializer(std=1.0 / jnp.sqrt(embed_dim)),
+                ),
+                "W_v": initialize(
+                    keys[2],
+                    (embed_dim, embed_dim),
+                    NormalInitializer(std=1.0 / jnp.sqrt(embed_dim)),
+                ),
+                "W_o": initialize(
+                    keys[3],
+                    (embed_dim, embed_dim),
+                    NormalInitializer(std=1.0 / jnp.sqrt(embed_dim * 2 * n_blocks)),
+                ),
                 # FFN weights
-                "W_ff1": initialize(keys[4], (embed_dim, ff_dim), weight_init),
-                "W_ff2": initialize(keys[5], (ff_dim, embed_dim), weight_init),
+                "W_ff1": initialize(keys[4], (embed_dim, ff_dim), KaimingInitializer()),
+                "W_ff2": initialize(
+                    keys[5],
+                    (ff_dim, embed_dim),
+                    NormalInitializer(std=1.0 / jnp.sqrt(ff_dim * 2 * n_blocks)),
+                ),
                 # LayerNorm parameters
                 "ln1_gamma": jnp.ones((1, 1, embed_dim)),
                 "ln2_gamma": jnp.ones((1, 1, embed_dim)),

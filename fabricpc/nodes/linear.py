@@ -147,12 +147,11 @@ class Linear(FlattenInputMixin, NodeBase):
                 rand_key_w[edge_key], weight_shape, weight_init
             )
 
-        # TODO - create bias vector for last dimension only and broadcast to (1,..., 1, out_features)
         # Initialize bias (usually zeros)
-        # Bias shape is (1,) + node_shape for proper broadcasting
+        # Bias shape for proper broadcasting, prepending batch dimension: (1, ..., 1, out_features)
         use_bias = config.get("use_bias", True)
         if use_bias:
-            bias_shape = (1,) + node_shape
+            bias_shape = (1,) * len(node_shape) + (node_shape[-1],)
             b = jnp.zeros(bias_shape)
 
         return NodeParams(weights=weights_dict, biases={"b": b} if use_bias else {})

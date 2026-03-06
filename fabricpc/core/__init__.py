@@ -43,6 +43,7 @@ from fabricpc.core.energy import (
 from fabricpc.core.inference import (
     InferenceBase,
     InferenceSGD,
+    InferenceSGDNormClip,
     gather_inputs,
 )
 
@@ -92,6 +93,7 @@ __all__ = [
     # Inference
     "InferenceBase",
     "InferenceSGD",
+    "InferenceSGDNormClip",
     "gather_inputs",
     # Initializers
     "InitializerBase",

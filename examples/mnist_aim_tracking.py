@@ -177,15 +177,14 @@ if TRACKING_ENABLED:
         track_epoch_energy=True,
         track_epoch_accuracy=True,
         track_weight_distributions=True,
-        track_latent_distributions=True,
-        track_preactivation_distributions=True,
-        track_activation_distributions=True,
+        track_state_distributions=True,
         # Inference dynamics
         track_inference_dynamics=True,
         inference_nodes_to_track=["h1", "h2", "h3", "class"],
         # Frequency controls
-        weight_distribution_every_n_epochs=1,
-        latent_distribution_every_n_batches=50,
+        weight_tracking_every_n_batches=50,
+        state_tracking_every_n_batches=50,
+        state_tracking_every_n_infer_steps=5,
     )
 
     tracker = AimExperimentTracker(config=tracking_config)
@@ -279,10 +278,11 @@ for epoch in range(num_epochs):
                 final_state, structure, epoch=epoch, batch=batch_idx
             )
 
-            # Latent distributions (at configured frequency)
-            tracker.track_latent_distributions(
-                final_state, epoch=epoch, batch=batch_idx
-            )
+            # State stats/distributions (at configured frequency)
+            if batch_idx % tracker.config.state_tracking_every_n_batches == 0:
+                tracker.track_state(
+                    final_state, epoch=epoch, batch=batch_idx, infer_step=0
+                )
 
             # Inference dynamics (track convergence every 100 batches)
             if batch_idx % 100 == 0:
@@ -334,7 +334,7 @@ for epoch in range(num_epochs):
 
     # Track weight distributions at end of epoch
     if tracker is not None:
-        tracker.track_weight_distributions(params, structure, epoch=epoch)
+        tracker.track_weight_distributions(params, structure, epoch=epoch, batch=0)
 
     # Evaluate on test set
     epoch_eval_key, eval_key = jax.random.split(eval_key)
@@ -393,7 +393,7 @@ if tracker is not None:
     print("  Tracked metrics:")
     print("    - Batch-level: energy, per-node energy")
     print("    - Epoch-level: energy, accuracy, weight distributions")
-    print("    - Distributions: z_latent, z_mu, pre_activation per node")
+    print("    - State: z_latent, z_mu, energy (stats + distributions) per node")
     print("    - Inference dynamics: energy convergence per step")
 
 print("\n" + "=" * 70)

@@ -1,10 +1,17 @@
-# Refactor: Extensible Inference Abstraction
+# Refactor: Extensible Inference Abstraction (Completed 3/5/26)
 
 ## Goal
 
 Encapsulate `inference.py:run_inference()` and `inference_step()` into an extensible class hierarchy. The **latent update rule** (Phase 3 of inference) is the primary extension point. Users can swap inference algorithms (SGD, Adam, natural gradient, etc.) via:
 
-Implement gradient norm clipping in InferenceSGD latent_update().
+Implement gradient norm clipping in a new inference class InferenceSGDNormCLip:compute_new_latent(). Do this for each node's latent gradient before applying the update. Add a small epsilon or use safe division because grads can be zero.
+
+```python
+# This is the manual equivalent of what clip_by_global_norm does:
+grads_flat, _ = jax.tree_util.tree_flatten(grads)
+global_l2 = jnp.sqrt(sum([jnp.vdot(p, p) for p in grads_flat]))
+g_factor = jnp.minimum(1.0, max_norm / global_l2)
+grads = jax.tree_util.tree_map(lambda g: g * g_factor, grads)
 
 ```python
 structure = graph(

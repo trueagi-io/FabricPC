@@ -63,7 +63,7 @@ def create_epoch_callback(
         rng_key: jax.Array,
     ) -> Optional[dict]:
         # Track weight distributions
-        tracker.track_weight_distributions(params, structure, epoch=epoch_idx)
+        tracker.track_weight_distributions(params, structure, epoch=epoch_idx, batch=0)
 
         # Optionally run evaluation
         eval_metrics = None
@@ -176,10 +176,11 @@ def create_detailed_iter_callback(
             final_state, structure, epoch=epoch_idx, batch=batch_idx
         )
 
-        # Track latent distributions (if configured and at right frequency)
-        tracker.track_latent_distributions(
-            final_state, epoch=epoch_idx, batch=batch_idx
-        )
+        # Track state stats/distributions (if at right batch + infer_step frequency)
+        if batch_idx % tracker.config.state_tracking_every_n_batches == 0:
+            tracker.track_state(
+                final_state, epoch=epoch_idx, batch=batch_idx, infer_step=0
+            )
 
         return normalized_energy
 

@@ -267,3 +267,43 @@ class InferenceSGD(InferenceBase):
 
         new_latent = node_state.z_latent - eta_infer * node_state.latent_grad
         return new_latent
+
+
+class InferenceSGDNormClip(InferenceBase):
+    """
+    SGD inference with per-node gradient norm clipping: z -= eta * clip(grad).
+
+    Clips the L2 norm of each node's latent gradient independently per sample.
+    If ||grad|| > max_norm, scales grad down to max_norm.
+    Uses safe division with epsilon to handle zero gradients.
+
+    Args:
+        eta_infer: Inference learning rate (default: 0.1)
+        infer_steps: Number of inference iterations (default: 20)
+        max_norm: Maximum gradient norm per node (default: 1.0)
+        eps: Small constant for numerical stability (default: 1e-8)
+    """
+
+    def __init__(self, eta_infer=0.1, infer_steps=20, max_norm=1.0, eps=1e-8):
+        super().__init__(
+            eta_infer=eta_infer,
+            infer_steps=infer_steps,
+            max_norm=max_norm,
+            eps=eps,
+        )
+
+    @staticmethod
+    def compute_new_latent(node_name, node_state, config):
+        eta_infer = config["eta_infer"]
+        max_norm = config["max_norm"]
+        eps = config["eps"]
+
+        grad = node_state.latent_grad
+        # Per-sample L2 norm (sum over all non-batch dims)
+        grad_norm = jnp.sqrt(
+            jnp.sum(grad.conj() * grad, axis=tuple(range(1, grad.ndim)), keepdims=True)
+        )
+        clip_factor = jnp.minimum(1.0, max_norm / (grad_norm + eps))
+        clipped_grad = grad * clip_factor
+
+        return node_state.z_latent - eta_infer * clipped_grad
