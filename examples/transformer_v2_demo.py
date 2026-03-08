@@ -1,5 +1,22 @@
+"""
+FabricPC Transformer Execution Script
+
+This script trains the decomposed PC Transformer model on the Tiny
+Shakespeare dataset using JAX's multi-GPU capabilities (`pmap`),
+evaluates its performance, and generates sample text using temperature
+sampling to prevent repetitive loops.
+
+USAGE:
+Run this script from the root of the project directory. You must set
+the PYTHONPATH so Python can locate the `fabricpc` package.
+
+    $ PYTHONPATH=. python examples/transformer_v2_demo.py
+
+"""
+
 import os
 import jax
+import jax.numpy as jnp
 import torch
 from torch.utils.data import DataLoader, Dataset
 from fabricpc.graph import create_pc_graph
@@ -60,7 +77,13 @@ class TextDataset(Dataset):
 # INITIALIZE DATA
 # ----------------------------------------------------------------------
 seq_len = 32
-batch_size = 32
+
+# Scale batch size by device count
+n_devices = jax.device_count()
+base_batch_size = 32
+batch_size = base_batch_size * n_devices
+print(f"Running on {n_devices} device(s). Total batch size: {batch_size}")
+
 data, vocab_size, char_to_ix, ix_to_char = load_data()
 train_data, val_data, test_data = split_data(data)
 
@@ -68,9 +91,11 @@ train_dataset = TextDataset(train_data, seq_len, vocab_size)
 val_dataset = TextDataset(val_data, seq_len, vocab_size)
 test_dataset = TextDataset(test_data, seq_len, vocab_size)
 
-train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
-test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True)
+train_loader = DataLoader(
+    train_dataset, batch_size=batch_size, shuffle=True, drop_last=True
+)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
 # ----------------------------------------------------------------------
 # MODEL ARCHITECTURE
@@ -82,7 +107,6 @@ config = create_deep_transformer(
     mlp_dim=128,
     seq_len=seq_len,
     vocab_size=vocab_size,
-    activation="gelu",
     weight_init={"type": "normal", "std": 0.02},
 )
 
@@ -108,15 +132,18 @@ metrics = evaluate_pcn_multi_gpu(
     trained_params, structure, test_loader, train_config, eval_key
 )
 
-print(f"Test Accuracy: {metrics['accuracy'] * 100:.2f}%")
-if "loss" in metrics:
-    print(f"Test Loss: {metrics['loss']:.4f}")
+print(f"Test Accuracy:   {metrics['accuracy'] * 100:.2f}%")
+print(f"Test CE Loss:  {metrics['cross_entropy']:.4f}")
+print(f"Test Perplexity: {metrics['perplexity']:.2f}")
+print(f"Test Energy:     {metrics['energy']:.4f}")
 
 
 # ----------------------------------------------------------------------
 # TEXT GENERATION
 # ----------------------------------------------------------------------
-def generate(trained_params, structure, start_text="ROMEO: ", length=50):
+def generate(
+    trained_params, structure, start_text="ROMEO: ", length=50, temperature=0.8
+):
     seed_indices = [char_to_ix.get(c, 0) for c in start_text]
     if len(seed_indices) < seq_len:
         current_indices = [0] * (seq_len - len(seed_indices)) + seed_indices
@@ -126,7 +153,7 @@ def generate(trained_params, structure, start_text="ROMEO: ", length=50):
     result_text = start_text
     gen_key = jax.random.PRNGKey(99)
 
-    print(f"--- Generating (Greedy) ---")
+    print(f"--- Generating ---")
     for _ in range(length):
         input_batch = jnp.array([current_indices], dtype=jnp.float32)
         inputs = {"input_ids": input_batch}
@@ -150,14 +177,16 @@ def generate(trained_params, structure, start_text="ROMEO: ", length=50):
         logits_node_state = final_state.nodes["logits"]
         last_step_logits = logits_node_state.z_latent[0, -1, :]
 
-        # Greedy Argmax
-        next_idx = int(jnp.argmax(last_step_logits))
-        next_char = ix_to_char[next_idx]
+        # Temperature Sampling
+        gen_key, sample_key = jax.random.split(gen_key)
+        scaled_logits = last_step_logits / temperature
+        next_idx = int(jax.random.categorical(sample_key, scaled_logits))
 
+        next_char = ix_to_char[next_idx]
         result_text += next_char
         current_indices = current_indices[1:] + [next_idx]
 
     print(result_text)
 
 
-generate(trained_params, structure, start_text="ROMEO: ", length=100)
+generate(trained_params, structure, start_text="ROMEO: ", length=100, temperature=0.8)
