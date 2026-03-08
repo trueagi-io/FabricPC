@@ -23,6 +23,7 @@ from fabricpc.nodes.transformer_v2 import (
     MhaResidualNode,
     LnMlp1Node,
     Mlp2ResidualNode,
+    VocabProjectionNode,
 )
 
 # Convenience aliases matching the target API
@@ -45,4 +46,5 @@ __all__ = [
     "MhaResidualNode",
     "LnMlp1Node",
     "Mlp2ResidualNode",
+    "VocabProjectionNode",
 ]

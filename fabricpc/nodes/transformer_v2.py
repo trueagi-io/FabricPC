@@ -373,3 +373,48 @@ class Mlp2ResidualNode(NodeBase):
         )
         state = Mlp2ResidualNode.energy_functional(state, node_info)
         return jnp.sum(state.energy), state
+
+
+# ==============================================================================
+# VOCAB PROJECTION NODE
+# ==============================================================================
+
+
+@register_node("vocab_projection")
+class VocabProjectionNode(NodeBase):
+    CONFIG_SCHEMA = {
+        "vocab_size": {"type": int, "required": True},
+        "embed_dim": {"type": int, "required": True},
+        "weight_init": {"type": dict, "default": {"type": "xavier"}},
+    }
+    DEFAULT_ENERGY_CONFIG = {"type": "kl_divergence"}
+
+    @staticmethod
+    def get_slots():
+        return {"in": SlotSpec("in", False)}
+
+    @staticmethod
+    def initialize_params(key, node_shape, input_shapes, config):
+        vocab, dim = config["vocab_size"], config["embed_dim"]
+
+        # Use config provided weight_init
+        weight_init = config.get("weight_init", {"type": "xavier"})
+
+        weights = {"W_out": initialize(key, (dim, vocab), weight_init)}
+        biases = {"b_out": jnp.zeros((vocab,))}
+        return NodeParams(weights, biases)
+
+    @staticmethod
+    def forward(params, inputs, state, node_info):
+        x = inputs[list(inputs.keys())[0]]
+        logits = jnp.dot(x, params.weights["W_out"]) + params.biases["b_out"]
+
+        # Softmax (Prediction is probability distribution)
+        z_mu = nn.softmax(logits, axis=-1)
+
+        error = state.z_latent - z_mu
+        state = state._replace(
+            z_mu=z_mu, error=error, substructure={"gain_mod_error": error}
+        )
+        state = VocabProjectionNode.energy_functional(state, node_info)
+        return jnp.sum(state.energy), state
