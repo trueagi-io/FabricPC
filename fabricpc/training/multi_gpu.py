@@ -537,6 +537,13 @@ def evaluate_pcn_multi_gpu(
                 node_name = structure.task_map[task_name]
                 clamps[node_name] = task_value
 
+        state = initialize_graph_state(
+            structure,
+            batch_size_,
+            randgen_key,
+            clamps=clamps,
+            params=params_obj,
+        )
         final_state = run_inference(
             params_obj, state, clamps, structure, infer_steps, eta_infer
         )

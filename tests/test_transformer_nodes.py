@@ -1,5 +1,5 @@
 """
-Test suite for EmbeddingNode and TransformerBlockNode functionality in FabricPC.
+Test suite for EmbeddingNode and decomposed TransformerV2 node functionality in FabricPC.
 """
 
 import os
@@ -13,12 +13,24 @@ import jax.numpy as jnp
 import numpy as np
 
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
-from fabricpc.graph.graph_net import create_pc_graph, initialize_state
+from fabricpc.graph import initialize_params
+from fabricpc.graph.state_initializer import (
+    initialize_graph_state,
+    FeedforwardStateInit,
+)
 from fabricpc.core.inference import run_inference
 from fabricpc.training import train_step, create_optimizer
-from fabricpc.nodes import get_node_class
+from fabricpc.nodes import Linear
+from fabricpc.builder import Edge, TaskMap, graph
 
-from fabricpc.nodes.transformer_v2 import EmbeddingNode, create_deep_transformer
+from fabricpc.nodes.transformer_v2 import (
+    EmbeddingNode,
+    MhaResidualNode,
+    LnMlp1Node,
+    Mlp2ResidualNode,
+    VocabProjectionNode,
+    create_deep_transformer,
+)
 
 
 @pytest.fixture
@@ -29,44 +41,36 @@ def rng_key():
 class TestEmbeddingNode:
 
     @pytest.fixture
-    def embedding_config(self):
-        """Creates a simple graph: Input (Indices) -> Embedding -> Output (Linear)"""
+    def embedding_graph(self, rng_key):
+        """Creates a simple graph: Input (Linear) -> Embedding -> Output (Linear)"""
         vocab_size = 100
         embed_dim = 8
         seq_len = 5
 
-        return {
-            "node_list": [
-                # Input node holds the integer indices
-                {
-                    "name": "indices",
-                    "shape": (seq_len,),
-                    "type": "linear",
-                    "activation": {"type": "identity"},
-                },
-                {
-                    "name": "embed",
-                    "shape": (seq_len, embed_dim),
-                    "type": "embedding",
-                    "vocab_size": vocab_size,
-                    "embed_dim": embed_dim,
-                },
-                # Output node to give the embedding something to predict/connect to
-                {"name": "output", "shape": (10,), "type": "linear"},
-            ],
-            "edge_list": [
-                {"source_name": "indices", "target_name": "embed", "slot": "in"},
-                {"source_name": "embed", "target_name": "output", "slot": "in"},
-            ],
-            "task_map": {"x": "indices", "y": "output"},
-        }
+        input_node = Linear(shape=(seq_len,), name="indices")
+        embed_node = EmbeddingNode(
+            shape=(seq_len, embed_dim),
+            name="embed",
+            vocab_size=vocab_size,
+            embed_dim=embed_dim,
+        )
+        output_node = Linear(shape=(seq_len, 10), name="output")
 
-    def test_registration_and_creation(self, embedding_config, rng_key):
-        """Test that the node registers and initializes params correctly."""
-        node_cls = get_node_class("embedding")
-        assert node_cls is not None
+        structure = graph(
+            nodes=[input_node, embed_node, output_node],
+            edges=[
+                Edge(source=input_node, target=embed_node.slot("in")),
+                Edge(source=embed_node, target=output_node.slot("in")),
+            ],
+            task_map=TaskMap(x=input_node, y=output_node),
+        )
+        params = initialize_params(structure, rng_key)
+        return params, structure
 
-        params, structure = create_pc_graph(embedding_config, rng_key)
+    def test_registration_and_creation(self, embedding_graph):
+        """Test that the node initializes params correctly."""
+        params, structure = embedding_graph
+
         embed_params = params.nodes["embed"]
         assert "embeddings" in embed_params.weights
 
@@ -77,18 +81,18 @@ class TestEmbeddingNode:
         # Check biases
         assert len(embed_params.biases) == 0
 
-    def test_forward_lookup(self, embedding_config, rng_key):
+    def test_forward_lookup(self, embedding_graph, rng_key):
         """Test that z_mu correctly retrieves embeddings."""
-        params, structure = create_pc_graph(embedding_config, rng_key)
+        params, structure = embedding_graph
 
         batch_size = 3
         seq_len = 5
 
         input_indices = jax.random.randint(rng_key, (batch_size, seq_len), 0, 100)
-        dummy_y = jnp.zeros((batch_size, 10))
+        dummy_y = jnp.zeros((batch_size, seq_len, 10))
 
         clamps = {"indices": input_indices.astype(jnp.float32), "output": dummy_y}
-        state = initialize_state(
+        state = initialize_graph_state(
             structure, batch_size, rng_key, clamps=clamps, params=params
         )
         W = params.nodes["embed"].weights["embeddings"]
@@ -105,21 +109,21 @@ class TestEmbeddingNode:
         # Verify shape
         assert embed_state.z_mu.shape == (batch_size, seq_len, 8)
 
-    def test_gradient_blocking(self, embedding_config, rng_key):
+    def test_gradient_blocking(self, embedding_graph, rng_key):
         """
         Critical Test: Ensure forward_inference returns 0 gradients for inputs.
         Discrete inputs cannot receive gradients.
         """
-        params, structure = create_pc_graph(embedding_config, rng_key)
+        params, structure = embedding_graph
         batch_size = 2
 
         input_indices = jnp.ones((batch_size, 5))
         clamps = {"indices": input_indices}
 
-        state = initialize_state(
+        state = initialize_graph_state(
             structure, batch_size, rng_key, clamps=clamps, params=params
         )
-        node_info = structure.nodes["embed"]
+        node_info = structure.nodes["embed"].node_info
         node_state = state.nodes["embed"]
         node_params = params.nodes["embed"]
 
@@ -127,8 +131,7 @@ class TestEmbeddingNode:
         inputs = {"indices->embed:in": input_indices}
 
         # Call forward_inference directly
-        node_cls = get_node_class("embedding")
-        new_state, input_grads = node_cls.forward_inference(
+        new_state, input_grads = EmbeddingNode.forward_inference(
             node_params, inputs, node_state, node_info
         )
 
@@ -140,12 +143,12 @@ class TestEmbeddingNode:
         ), "Embedding node must return zero gradients for inputs"
         assert grad.shape == input_indices.shape
 
-    def test_learning_updates_embeddings(self, embedding_config, rng_key):
+    def test_learning_updates_embeddings(self, embedding_graph, rng_key):
         """
         Test that training actually updates the embedding matrix.
         PC Error (z_latent - z_mu) should drive updates to W[indices].
         """
-        params, structure = create_pc_graph(embedding_config, rng_key)
+        params, structure = embedding_graph
 
         optimizer = create_optimizer({"type": "sgd", "lr": 1.0})
         opt_state = optimizer.init(params)
@@ -157,7 +160,7 @@ class TestEmbeddingNode:
         # keeping the JAX loop types consistent.
         input_indices = jnp.full((batch_size, 5), idx, dtype=jnp.float32)
 
-        batch = {"x": input_indices, "y": jnp.zeros((batch_size, 10))}
+        batch = {"x": input_indices, "y": jnp.zeros((batch_size, 5, 10))}
 
         # Snapshot old weights
         old_embeddings = params.nodes["embed"].weights["embeddings"]
@@ -191,22 +194,23 @@ class TestEmbeddingNode:
             jnp.max(diff_unused) < 1e-6
         ), "Embedding weights for inactive index changed unexpectedly"
 
-    def test_forward_squeeze_logic(self, embedding_config, rng_key):
+    def test_forward_squeeze_logic(self, embedding_graph, rng_key):
         """Test the logic handling (batch, seq, 1) inputs."""
-        params, structure = create_pc_graph(embedding_config, rng_key)
-        node_cls = get_node_class("embedding")
+        params, structure = embedding_graph
 
         # Create input with extra dimension (batch, seq, 1)
         input_expanded = jnp.zeros((2, 5, 1))
         inputs = {"mock_edge": input_expanded}
 
         # State and Params
-        state = initialize_state(structure, 2, rng_key, params=params).nodes["embed"]
+        state = initialize_graph_state(structure, 2, rng_key, params=params).nodes[
+            "embed"
+        ]
         node_params = params.nodes["embed"]
-        node_info = structure.nodes["embed"]
+        node_info = structure.nodes["embed"].node_info
 
         # Should not crash and should squeeze internally
-        _, new_state = node_cls.forward(node_params, inputs, state, node_info)
+        _, new_state = EmbeddingNode.forward(node_params, inputs, state, node_info)
 
         assert new_state.z_mu.shape == (2, 5, 8)
 
@@ -214,78 +218,97 @@ class TestEmbeddingNode:
 class TestTransformerBlock:
 
     @pytest.fixture
-    def single_block_config(self):
-        """Standard config for testing a single block node."""
-        return {
-            "node_list": [
-                {"name": "input", "shape": (10, 32), "type": "linear"},
-                {
-                    "name": "block",
-                    "shape": (10, 32),
-                    "type": "transformer_block",
-                    "embed_dim": 32,
-                    "num_heads": 4,
-                    "mlp_dim": 64,
-                    "use_rope": True,
-                },
-                {"name": "output", "shape": (10, 32), "type": "linear"},
-            ],
-            "edge_list": [
-                {"source_name": "input", "target_name": "block", "slot": "in"},
-                {"source_name": "block", "target_name": "output", "slot": "in"},
-            ],
-            "task_map": {"x": "input", "y": "output"},
-        }
+    def single_block_graph(self, rng_key):
+        """Build a single MHA+MLP block: input -> mha -> mlp1 -> mlp2 -> output."""
+        seq_len = 10
+        embed_dim = 32
+        ff_dim = 64
 
-    def test_block_forward_shapes(self, single_block_config, rng_key):
+        input_node = Linear(shape=(seq_len, embed_dim), name="input")
+        mha = MhaResidualNode(
+            shape=(seq_len, embed_dim),
+            name="mha",
+            embed_dim=embed_dim,
+            num_heads=4,
+            use_rope=True,
+        )
+        mlp1 = LnMlp1Node(
+            shape=(seq_len, ff_dim),
+            name="mlp1",
+            embed_dim=embed_dim,
+            ff_dim=ff_dim,
+        )
+        mlp2 = Mlp2ResidualNode(
+            shape=(seq_len, embed_dim),
+            name="mlp2",
+            embed_dim=embed_dim,
+            ff_dim=ff_dim,
+        )
+        output_node = Linear(shape=(seq_len, embed_dim), name="output")
+
+        structure = graph(
+            nodes=[input_node, mha, mlp1, mlp2, output_node],
+            edges=[
+                Edge(source=input_node, target=mha.slot("in")),
+                Edge(source=mha, target=mlp1.slot("in")),
+                Edge(source=mlp1, target=mlp2.slot("in")),
+                Edge(source=mha, target=mlp2.slot("residual")),
+                Edge(source=mlp2, target=output_node.slot("in")),
+            ],
+            task_map=TaskMap(x=input_node, y=output_node),
+        )
+        params = initialize_params(structure, rng_key)
+        return params, structure
+
+    def test_block_forward_shapes(self, single_block_graph, rng_key):
         """Verify output shapes are preserved through Attention and MLP."""
-        params, structure = create_pc_graph(single_block_config, rng_key)
+        params, structure = single_block_graph
         batch_size = 2
 
         # Random inputs
         x = jax.random.normal(rng_key, (batch_size, 10, 32))
         clamps = {"input": x, "output": jnp.zeros_like(x)}
 
-        state = initialize_state(
+        state = initialize_graph_state(
             structure, batch_size, rng_key, clamps=clamps, params=params
         )
         final_state = run_inference(params, state, clamps, structure, infer_steps=1)
 
-        block_latent = final_state.nodes["block"].z_latent
+        block_latent = final_state.nodes["mlp2"].z_latent
         assert block_latent.shape == (batch_size, 10, 32)
         assert jnp.abs(block_latent).mean() > 0.0
 
-    def test_causal_masking(self, single_block_config, rng_key):
+    def test_causal_masking(self, single_block_graph, rng_key):
         """Verify future tokens do not affect past tokens."""
-        params, structure = create_pc_graph(single_block_config, rng_key)
+        params, structure = single_block_graph
         batch_size = 1
 
         x_base = jax.random.normal(rng_key, (batch_size, 10, 32))
         clamps_base = {"input": x_base, "output": jnp.zeros_like(x_base)}
 
-        state_1 = initialize_state(
+        state_1 = initialize_graph_state(
             structure,
             batch_size,
             rng_key,
             clamps=clamps_base,
-            state_init_config={"type": "feedforward"},
+            state_init=FeedforwardStateInit(),
             params=params,
         )
-        out_1 = state_1.nodes["block"].z_mu
+        out_1 = state_1.nodes["mha"].z_mu
 
         # Modified run: Change ONLY the last token
         x_mod = x_base.at[:, -1, :].add(5.0)
         clamps_mod = {"input": x_mod, "output": jnp.zeros_like(x_base)}
 
-        state_2 = initialize_state(
+        state_2 = initialize_graph_state(
             structure,
             batch_size,
             rng_key,
             clamps=clamps_mod,
-            state_init_config={"type": "feedforward"},
+            state_init=FeedforwardStateInit(),
             params=params,
         )
-        out_2 = state_2.nodes["block"].z_mu
+        out_2 = state_2.nodes["mha"].z_mu
 
         # Check First Token (Should be Identical - Masking Working)
         diff_first = jnp.abs(out_1[:, 0, :] - out_2[:, 0, :]).max()
@@ -297,9 +320,9 @@ class TestTransformerBlock:
             diff_last > 1e-4
         ), "Self-attention failed! Last token ignored input change."
 
-    def test_block_learning(self, single_block_config, rng_key):
+    def test_block_learning(self, single_block_graph, rng_key):
         """Verify gradients propagate and loss decreases (overfitting test)."""
-        params, structure = create_pc_graph(single_block_config, rng_key)
+        params, structure = single_block_graph
         optimizer = create_optimizer({"type": "adam", "lr": 0.01})
         opt_state = optimizer.init(params)
 
@@ -325,32 +348,33 @@ class TestTransformerBlock:
 
     def test_factory_structure(self, rng_key):
         """Verify create_deep_transformer generates correct graph topology."""
-        config = create_deep_transformer(
+        structure = create_deep_transformer(
             depth=3, embed_dim=16, num_heads=2, mlp_dim=32, seq_len=10, vocab_size=10
         )
 
-        # Expect:
-        # 1. Sensor (input_ids)
-        # 2. Embedding (embed)
-        # 3. Block 0
-        # 4. Block 1
-        # 5. Block 2
-        # 6. Output (logits)
-        assert len(config["node_list"]) == 6
+        # Decomposed architecture per layer: MhaResidualNode, LnMlp1Node, Mlp2ResidualNode
+        # Total nodes: input_ids + embed + 3*(mha + mlp1 + mlp2) + logits = 12
+        assert len(structure.nodes) == 12
 
-        # Expect 5 Edges connecting them linearly
-        assert len(config["edge_list"]) == 5
+        # Edges per layer: mha<-in, mlp1<-mha, mlp2<-mlp1:in, mlp2<-mha:residual = 4
+        # Plus: input_ids->embed, last_mlp2->logits = 2
+        # Total: 2 + 3*4 = 14
+        assert len(structure.edges) == 14
 
-        # Check Node Types
-        types = [n["type"] for n in config["node_list"]]
-        assert types == [
-            "linear",
-            "embedding",
-            "transformer_block",
-            "transformer_block",
-            "transformer_block",
-            "linear",
+        # Check node types in topological order
+        node_types = [
+            structure.nodes[n].node_info.node_type for n in structure.node_order
         ]
+        assert node_types[0] == "Linear"  # input_ids
+        assert node_types[1] == "EmbeddingNode"  # embed
+        assert node_types[-1] == "VocabProjectionNode"  # logits
+
+        # Each depth block should contain MhaResidualNode, LnMlp1Node, Mlp2ResidualNode
+        block_types = node_types[2:-1]  # exclude input, embed, logits
+        for i in range(3):
+            assert block_types[i * 3] == "MhaResidualNode"
+            assert block_types[i * 3 + 1] == "LnMlp1Node"
+            assert block_types[i * 3 + 2] == "Mlp2ResidualNode"
 
     def test_deep_network_inference(self, rng_key):
         """Integration test: Build deep network via factory and run data through it."""
@@ -358,7 +382,7 @@ class TestTransformerBlock:
         seq_len = 8
         embed_dim = 16
 
-        config = create_deep_transformer(
+        structure = create_deep_transformer(
             depth=2,
             embed_dim=embed_dim,
             num_heads=4,
@@ -366,7 +390,7 @@ class TestTransformerBlock:
             seq_len=seq_len,
             vocab_size=vocab_size,
         )
-        params, structure = create_pc_graph(config, rng_key)
+        params = initialize_params(structure, rng_key)
 
         batch_size = 2
         x_indices = jax.random.randint(
@@ -375,7 +399,7 @@ class TestTransformerBlock:
         y_dummy = jnp.zeros((batch_size, seq_len, vocab_size))
         clamps = {"input_ids": x_indices, "logits": y_dummy}
 
-        state = initialize_state(
+        state = initialize_graph_state(
             structure, batch_size, rng_key, clamps=clamps, params=params
         )
         final_state = run_inference(params, state, clamps, structure, infer_steps=2)

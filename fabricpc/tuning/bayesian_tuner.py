@@ -10,23 +10,28 @@ from typing import Callable, Any, Dict, Tuple, Optional, Union
 from fabricpc.training.train import train_pcn, evaluate_pcn
 from fabricpc.core.types import GraphParams, GraphStructure
 
+
 def set_seed(seed: int = 42):
     """
     Set random seed for reproducibility.
     """
     random.seed(seed)
     np.random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
+
 
 class BayesianTuner:
     """
     Bayesian Hyperparameter Tuner using Optuna for FabricPC models.
     """
+
     def __init__(
         self,
         train_loader: Any,
         val_loader: Any,
-        trial_model: Callable[[Dict[str, Any], jax.Array], Tuple[GraphParams, GraphStructure]],
+        trial_model: Callable[
+            [Dict[str, Any], jax.Array], Tuple[GraphParams, GraphStructure]
+        ],
         base_config: Dict[str, Any],
         metric: str = "combined_loss",
         study_name: str = "fabricpc_tuning",
@@ -48,28 +53,27 @@ class BayesianTuner:
             study_name=study_name,
             storage=storage,
             direction=direction,
-            load_if_exists=True
+            load_if_exists=True,
         )
 
-    def _suggest_from_config(self, trial: optuna.Trial, search_space: Dict[str, Any]) -> Dict[str, Any]:
+    def _suggest_from_config(
+        self, trial: optuna.Trial, search_space: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Generate suggestions based on a dictionary configuration."""
         params = {}
         for name, config in search_space.items():
             param_type = config.get("type")
             if param_type == "float":
                 params[name] = trial.suggest_float(
-                    name, 
-                    config["low"], 
-                    config["high"], 
-                    log=config.get("log", False)
+                    name, config["low"], config["high"], log=config.get("log", False)
                 )
             elif param_type == "int":
                 params[name] = trial.suggest_int(
-                    name, 
-                    config["low"], 
-                    config["high"], 
+                    name,
+                    config["low"],
+                    config["high"],
                     step=config.get("step", 1),
-                    log=config.get("log", False)
+                    log=config.get("log", False),
                 )
             elif param_type == "categorical":
                 params[name] = trial.suggest_categorical(name, config["choices"])
@@ -81,14 +85,14 @@ class BayesianTuner:
         self,
         n_trials: int,
         search_space: Union[Dict[str, Any], Callable[[optuna.Trial], Dict[str, Any]]],
-        callbacks: Optional[list] = None
+        callbacks: Optional[list] = None,
     ):
         """
         Run the tuning process.
 
         Args:
             n_trials: Number of trials to run.
-            search_space: Either a dictionary defining the search space OR a callable that takes a trial 
+            search_space: Either a dictionary defining the search space OR a callable that takes a trial
                           and returns sampled parameters.
             callbacks: List of Optuna callbacks.
         """
@@ -100,11 +104,17 @@ class BayesianTuner:
         self.study.optimize(
             lambda trial: self._objective(trial, search_fn),
             n_trials=n_trials,
-            callbacks=callbacks
+            callbacks=callbacks,
         )
         return self.study
 
-    def _log_trial_results(self, trial_number: int, duration: float, metrics: Dict[str, Any], config: Dict[str, Any]):
+    def _log_trial_results(
+        self,
+        trial_number: int,
+        duration: float,
+        metrics: Dict[str, Any],
+        config: Dict[str, Any],
+    ):
         """Log trial results in clean table format like the original tuner."""
         if not self.log_file:
             return
@@ -115,7 +125,7 @@ class BayesianTuner:
         ce_loss = metrics.get("cross_entropy", 0.0)
         energy = metrics.get("energy", float("inf"))
 
-        header_needed = (trial_number == 0)
+        header_needed = trial_number == 0
 
         os.makedirs(os.path.dirname(self.log_file) or ".", exist_ok=True)
         with open(self.log_file, "a") as f:
@@ -138,24 +148,27 @@ class BayesianTuner:
                 f"{config.get('infer_steps', 'N/A'):<5} | {config.get('eta_infer', 'N/A'):<6}\n"
             )
 
-
-    def _objective(self, trial: optuna.Trial, search_space_fn: Callable[[optuna.Trial], Dict[str, Any]]) -> float:
+    def _objective(
+        self,
+        trial: optuna.Trial,
+        search_space_fn: Callable[[optuna.Trial], Dict[str, Any]],
+    ) -> float:
         start_time = time.time()
-        
+
         # Sample hyperparameters
         sampled_params = search_space_fn(trial)
-        
+
         # Merge with base config
         config = self.base_config.copy()
         config.update(sampled_params)
-        
+
         # Set global seeds
         current_seed = 42 + trial.number
         set_seed(current_seed)
-        
+
         rng_key = jax.random.PRNGKey(current_seed)
         model_key, train_key = jax.random.split(rng_key)
-        
+
         # Build model components
         try:
             params, structure = self.trial_model(config, model_key)
@@ -166,16 +179,25 @@ class BayesianTuner:
         # Execute Training and Evaluation
         try:
             if self.trainer_fn:
-                result = self.trainer_fn(params, structure, self.train_loader, self.val_loader, config, train_key)
-                
+                result = self.trainer_fn(
+                    params,
+                    structure,
+                    self.train_loader,
+                    self.val_loader,
+                    config,
+                    train_key,
+                )
+
                 if isinstance(result, dict):
                     metrics = result
-                    val_score = metrics.get(self.metric, metrics.get("loss", float("inf")))
+                    val_score = metrics.get(
+                        self.metric, metrics.get("loss", float("inf"))
+                    )
                 else:
                     # Assume it returns the scalar score directly
                     val_score = float(result)
                     metrics = {self.metric: val_score}
-            
+
             else:
                 # Default training loop
                 trained_params, _, _ = train_pcn(
@@ -184,23 +206,23 @@ class BayesianTuner:
                     self.train_loader,
                     config,
                     train_key,
-                    verbose=False
+                    verbose=False,
                 )
-                
+
                 metrics = evaluate_pcn(
                     trained_params,
                     structure,
                     self.val_loader,
                     config,
-                    jax.random.PRNGKey(0)
+                    jax.random.PRNGKey(0),
                 )
-                
+
                 # Calculate combined score if needed
                 if self.metric == "combined_loss":
                     energy = metrics.get("energy", 0.0)
                     perplexity = metrics.get("perplexity", 0.0)
                     metrics["combined_loss"] = 0.5 * energy + 0.5 * perplexity
-                
+
                 if self.metric in metrics:
                     val_score = metrics[self.metric]
                 else:
@@ -211,10 +233,11 @@ class BayesianTuner:
         except Exception as e:
             print(f"Trial {trial.number} failed during training/eval: {e}")
             import traceback
+
             traceback.print_exc()
             return float("inf") if self.direction == "minimize" else float("-inf")
 
         duration = time.time() - start_time
         self._log_trial_results(trial.number, duration, metrics, config)
-        
+
         return val_score
