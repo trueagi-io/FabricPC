@@ -20,7 +20,9 @@ import os
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("JAX_PLATFORMS", "cuda")
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
-os.environ["XLA_FLAGS"] = "--xla_gpu_deterministic_ops=true"
+os.environ["XLA_FLAGS"] = (
+    "--xla_gpu_deterministic_ops=true --xla_gpu_enable_triton_gemm=false"
+)
 
 import jax
 import argparse
@@ -72,8 +74,8 @@ def parse_args():
 def create_lateral_model(rng_key):
     """Create PC model with lateral connections between hidden layers."""
     pixels           = IdentityNode(shape=(784,), name="pixels")
-    hidden1          = Linear(shape=(256,), activation=SigmoidActivation(), name="hidden1")
-    hidden1_lateral  = Linear(shape=(256,), activation=SigmoidActivation(), name="hidden1_lateral")
+    hidden1          = Linear(shape=(128,), activation=SigmoidActivation(), name="hidden1")
+    hidden1_lateral  = Linear(shape=(128,), activation=SigmoidActivation(), name="hidden1_lateral")
     hidden2_lateral  = Linear(shape=(64,),  activation=SigmoidActivation(), name="hidden2_lateral")
     hidden2          = Linear(shape=(64,),  activation=SigmoidActivation(), name="hidden2")
     output           = Linear(shape=(10,),  activation=SoftmaxActivation(), energy=CrossEntropyEnergy(), name="class")
@@ -90,7 +92,7 @@ def create_lateral_model(rng_key):
             Edge(source=hidden2_lateral, target=hidden2.slot("in")),
         ],
         task_map=TaskMap(x=pixels, y=output),
-        inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
+        inference=InferenceSGD(eta_infer=0.20, infer_steps=20),
     )
     params = initialize_params(structure, rng_key)
     return params, structure
@@ -111,7 +113,7 @@ def create_mlp_model(rng_key):
             Edge(source=hidden2, target=output.slot("in")),
         ],
         task_map=TaskMap(x=pixels, y=output),
-        inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
+        inference=InferenceSGD(eta_infer=0.20, infer_steps=20),
     )
     params = initialize_params(structure, rng_key)
     return params, structure
@@ -125,7 +127,7 @@ def main():
     print("Statistical Comparison: Lateral Connections vs Standard MLP")
     print("=" * 70)
     print(f"Dataset: MNIST")
-    print(f"Lateral: 784 -> [256 + 256_lat] -> [64 + 64_lat] -> 10  (6 nodes, 7 edges)")
+    print(f"Lateral: 784 -> [128 + 128_lat] -> [64 + 64_lat] -> 10  (6 nodes, 7 edges)")
     print(f"MLP:     784 -> 256 -> 64 -> 10                         (4 nodes, 3 edges)")
     print(f"Training: Predictive Coding (both arms)")
     print(f"Epochs per trial: {train_config['num_epochs']}")

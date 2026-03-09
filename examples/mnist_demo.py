@@ -12,12 +12,15 @@ Total code: ~60 lines. That's it!
 
 import os  # Set environment variables before importing JAX
 
+from fabricpc.core import InferenceSGDNormClip
+
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("JAX_PLATFORMS", "cuda")  # "cpu", "cuda" or "tpu"
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Suppress XLA warnings
 
 # Keep deterministic kernels and default to disabling Triton GEMM, which can
 # trigger CUDA runtime errors on some GPUs for small/irregular matmuls.
+# Triton tiling logic fails when it encounters certain fused operations where dimension bounds are not divisible by the tile size.
 _xla_flags = os.environ.get("XLA_FLAGS", "")
 if "--xla_gpu_deterministic_ops=true" not in _xla_flags:
     _xla_flags = (_xla_flags + " --xla_gpu_deterministic_ops=true").strip()

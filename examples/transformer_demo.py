@@ -261,22 +261,22 @@ def create_transformer_model(
                 name=f"transformer_{i}",
             )
         )
-        # # Scale to prevent explosion with multiple skips
-        # block_skip_nodes.append(
-        #     IdentityNode(
-        #         shape=(seq_len, embed_dim),
-        #         name=f"block_skip_{i}",
-        #         scale=(1.0 / num_blocks),
-        #     )
-        # )
-        # summing_nodes.append(
-        #     IdentityNode(
-        #         shape=(seq_len, embed_dim),
-        #         name=f"summing_skip_{i}",
-        #         scale=(0.1 / (1 + num_blocks)),
-        #     )
-        # )
-    nodes = nodes + xmfr_blocks  # + block_skip_nodes + summing_nodes
+        # Scale to prevent explosion with multiple skips
+        block_skip_nodes.append(
+            IdentityNode(
+                shape=(seq_len, embed_dim),
+                name=f"block_skip_{i}",
+                scale=(1.0 / num_blocks),
+            )
+        )
+        summing_nodes.append(
+            IdentityNode(
+                shape=(seq_len, embed_dim),
+                name=f"summing_skip_{i}",
+                scale=(0.1 / (1 + num_blocks)),
+            )
+        )
+    nodes = nodes + xmfr_blocks + block_skip_nodes + summing_nodes
 
     # Connections transformer blocks and skip connections
     prev_node = embed
@@ -284,13 +284,13 @@ def create_transformer_model(
         edges.append(Edge(source=prev_node, target=xmfr_blocks[i].slot("in")))
         edges.append(Edge(source=mask_node, target=xmfr_blocks[i].slot("mask")))
 
-        # edges.append(Edge(source=xmfr_blocks[i], target=summing_nodes[i].slot("in")))
-        # # Add a redundant skip connection to assist the inference phase in convergence
-        # for j in range(i, num_blocks):
-        #     edges.append(Edge(source=prev_node, target=summing_nodes[j].slot("in")))
-        # prev_node = summing_nodes[i]
+        edges.append(Edge(source=xmfr_blocks[i], target=summing_nodes[i].slot("in")))
+        # Add a redundant skip connection to assist the inference phase in convergence
+        for j in range(i, num_blocks):
+            edges.append(Edge(source=prev_node, target=summing_nodes[j].slot("in")))
+        prev_node = summing_nodes[i]
 
-        prev_node = xmfr_blocks[i]
+        # prev_node = xmfr_blocks[i]
 
     # Output projection layer
     output_node = Linear(
@@ -466,9 +466,9 @@ def main():
     FF_DIM = 512        # Feedforward hidden dimension
     ROPE_THETA = 500.0    # RoPE frequency
     BATCH_SIZE = 128     # Batch size
-    NUM_EPOCHS = 1.0      # Training epochs
+    NUM_EPOCHS = 0.30      # Training epochs
     INFER_STEPS = 11    # Inference iterations per step
-    ETA_INFER = 0.02    # Inference learning rate
+    ETA_INFER = 0.05    # Inference learning rate
     LR = 1e-3           # Weight learning rate
 
     # fmt: on
@@ -534,12 +534,11 @@ def main():
         tracking_config = TrackingConfig(
             experiment_name="transformer_pc_shakespeare",
             run_name=f"{'PC' if use_pcn else 'BP'}_{NUM_BLOCKS}blk_{EMBED_DIM}d",
-            track_batch_energy=True,
-            track_batch_energy_per_node=False,
+            track_energy=True,
             track_weight_distributions=True,
             track_state_distributions=True,
-            weight_tracking_every_n_batches=50,
-            state_tracking_every_n_batches=50,
+            nodes_to_track=TRACKED_NODES,
+            tracking_every_n_batches=50,
             state_tracking_every_n_infer_steps=5,
         )
         tracker = AimExperimentTracker(config=tracking_config)
@@ -741,8 +740,7 @@ def main():
                     # State tracking — per inference step (PC only)
                     should_track_state = (
                         final_state is not None
-                        and batch_idx % tracker.config.state_tracking_every_n_batches
-                        == 0
+                        and batch_idx % tracker.config.tracking_every_n_batches == 0
                     )
                     if should_track_state:
                         track_clamps = {}
@@ -834,11 +832,11 @@ def main():
         print("  Run 'aim up' to view the dashboard")
         print(f"  Tracked nodes: {TRACKED_NODES}")
         print(
-            f"  Weight distributions: every {tracking_config.weight_tracking_every_n_batches} batches"
+            f"  Tracking interval: every {tracking_config.tracking_every_n_batches} batches"
         )
         print(
-            f"  State tracking: every {tracking_config.state_tracking_every_n_batches} batches, "
-            f"every {tracking_config.state_tracking_every_n_infer_steps} infer steps"
+            f"  State infer-step interval: every "
+            f"{tracking_config.state_tracking_every_n_infer_steps} infer steps"
         )
 
     # Summary

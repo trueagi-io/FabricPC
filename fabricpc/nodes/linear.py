@@ -28,7 +28,7 @@ from fabricpc.nodes.base import (
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.activations import IdentityActivation
 from fabricpc.core.energy import GaussianEnergy
-from fabricpc.core.initializers import NormalInitializer
+from fabricpc.core.initializers import NormalInitializer, KaimingInitializer
 
 if TYPE_CHECKING:
     from fabricpc.core.activations import ActivationBase
@@ -57,7 +57,7 @@ class Linear(FlattenInputMixin, NodeBase):
         energy: Optional[EnergyFunctional] = GaussianEnergy(),
         use_bias: bool = True,
         flatten_input: bool = False,
-        weight_init: Optional[InitializerBase] = NormalInitializer(),
+        weight_init: Optional[InitializerBase] = KaimingInitializer(),
         latent_init: Optional[InitializerBase] = NormalInitializer(),
     ):
         """

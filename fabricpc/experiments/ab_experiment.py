@@ -146,6 +146,26 @@ class ABResults:
         print("=" * 70)
         print(f"A/B Experiment: {self.arm_a_name} vs {self.arm_b_name}")
         print("=" * 70)
+        # Training time comparison
+        a_epoch_times = self.arm_a_times / self.num_epochs
+        b_epoch_times = self.arm_b_times / self.num_epochs
+        a_t = descriptive_stats(a_epoch_times)
+        b_t = descriptive_stats(b_epoch_times)
+
+        print()
+        print("--- Training Time per Epoch ---")
+        print(f"{self.arm_a_name}: {a_t.mean:.3f} +/- {a_t.se:.3f}s")
+        print(f"{self.arm_b_name}: {b_t.mean:.3f} +/- {b_t.se:.3f}s")
+        if b_t.mean > 0:
+            print(
+                f"Ratio: {self.arm_a_name} is "
+                f"{a_t.mean / b_t.mean:.2f}x {self.arm_b_name} time"
+            )
+
+        print()
+        print(f"Total wall time: {self.total_time:.1f}s")
+        print("=" * 70)
+
         print(f"Metric: {self.metric}")
         print(f"Trials: {self.n_trials}")
         print(f"Epochs per trial: {self.num_epochs}")
@@ -225,26 +245,6 @@ class ABResults:
                 f"Mean difference ({self.arm_a_name} - {self.arm_b_name}): "
                 f"{diff * scale:+.2f}{pct}"
             )
-
-        # Training time comparison
-        a_epoch_times = self.arm_a_times / self.num_epochs
-        b_epoch_times = self.arm_b_times / self.num_epochs
-        a_t = descriptive_stats(a_epoch_times)
-        b_t = descriptive_stats(b_epoch_times)
-
-        print()
-        print("--- Training Time per Epoch ---")
-        print(f"{self.arm_a_name}: {a_t.mean:.3f} +/- {a_t.se:.3f}s")
-        print(f"{self.arm_b_name}: {b_t.mean:.3f} +/- {b_t.se:.3f}s")
-        if b_t.mean > 0:
-            print(
-                f"Ratio: {self.arm_a_name} is "
-                f"{a_t.mean / b_t.mean:.2f}x {self.arm_b_name} time"
-            )
-
-        print()
-        print(f"Total wall time: {self.total_time:.1f}s")
-        print("=" * 70)
 
 
 class ABExperiment:

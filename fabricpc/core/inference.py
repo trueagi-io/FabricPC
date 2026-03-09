@@ -257,15 +257,21 @@ class InferenceSGD(InferenceBase):
         infer_steps: Number of inference iterations (default: 20)
     """
 
-    def __init__(self, eta_infer=0.1, infer_steps=20):
-        super().__init__(eta_infer=eta_infer, infer_steps=infer_steps)
+    def __init__(self, eta_infer=0.1, infer_steps=20, latent_decay=0.0):
+        super().__init__(
+            eta_infer=eta_infer, infer_steps=infer_steps, latent_decay=latent_decay
+        )
 
     @staticmethod
     def compute_new_latent(node_name, node_state, config):
 
         eta_infer = config["eta_infer"]
+        latent_decay = config["latent_decay"]
 
-        new_latent = node_state.z_latent - eta_infer * node_state.latent_grad
+        new_latent = (
+            node_state.z_latent * (1.0 - eta_infer * latent_decay)
+            - eta_infer * node_state.latent_grad
+        )
         return new_latent
 
 
@@ -284,9 +290,12 @@ class InferenceSGDNormClip(InferenceBase):
         eps: Small constant for numerical stability (default: 1e-8)
     """
 
-    def __init__(self, eta_infer=0.1, infer_steps=20, max_norm=1.0, eps=1e-8):
+    def __init__(
+        self, eta_infer=0.1, infer_steps=20, latent_decay=0.0, max_norm=1.0, eps=1e-8
+    ):
         super().__init__(
             eta_infer=eta_infer,
+            latent_decay=latent_decay,
             infer_steps=infer_steps,
             max_norm=max_norm,
             eps=eps,
@@ -295,6 +304,7 @@ class InferenceSGDNormClip(InferenceBase):
     @staticmethod
     def compute_new_latent(node_name, node_state, config):
         eta_infer = config["eta_infer"]
+        latent_decay = config["latent_decay"]
         max_norm = config["max_norm"]
         eps = config["eps"]
 
@@ -306,4 +316,7 @@ class InferenceSGDNormClip(InferenceBase):
         clip_factor = jnp.minimum(1.0, max_norm / (grad_norm + eps))
         clipped_grad = grad * clip_factor
 
-        return node_state.z_latent - eta_infer * clipped_grad
+        return (
+            node_state.z_latent * (1.0 - eta_infer * latent_decay)
+            - eta_infer * clipped_grad
+        )

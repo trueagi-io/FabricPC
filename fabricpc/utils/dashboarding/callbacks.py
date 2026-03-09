@@ -177,7 +177,7 @@ def create_detailed_iter_callback(
         )
 
         # Track state stats/distributions (if at right batch + infer_step frequency)
-        if batch_idx % tracker.config.state_tracking_every_n_batches == 0:
+        if batch_idx % tracker.config.tracking_every_n_batches == 0:
             tracker.track_state(
                 final_state, epoch=epoch_idx, batch=batch_idx, infer_step=0
             )

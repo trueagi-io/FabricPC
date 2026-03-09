@@ -299,4 +299,33 @@ Here's a summary of what was changed:
   - State tracking reconstructs clamps, runs run_inference_with_full_history, iterates all inference steps with track_state.                                     
                                                                                                                                                                  
   examples/mnist_aim_tracking.py                                                                                                                                 
-  - Config uses new field names. Latent tracking call replaced with batch-gated track_state. Weight tracking call gets batch=0.        
+  - Config uses new field names. Latent tracking call replaced with batch-gated track_state. Weight tracking call gets batch=0.
+
+# Revisions to initial plan (completed 3/6/26)
+
+trackers.py — TrackingConfig simplified:                                                                                                                       
+  - track_batch_energy + track_epoch_energy → track_energy                                                                                                       
+  - track_epoch_accuracy → track_accuracy                                                                                                                        
+  - track_batch_energy_per_node removed — nodes_to_track (non-empty) enables per-node tracking                                                                   
+  - inference_nodes_to_track → nodes_to_track                                                                                                                    
+  - weight_tracking_every_n_batches + state_tracking_every_n_batches → tracking_every_n_batches                                                                  
+  - Added tracking_every_n_epochs                                                                                                                                
+                                                                                                                                                                 
+  trackers.py — method guard updates:                                                                                                                            
+  - track_batch_energy(): checks track_energy                                                                                                                    
+  - track_batch_energy_per_node(): checks nodes_to_track and iterates only those nodes                                                                           
+  - track_epoch_metrics(): checks track_energy / track_accuracy                                                                                                  
+  - track_weight_distributions(): uses tracking_every_n_batches                                                                                                  
+  - track_inference_dynamics(): uses nodes_to_track                                                                                                              
+                                                                                                                                                                 
+  callbacks.py: Updated tracking_every_n_batches reference.                                                                                                      
+                                                                                                                                                                 
+  transformer_demo.py: Config uses new fields, batch-interval reference updated, summary print updated.                                                          
+                                                                                                                                                                 
+  mnist_aim_tracking.py: Config uses new fields. All hardcoded intervals replaced:                                                                               
+  - % 100 → % tracker.config.tracking_every_n_batches                                                                                                            
+  - * 5 → * COLLECT_EVERY (new top-level constant)                                                                                                               
+  - collect_every=5 → collect_every=COLLECT_EVERY                                                                                                                
+  - tracking_config.inference_nodes_to_track → tracker.config.nodes_to_track                                                                                     
+
+Removed track_inference_dynamics from TrackingConfig. The track_inference_dynamics() method now gates on nodes_to_track: if the list is non-empty (or an explicit nodes arg is passed), it tracks; otherwise it's a no-op.

@@ -38,7 +38,7 @@ import jax
 import jax.numpy as jnp
 from fabricpc.utils.data.dataloader import MnistLoader
 
-from fabricpc.nodes import Linear
+from fabricpc.nodes import Linear, IdentityNode
 from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.graph import initialize_params, FeedforwardStateInit
 from fabricpc.core.activations import (
@@ -47,7 +47,7 @@ from fabricpc.core.activations import (
     SoftmaxActivation,
 )
 from fabricpc.core.energy import GaussianEnergy, CrossEntropyEnergy
-from fabricpc.core.initializers import NormalInitializer
+from fabricpc.core.initializers import KaimingInitializer
 from fabricpc.core.inference import InferenceSGD
 import optax
 from fabricpc.training import evaluate_pcn
@@ -80,33 +80,33 @@ graph_key, train_key, eval_key = jax.random.split(master_rng_key, 3)
 # NETWORK CONFIGURATION
 # ==============================================================================
 
-pixels = Linear(shape=(784,), activation=IdentityActivation(), name="pixels")
+pixels = IdentityNode(shape=(784,), name="pixels")
 h1 = Linear(
     shape=(256,),
     activation=SigmoidActivation(),
     energy=GaussianEnergy(precision=1.0),
-    weight_init=NormalInitializer(mean=0.0, std=0.05),
+    weight_init=KaimingInitializer(),
     name="h1",
 )
 h2 = Linear(
-    shape=(128,),
+    shape=(64,),
     activation=SigmoidActivation(),
     energy=GaussianEnergy(precision=1.0),
-    weight_init=NormalInitializer(mean=0.0, std=0.05),
+    weight_init=KaimingInitializer(),
     name="h2",
 )
 h3 = Linear(
     shape=(64,),
     activation=SigmoidActivation(),
     energy=GaussianEnergy(precision=1.0),
-    weight_init=NormalInitializer(mean=0.0, std=0.05),
+    weight_init=KaimingInitializer(),
     name="h3",
 )
 class_node = Linear(
     shape=(10,),
     activation=SoftmaxActivation(),
     energy=CrossEntropyEnergy(),
-    weight_init=NormalInitializer(mean=0.0, std=0.05),
+    weight_init=KaimingInitializer(),
     name="class",
 )
 
@@ -120,13 +120,14 @@ structure = graph(
     ],
     task_map=TaskMap(x=pixels, y=class_node),
     graph_state_initializer=FeedforwardStateInit(),
-    inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
+    inference=InferenceSGD(eta_infer=0.20, infer_steps=20),
 )
 
 optimizer = optax.adamw(0.001, weight_decay=0.001)
 train_config = {}
 batch_size = 200
 num_epochs = 1
+INFERENCE_COLLECT_EVERY = 5  # Inference history collection interval
 
 # ==============================================================================
 # CREATE MODEL
@@ -170,20 +171,12 @@ if TRACKING_ENABLED:
     tracking_config = TrackingConfig(
         experiment_name="mnist_pcn_tracking",
         run_name=f"5layer_lr0.001_infer{structure.config['inference'].config['infer_steps']}",
-        # Batch-level tracking
-        track_batch_energy=True,
-        track_batch_energy_per_node=True,
-        # Epoch-level tracking
-        track_epoch_energy=True,
-        track_epoch_accuracy=True,
+        track_energy=True,
+        track_accuracy=True,
         track_weight_distributions=True,
         track_state_distributions=True,
-        # Inference dynamics
-        track_inference_dynamics=True,
-        inference_nodes_to_track=["h1", "h2", "h3", "class"],
-        # Frequency controls
-        weight_tracking_every_n_batches=50,
-        state_tracking_every_n_batches=50,
+        nodes_to_track=["h1", "h2", "h3", "class"],
+        tracking_every_n_batches=50,
         state_tracking_every_n_infer_steps=5,
     )
 
@@ -233,7 +226,7 @@ jit_train_step = jax.jit(
         structure,
         optimizer,
         k,
-        collect_every=5,  # Collect every 5th inference step
+        collect_every=INFERENCE_COLLECT_EVERY,
     )
 )
 
@@ -263,7 +256,9 @@ for epoch in range(num_epochs):
         )
 
         # Unstack inference history outside of JIT (converts JAX arrays to Python floats)
-        inference_history = unstack_inference_history(stacked_history, collect_every=5)
+        inference_history = unstack_inference_history(
+            stacked_history, collect_every=INFERENCE_COLLECT_EVERY
+        )
 
         normalized_energy = float(energy) / batch_size
         epoch_energies.append(normalized_energy)
@@ -279,21 +274,20 @@ for epoch in range(num_epochs):
             )
 
             # State stats/distributions (at configured frequency)
-            if batch_idx % tracker.config.state_tracking_every_n_batches == 0:
+            if batch_idx % tracker.config.tracking_every_n_batches == 0:
                 tracker.track_state(
                     final_state, epoch=epoch, batch=batch_idx, infer_step=0
                 )
 
-            # Inference dynamics (track convergence every 100 batches)
-            if batch_idx % 100 == 0:
-                # Convert lightweight history to tracking format
+            # Inference dynamics (at configured frequency)
+            if batch_idx % tracker.config.tracking_every_n_batches == 0:
                 for step_idx, step_metrics in enumerate(inference_history):
                     for node_name, metrics in step_metrics.items():
-                        if node_name in tracking_config.inference_nodes_to_track:
+                        if node_name in tracker.config.nodes_to_track:
                             tracker._run.track(
                                 metrics["energy"],
                                 name="inference_energy",
-                                step=step_idx * 5,  # multiply by collect_every
+                                step=step_idx * INFERENCE_COLLECT_EVERY,
                                 context={
                                     "node": node_name,
                                     "epoch": epoch,
@@ -303,7 +297,7 @@ for epoch in range(num_epochs):
                             tracker._run.track(
                                 metrics["latent_grad_norm"],
                                 name="inference_grad_norm",
-                                step=step_idx * 5,
+                                step=step_idx * INFERENCE_COLLECT_EVERY,
                                 context={
                                     "node": node_name,
                                     "epoch": epoch,
