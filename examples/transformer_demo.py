@@ -17,6 +17,7 @@ Expected runtime: ~5-20 minutes on a consumer GPU (RTX 3080/4080 class)
 """
 
 use_pcn = True  # Set to True to use predictive coding training, False for backprop
+use_extra_skip_connections = True  # Add extra skip connections from embedding to all transformer blocks (can help PC inference convergence)
 
 import os
 
@@ -276,7 +277,9 @@ def create_transformer_model(
                 scale=(0.1 / (1 + num_blocks)),
             )
         )
-    nodes = nodes + xmfr_blocks + block_skip_nodes + summing_nodes
+    nodes = nodes + xmfr_blocks
+    if use_extra_skip_connections:
+        nodes = nodes + summing_nodes  # + block_skip_nodes
 
     # Connections transformer blocks and skip connections
     prev_node = embed
@@ -284,13 +287,16 @@ def create_transformer_model(
         edges.append(Edge(source=prev_node, target=xmfr_blocks[i].slot("in")))
         edges.append(Edge(source=mask_node, target=xmfr_blocks[i].slot("mask")))
 
-        edges.append(Edge(source=xmfr_blocks[i], target=summing_nodes[i].slot("in")))
-        # Add a redundant skip connection to assist the inference phase in convergence
-        for j in range(i, num_blocks):
-            edges.append(Edge(source=prev_node, target=summing_nodes[j].slot("in")))
-        prev_node = summing_nodes[i]
-
-        # prev_node = xmfr_blocks[i]
+        if use_extra_skip_connections:
+            edges.append(
+                Edge(source=xmfr_blocks[i], target=summing_nodes[i].slot("in"))
+            )
+            # Add a redundant skip connection to assist the inference phase in convergence
+            for j in range(i, num_blocks):
+                edges.append(Edge(source=prev_node, target=summing_nodes[j].slot("in")))
+            prev_node = summing_nodes[i]
+        else:
+            prev_node = xmfr_blocks[i]
 
     # Output projection layer
     output_node = Linear(
@@ -309,7 +315,7 @@ def create_transformer_model(
         task_map=TaskMap(x=input_node, y=output_node, causal_mask=mask_node),
         graph_state_initializer=FeedforwardStateInit(),
         inference=InferenceSGDNormClip(
-            eta_infer=eta_infer, infer_steps=infer_steps, max_norm=0.5
+            eta_infer=eta_infer, infer_steps=infer_steps, max_norm=0.5, latent_decay=0.0
         ),
     )
     params = initialize_params(structure, rng_key)
@@ -552,6 +558,7 @@ def main():
                     "ff_dim": FF_DIM,
                     "rope_theta": ROPE_THETA,
                     "total_params": total_params,
+                    "use_extra_skip_connections": use_extra_skip_connections,
                 },
                 "training_method": "PC" if use_pcn else "Backprop",
                 "batch_size": BATCH_SIZE,
