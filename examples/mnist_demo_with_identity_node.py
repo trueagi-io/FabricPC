@@ -10,12 +10,9 @@ Based on the minimal MNIST demo, with an IdentityNode added between
 hidden layers to demonstrate its usage.
 """
 
-import os  # Set environment variables before importing JAX
+from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
 
-os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-os.environ.setdefault("JAX_PLATFORMS", "cuda")  # "cpu", "cuda" or "tpu"
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Suppress XLA warnings
-os.environ["XLA_FLAGS"] = "--xla_gpu_deterministic_ops=true"
+set_jax_flags_before_importing_jax(jax_platforms="cuda")  # "cpu", "cuda" or "tpu"
 
 import jax
 from fabricpc.nodes import Linear, IdentityNode

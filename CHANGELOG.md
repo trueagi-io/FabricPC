@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.2.9] - 2026-03-17
+- Added transformer_v2 nodes and example decomposing transformer blocks to use PC inference at the attention and feedfordward layers. See examples/transformer_v2 for details.
+- Improved training stability and convergence of the v1 transformer block by adding layer normalization and residual connections. See examples/transformer for details.
+- Refactored optimizer integration to use Optax directly. Trainer signature is now train_pcn(..., optimizer=optax.adamw(0.001, weight_decay=0.001))
+- Refactored nodes to use weight initializer objects instead of config dicts. See examples folder for updated node definitions.
+- Added extensible inference abstraction. New API is structure = graph(nodes=[...], edges=[...], task_map=..., inference=InferenceSGD(eta_infer=0.05, infer_steps=20)).
+- Refactored Aim TrackingConfig parameters to improve configurable logging intervals.
+- Added ABExperiment class for comparing model variants statistically.
+- Added a fixed scaling factor argument to IdentityNode for better control over signal propagation.
+
 ## [0.2.8] - 2026-02-25
 - Refactored model definition to be object based rather than purely config based. Existing model configs can be easily adapted to new format. See examples folder.
 - Nodes now require class constructors instead of config dicts. Activation functions should be called like type(actfn_instance).forward(x, actfn_instance.config);

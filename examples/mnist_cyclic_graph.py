@@ -15,12 +15,9 @@ Usage:
     python examples/mnist_cyclic_graph.py --verbose       # show per-epoch output
 """
 
-import os
+from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
 
-os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-os.environ.setdefault("JAX_PLATFORMS", "cuda")
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
-os.environ["XLA_FLAGS"] = "--xla_gpu_deterministic_ops=true"
+set_jax_flags_before_importing_jax(jax_platforms="cuda")  # "cpu", "cuda" or "tpu"
 
 import jax
 import argparse

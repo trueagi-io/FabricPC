@@ -3,6 +3,10 @@ Hyperparameter Tuning for Transformer on Tiny Shakespeare (Multi-GPU Version)
 =====================================================================
 """
 
+from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+
+set_jax_flags_before_importing_jax()
+
 import os
 import jax
 import torch

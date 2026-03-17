@@ -234,7 +234,7 @@ class LinearExplicitGrad(Linear):
     Useful for:
     - Verifying correctness of manual gradient implementations
     - Prototyping optimized gradients
-    - Debugging gradient computation issues
+    - Debugging gradient computation issuesr
     """
 
     def __init__(

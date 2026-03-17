@@ -11,14 +11,9 @@ This example demonstrates:
 Run with: python examples/custom_node.py
 """
 
-import os  # set environment variables before importing JAX
+from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
 
-os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-os.environ.setdefault(
-    "JAX_PLATFORMS", "cuda"
-)  # options: "cpu", "cuda" or "tpu" if available
-os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Suppress XLA warnings
-os.environ["XLA_FLAGS"] = "--xla_gpu_deterministic_ops=true"
+set_jax_flags_before_importing_jax(jax_platforms="cuda")  # "cpu", "cuda" or "tpu"
 
 import time
 from typing import Dict, Any, Tuple

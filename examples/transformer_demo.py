@@ -16,14 +16,12 @@ This demo:
 Expected runtime: ~5-20 minutes on a consumer GPU (RTX 3080/4080 class)
 """
 
-use_pcn = True  # Set to True to use predictive coding training, False for backprop
-use_extra_skip_connections = True  # Add extra skip connections from embedding to all transformer blocks (can help PC inference convergence)
+use_pcn = False  # Set to True to use predictive coding training, False for backprop
+use_extra_skip_connections = False  # Add extra skip connections from embedding to all transformer blocks (can help PC inference convergence)
 
-import os
+from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
 
-os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-os.environ.setdefault("JAX_PLATFORMS", "cuda")
-os.environ["XLA_FLAGS"] = "--xla_gpu_deterministic_ops=true"
+set_jax_flags_before_importing_jax()
 
 import math
 import jax
@@ -472,7 +470,7 @@ def main():
     FF_DIM = 512        # Feedforward hidden dimension
     ROPE_THETA = 500.0    # RoPE frequency
     BATCH_SIZE = 128     # Batch size
-    NUM_EPOCHS = 0.30      # Training epochs
+    NUM_EPOCHS = 1.0      # Training epochs
     INFER_STEPS = 11    # Inference iterations per step
     ETA_INFER = 0.05    # Inference learning rate
     LR = 1e-3           # Weight learning rate
