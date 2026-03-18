@@ -191,7 +191,7 @@ class TransformerBlock(NodeBase):
 
         keys = jax.random.split(key, 8)
 
-        #
+        # N = number of blocks in the architecture, used for residual stream variance control.
         """
         Weight      | Init std                    | Rationale
         ------------|-----------------------------|---------------------------------

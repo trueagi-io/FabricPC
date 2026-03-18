@@ -4,7 +4,7 @@ Core inference dynamics for JAX predictive coding networks.
 This module provides:
 - InferenceBase: Abstract base class for inference algorithms
 - InferenceSGD: Default SGD-based inference (z -= eta * grad)
-- Backward-compatible module-level functions (run_inference, inference_step)
+- run_inference: Convenience function wrapping the class-based API
 
 Inference algorithms control how latent states are updated during the
 inference loop. The primary extension point is `latent_update()`.
@@ -320,3 +320,36 @@ class InferenceSGDNormClip(InferenceBase):
             node_state.z_latent * (1.0 - eta_infer * latent_decay)
             - eta_infer * clipped_grad
         )
+
+
+# =============================================================================
+# Convenience Function
+# =============================================================================
+
+
+def run_inference(
+    params: GraphParams,
+    initial_state: GraphState,
+    clamps: Dict[str, jnp.ndarray],
+    structure: GraphStructure,
+) -> GraphState:
+    """
+    Run inference using the algorithm object stored in the graph structure.
+
+    Convenience wrapper that extracts the inference object from
+    ``structure.config["inference"]`` and delegates to its class's
+    static ``run_inference`` method.
+
+    Args:
+        params: Graph parameters.
+        initial_state: Initial graph state.
+        clamps: Clamped node values.
+        structure: Graph structure containing the inference object.
+
+    Returns:
+        Converged graph state after inference.
+    """
+    inference_object = structure.config["inference"]
+    return type(inference_object).run_inference(
+        params, initial_state, clamps, structure
+    )

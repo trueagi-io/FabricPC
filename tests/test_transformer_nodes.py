@@ -18,8 +18,9 @@ from fabricpc.graph.state_initializer import (
     initialize_graph_state,
     FeedforwardStateInit,
 )
-from fabricpc.core.inference import run_inference
-from fabricpc.training import train_step, create_optimizer
+from fabricpc.core.inference import run_inference, InferenceSGD
+from fabricpc.training import train_step
+import optax
 from fabricpc.nodes import Linear
 from fabricpc.builder import Edge, TaskMap, graph
 
@@ -63,6 +64,7 @@ class TestEmbeddingNode:
                 Edge(source=embed_node, target=output_node.slot("in")),
             ],
             task_map=TaskMap(x=input_node, y=output_node),
+            inference=InferenceSGD(eta_infer=0.1, infer_steps=5),
         )
         params = initialize_params(structure, rng_key)
         return params, structure
@@ -150,7 +152,7 @@ class TestEmbeddingNode:
         """
         params, structure = embedding_graph
 
-        optimizer = create_optimizer({"type": "sgd", "lr": 1.0})
+        optimizer = optax.sgd(1.0)
         opt_state = optimizer.init(params)
 
         batch_size = 1
@@ -176,8 +178,6 @@ class TestEmbeddingNode:
             structure,
             optimizer,
             step_key,
-            infer_steps=5,
-            eta_infer=0.1,
         )
 
         new_embeddings = new_params.nodes["embed"].weights["embeddings"]
@@ -256,6 +256,7 @@ class TestTransformerBlock:
                 Edge(source=mlp2, target=output_node.slot("in")),
             ],
             task_map=TaskMap(x=input_node, y=output_node),
+            inference=InferenceSGD(eta_infer=0.1, infer_steps=5),
         )
         params = initialize_params(structure, rng_key)
         return params, structure
@@ -272,7 +273,7 @@ class TestTransformerBlock:
         state = initialize_graph_state(
             structure, batch_size, rng_key, clamps=clamps, params=params
         )
-        final_state = run_inference(params, state, clamps, structure, infer_steps=1)
+        final_state = run_inference(params, state, clamps, structure)
 
         block_latent = final_state.nodes["mlp2"].z_latent
         assert block_latent.shape == (batch_size, 10, 32)
@@ -323,7 +324,7 @@ class TestTransformerBlock:
     def test_block_learning(self, single_block_graph, rng_key):
         """Verify gradients propagate and loss decreases (overfitting test)."""
         params, structure = single_block_graph
-        optimizer = create_optimizer({"type": "adam", "lr": 0.01})
+        optimizer = optax.adam(0.01)
         opt_state = optimizer.init(params)
 
         target = jax.random.normal(rng_key, (4, 10, 32))
@@ -339,8 +340,6 @@ class TestTransformerBlock:
                 structure,
                 optimizer,
                 step_key,
-                infer_steps=5,
-                eta_infer=0.1,
             )
             losses.append(loss)
 
@@ -349,7 +348,13 @@ class TestTransformerBlock:
     def test_factory_structure(self, rng_key):
         """Verify create_deep_transformer generates correct graph topology."""
         structure = create_deep_transformer(
-            depth=3, embed_dim=16, num_heads=2, mlp_dim=32, seq_len=10, vocab_size=10
+            depth=3,
+            embed_dim=16,
+            num_heads=2,
+            mlp_dim=32,
+            seq_len=10,
+            vocab_size=10,
+            inference=InferenceSGD(eta_infer=0.1, infer_steps=2),
         )
 
         # Decomposed architecture per layer: MhaResidualNode, LnMlp1Node, Mlp2ResidualNode
@@ -389,6 +394,7 @@ class TestTransformerBlock:
             mlp_dim=32,
             seq_len=seq_len,
             vocab_size=vocab_size,
+            inference=InferenceSGD(eta_infer=0.1, infer_steps=2),
         )
         params = initialize_params(structure, rng_key)
 
@@ -402,7 +408,7 @@ class TestTransformerBlock:
         state = initialize_graph_state(
             structure, batch_size, rng_key, clamps=clamps, params=params
         )
-        final_state = run_inference(params, state, clamps, structure, infer_steps=2)
+        final_state = run_inference(params, state, clamps, structure)
 
         # Check signal reached the end
         output = final_state.nodes["logits"].z_mu

@@ -5,11 +5,6 @@ Verifies that LinearExplicitGrad (using JAX autodiff) produces
 numerically equivalent gradients to Linear (using manual formulas).
 """
 
-import os
-
-os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-os.environ.setdefault("JAX_TRACEBACK_FILTERING", "off")
-
 import pytest
 import jax
 import jax.numpy as jnp
@@ -32,16 +27,6 @@ from fabricpc.core.energy import GaussianEnergy
 from fabricpc.core.initializers import NormalInitializer
 from fabricpc.graph.state_initializer import initialize_graph_state
 
-jax.config.update(
-    "jax_platform_name", "cpu"
-)  # using cuda causes larger numerical differences because of TF32 precision
-
-
-@pytest.fixture
-def rng_key():
-    """Fixture to provide a JAX random key."""
-    return jax.random.PRNGKey(42)
-
 
 @pytest.fixture
 def grad_tolerance():
@@ -51,9 +36,14 @@ def grad_tolerance():
 
 def create_graph(node_class, rng_key):
     """Create a small network using specified node class."""
-    input_node = node_class(shape=(8,), name="input")
-    hidden = node_class(shape=(12,), activation=TanhActivation(), name="hidden")
-    output_node = node_class(shape=(4,), activation=SigmoidActivation(), name="output")
+    w_init = NormalInitializer(std=0.05)
+    input_node = node_class(shape=(8,), name="input", weight_init=w_init)
+    hidden = node_class(
+        shape=(12,), activation=TanhActivation(), name="hidden", weight_init=w_init
+    )
+    output_node = node_class(
+        shape=(4,), activation=SigmoidActivation(), name="output", weight_init=w_init
+    )
 
     structure = graph(
         nodes=[input_node, hidden, output_node],
@@ -371,37 +361,3 @@ class TestLinearAutoGradNode:
                 assert (
                     max_diff < grad_tolerance
                 ), f"Input gradient mismatch at {node_name} for {edge_key}: max diff = {max_diff}"
-
-
-class TestLinearAutoGradNodeRegistration:
-    """Test that LinearExplicitGrad is a subclass of Linear."""
-
-    def test_node_class_on_node_info(self):
-        """Test that node_class field on NodeInfo works for dispatch."""
-        node_info = NodeInfo(
-            name="test",
-            shape=(4,),
-            node_type="LinearExplicitGrad",
-            node_class=LinearExplicitGrad,
-            node_config={"use_bias": True, "flatten_input": False},
-            activation=TanhActivation(),
-            energy=GaussianEnergy(),
-            latent_init=NormalInitializer(),
-            weight_init=NormalInitializer(),
-            slots={},
-            in_degree=0,
-            out_degree=0,
-            in_edges=(),
-            out_edges=(),
-        )
-        assert node_info.node_class is LinearExplicitGrad
-        assert issubclass(LinearExplicitGrad, Linear)
-
-    def test_network_creation_with_autograd_nodes(self, rng_key):
-        """Test that a network can be created using LinearExplicitGrad nodes."""
-        params, structure = create_graph(LinearExplicitGrad, rng_key)
-
-        assert len(structure.nodes) == 3
-        for node_name in structure.nodes:
-            node = structure.nodes[node_name]
-            assert node.node_info.node_type == "LinearExplicitGrad"

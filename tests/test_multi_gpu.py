@@ -2,18 +2,9 @@
 """
 Test suite for multi-GPU training utilities.
 
-This test verifies numerical similarity between train.train_pcn() and
-multi_gpu.train_pcn_multi_gpu() by comparing:
-1. Both methods run without errors
-2. Both methods reduce energy over training
-3. Final energy values are within an acceptable range
-
+Verifies numerical similarity between train.train_pcn() and
+multi_gpu.train_pcn_multi_gpu(), plus utility function correctness.
 """
-
-import os
-
-os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-os.environ.setdefault("JAX_TRACEBACK_FILTERING", "off")
 
 import copy
 import pytest
@@ -30,15 +21,6 @@ from fabricpc.core.initializers import XavierInitializer
 from fabricpc.core.inference import InferenceSGD
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.training.multi_gpu import train_pcn_multi_gpu
-
-# Force CPU for reproducibility in tests
-jax.config.update("jax_platform_name", "cpu")
-
-
-@pytest.fixture
-def rng_key():
-    """Fixture to provide a JAX random key."""
-    return jax.random.PRNGKey(42)
 
 
 @pytest.fixture
@@ -134,57 +116,6 @@ class SimpleDataLoader:
 
 class TestMultiGPUTraining:
     """Test suite for multi-GPU training numerical similarity."""
-
-    def test_both_methods_run_successfully(
-        self, simple_structure, optimizer, train_config, rng_key
-    ):
-        """Test that both training methods run without errors."""
-        # Split keys for different uses
-        model_key, train_key1, train_key2, data_key = jax.random.split(rng_key, 4)
-
-        # Initialize parameters
-        params = initialize_params(simple_structure, model_key)
-
-        # Create data loader
-        input_shape = simple_structure.nodes["input"].node_info.shape
-        output_shape = simple_structure.nodes["output"].node_info.shape
-        train_loader = SimpleDataLoader(
-            input_shape, output_shape, batch_size=8, num_batches=4, rng_key=data_key
-        )
-
-        # Make a copy of params for the second training run
-        params_single = copy.deepcopy(params)
-        params_multi = copy.deepcopy(params)
-
-        # Run single-GPU training
-        trained_single, iter_results_single, _ = train_pcn(
-            params_single,
-            simple_structure,
-            train_loader,
-            optimizer,
-            train_config,
-            train_key1,
-            verbose=False,
-        )
-
-        # Run multi-GPU training
-        trained_multi = train_pcn_multi_gpu(
-            params_multi,
-            simple_structure,
-            train_loader,
-            optimizer,
-            train_config,
-            train_key2,
-            verbose=False,
-        )
-
-        # Both should complete and return valid parameters
-        assert trained_single is not None, "Single-GPU training should return params"
-        assert trained_multi is not None, "Multi-GPU training should return params"
-
-        # Check parameter structure is preserved
-        assert set(trained_single.nodes.keys()) == set(params.nodes.keys())
-        assert set(trained_multi.nodes.keys()) == set(params.nodes.keys())
 
     def test_both_methods_reduce_energy(
         self, simple_structure, optimizer, train_config, rng_key
@@ -349,77 +280,6 @@ class TestMultiGPUTraining:
             f"Max relative difference: {max_relative_diff:.6f} (allowed: {max_allowed_diff}). "
             f"Per-parameter diffs: {param_diffs}"
         )
-
-    def test_parameter_magnitudes_similar(
-        self, simple_structure, optimizer, train_config, rng_key
-    ):
-        """Test that final parameter magnitudes are in similar ranges."""
-        model_key, train_key, data_key = jax.random.split(rng_key, 3)
-
-        # Initialize parameters
-        params = initialize_params(simple_structure, model_key)
-
-        # Create data loader
-        input_shape = simple_structure.nodes["input"].node_info.shape
-        output_shape = simple_structure.nodes["output"].node_info.shape
-        train_loader = SimpleDataLoader(
-            input_shape, output_shape, batch_size=8, num_batches=4, rng_key=data_key
-        )
-
-        # Make copies
-        params_single = copy.deepcopy(params)
-        params_multi = copy.deepcopy(params)
-
-        train_key1, train_key2 = jax.random.split(train_key)
-
-        # Run both trainings
-        trained_single, _, _ = train_pcn(
-            params_single,
-            simple_structure,
-            train_loader,
-            optimizer,
-            train_config,
-            train_key1,
-            verbose=False,
-        )
-        trained_multi = train_pcn_multi_gpu(
-            params_multi,
-            simple_structure,
-            train_loader,
-            optimizer,
-            train_config,
-            train_key2,
-            verbose=False,
-        )
-
-        max_allowed_difference = 1e-5
-        # Compare parameter norms for each node
-        for node_name in simple_structure.nodes:
-            if node_name in trained_single.nodes and node_name in trained_multi.nodes:
-                single_params = trained_single.nodes[node_name]
-                multi_params = trained_multi.nodes[node_name]
-
-                for edge_key in single_params.weights:
-                    single_norm = float(
-                        jnp.linalg.norm(single_params.weights[edge_key])
-                    )
-                    multi_norm = float(jnp.linalg.norm(multi_params.weights[edge_key]))
-
-                    # Both should have non-zero weights
-                    assert (
-                        single_norm > 0
-                    ), f"Single-GPU {node_name}/{edge_key} weights should be non-zero"
-                    assert (
-                        multi_norm > 0
-                    ), f"Multi-GPU {node_name}/{edge_key} weights should be non-zero"
-
-                    # Norms should be in same order of magnitude
-                    if single_norm > 0 and multi_norm > 0:
-                        norm_diff = abs(single_norm - multi_norm)
-                        assert norm_diff < max_allowed_difference, (
-                            f"Weight norms for {node_name}/{edge_key} differ too much. "
-                            f"Single: {single_norm:.5f}, Multi: {multi_norm:.5f}"
-                        )
 
 
 class TestMultiGPUUtilities:

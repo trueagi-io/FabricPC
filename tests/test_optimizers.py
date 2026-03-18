@@ -3,11 +3,6 @@
 Tests for natural gradient optimizer transforms and their integration with training.
 """
 
-import os
-
-os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-os.environ.setdefault("JAX_TRACEBACK_FILTERING", "off")
-
 import pytest
 import jax
 import jax.numpy as jnp
@@ -23,13 +18,6 @@ from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.graph import initialize_params
 from fabricpc.core.activations import SigmoidActivation
 from fabricpc.core.inference import InferenceSGD
-
-jax.config.update("jax_platform_name", "cpu")
-
-
-@pytest.fixture
-def rng_key():
-    return jax.random.PRNGKey(0)
 
 
 def test_ngd_diag_updates():

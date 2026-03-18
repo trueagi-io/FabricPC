@@ -92,3 +92,104 @@ class MnistLoader:
 
     def __len__(self):
         return self._num_batches
+
+
+class CharDataLoader:
+    """JAX-compatible character-level dataloader using TFDS.
+
+    Loads the tiny_shakespeare dataset from TensorFlow Datasets and
+    yields batches of (x_indices, y_onehot) for next-character prediction.
+
+    The vocabulary is always built from the train split to ensure consistent
+    char-to-index mappings across all splits.
+
+    Args:
+        split: Dataset split ('train', 'validation', or 'test').
+        seq_len: Number of characters per input sequence.
+        batch_size: Number of sequences per batch.
+        shuffle: Whether to shuffle sequence start positions each epoch.
+        seed: Random seed for reproducible shuffling.
+        max_samples: If set, cap the number of sequences to this value.
+            Useful for fast hyperparameter tuning on a subset of data.
+    """
+
+    # Class-level cache for vocabulary (built once from train split)
+    _vocab = None
+
+    def __init__(
+        self,
+        split: str,
+        seq_len: int,
+        batch_size: int,
+        shuffle: bool = True,
+        seed: int = None,
+        max_samples: int = None,
+    ):
+        import tensorflow_datasets as tfds
+        import tensorflow as tf
+
+        tf.config.set_visible_devices([], "GPU")
+
+        self.seq_len = seq_len
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.seed = seed
+        self._epoch = 0
+
+        # Build vocabulary from the train split (cached across instances)
+        if CharDataLoader._vocab is None:
+            train_ds = tfds.load("tiny_shakespeare", split="train")
+            train_text = next(iter(train_ds))["text"].numpy().decode("utf-8")
+            chars = sorted(set(train_text))
+            CharDataLoader._vocab = {
+                "chars": chars,
+                "vocab_size": len(chars),
+                "char_to_idx": {ch: i for i, ch in enumerate(chars)},
+                "idx_to_char": {i: ch for i, ch in enumerate(chars)},
+            }
+
+        self.chars = CharDataLoader._vocab["chars"]
+        self.vocab_size = CharDataLoader._vocab["vocab_size"]
+        self.char_to_idx = CharDataLoader._vocab["char_to_idx"]
+        self.idx_to_char = CharDataLoader._vocab["idx_to_char"]
+
+        # Load the requested split and encode to indices
+        ds = tfds.load("tiny_shakespeare", split=split)
+        text = next(iter(ds))["text"].numpy().decode("utf-8")
+        self.data = np.array([self.char_to_idx[ch] for ch in text], dtype=np.int32)
+
+        # Each sequence needs seq_len input chars + 1 target char
+        self.num_sequences = len(self.data) - seq_len
+        if max_samples is not None:
+            self.num_sequences = min(self.num_sequences, max_samples)
+        self._num_batches = self.num_sequences // batch_size
+
+    def __iter__(self):
+        indices = np.arange(self.num_sequences)
+        if self.shuffle:
+            epoch_seed = self.seed + self._epoch if self.seed is not None else None
+            rng = np.random.default_rng(epoch_seed)
+            rng.shuffle(indices)
+        self._epoch += 1
+
+        for start in range(0, len(indices), self.batch_size):
+            batch_idx = indices[start : start + self.batch_size]
+            if len(batch_idx) < self.batch_size:
+                continue  # drop incomplete last batch
+
+            x = np.stack(
+                [self.data[i : i + self.seq_len] for i in batch_idx]
+            )  # (batch, seq_len) int32
+            y_idx = np.stack(
+                [self.data[i + 1 : i + self.seq_len + 1] for i in batch_idx]
+            )  # (batch, seq_len)
+            y_onehot = np.eye(self.vocab_size, dtype=np.float32)[y_idx]
+
+            yield x, y_onehot
+
+    def __len__(self):
+        return self._num_batches
+
+    def decode(self, indices) -> str:
+        """Convert an array of character indices back to a string."""
+        return "".join(self.idx_to_char[int(i)] for i in indices)

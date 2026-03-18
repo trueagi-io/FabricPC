@@ -132,7 +132,7 @@ class GlobalStateInit(StateInitBase):
             shape = (batch_size, *node_info.shape)
 
             if node_name in clamps:
-                z_latent = clamps[node_name]
+                z_latent = jnp.asarray(clamps[node_name], dtype=jnp.float32)
             else:
                 z_latent = initialize(
                     node_key_map[node_name], shape, global_init_config
@@ -183,7 +183,7 @@ class NodeDistributionStateInit(StateInitBase):
             shape = (batch_size, *node_info.shape)
 
             if node_name in clamps:
-                z_latent = clamps[node_name]
+                z_latent = jnp.asarray(clamps[node_name], dtype=jnp.float32)
             else:
                 latent_init = node_info.latent_init
                 z_latent = initialize(node_key_map[node_name], shape, latent_init)
@@ -242,7 +242,7 @@ class FeedforwardStateInit(StateInitBase):
             shape = (batch_size, *node_info.shape)
 
             if node_name in clamps:
-                z_latent = clamps[node_name]
+                z_latent = jnp.asarray(clamps[node_name], dtype=jnp.float32)
             else:
                 latent_init = node_info.latent_init
                 z_latent = initialize(node_key_map[node_name], shape, latent_init)
@@ -284,7 +284,7 @@ class FeedforwardStateInit(StateInitBase):
                 else:
                     # Respect clamped values, retain newly computed error
                     node_state = node_state._replace(
-                        z_latent=clamps[node_name],
+                        z_latent=jnp.asarray(clamps[node_name], dtype=jnp.float32),
                         z_mu=projected.z_mu,
                         error=projected.error,
                         energy=projected.energy,

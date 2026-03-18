@@ -1,21 +1,20 @@
 """
-ADVANCED Predictive Coding Network Example
-=================================================
+Predictive Coding Network — Advanced MNIST
+===========================================
 
-This example demonstrates:
-1. Object-oriented network construction with direct node instantiation
-2. Custom training configurations
-3. Progress monitoring and checkpointing
-4. Hyperparameter exploration
+Custom training loop with optimizer selection and progress monitoring.
 
-Compared to mnist_demo.py, this shows a customizable training loop
-using the new object-oriented API with node objects.
+Usage:
+    PYTHONPATH=. python examples/mnist_advanced.py --optimizer adamw
+    FABRICPC_OPTIMIZER=ngd_diag PYTHONPATH=. python examples/mnist_advanced.py
 """
 
 from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
 
-set_jax_flags_before_importing_jax(jax_platforms="cuda")  # "cpu", "cuda" or "tpu"
+set_jax_flags_before_importing_jax(jax_platforms="cuda")
 
+import os
+import argparse
 import jax
 import jax.numpy as jnp
 import time
@@ -29,20 +28,16 @@ from fabricpc.core.initializers import NormalInitializer
 from fabricpc.core.inference import InferenceSGD
 import optax
 from fabricpc.training import train_step, evaluate_pcn
+from fabricpc.training.natural_gradients import (
+    scale_by_natural_gradient_diag,
+    scale_by_natural_gradient_layerwise,
+)
 from fabricpc.utils.data.dataloader import MnistLoader
 
-# Set random seed and split for different stages
-jax.config.update(
-    "jax_default_prng_impl", "threefry2x32"
-)  # 'rbg' is faster than 'threefry2x32', but less reproducible across vmaps
-master_rng_key = jax.random.PRNGKey(42)
-graph_key, train_key, eval_key = jax.random.split(master_rng_key, 3)
+jax.config.update("jax_default_prng_impl", "threefry2x32")
 
-# ==============================================================================
-# ADVANCED NETWORK CONFIGURATION - OBJECT-ORIENTED API
-# ==============================================================================
+# --- Network ---
 
-# Create nodes with explicit configuration
 pixels = Linear(shape=(784,), activation=IdentityActivation(), name="pixels")
 h1 = Linear(
     shape=(256,),
@@ -86,157 +81,159 @@ structure = graph(
     inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
 )
 
-# More sophisticated training configuration
-optimizer = optax.adamw(0.001, weight_decay=0.001)
+# --- Hyperparameters ---
+
 train_config = {}
 batch_size = 200
 num_epochs = 10
 
-# ==============================================================================
-# CREATE MODEL
-# ==============================================================================
+# --- Optimizer Presets ---
 
-print("=" * 70)
-print("Predictive Coding - Advanced MNIST Example")
-print("=" * 70)
+OPTIMIZER_PRESETS = {
+    "adam": lambda: optax.chain(optax.adam(0.001)),
+    "adamw": lambda: optax.adamw(0.001, weight_decay=0.1),
+    "sgd": lambda: optax.chain(
+        optax.add_decayed_weights(0.1), optax.sgd(0.01, momentum=0.9)
+    ),
+    "ngd_diag": lambda: optax.chain(
+        optax.add_decayed_weights(0.1),
+        scale_by_natural_gradient_diag(fisher_decay=0.95, damping=1e-3),
+        optax.scale(-0.0003),
+    ),
+    "ngd_layerwise": lambda: optax.chain(
+        optax.add_decayed_weights(0.1),
+        scale_by_natural_gradient_layerwise(fisher_decay=0.95, damping=1e-3),
+        optax.scale(-0.001),
+    ),
+}
 
-params = initialize_params(structure, graph_key)
-num_params = sum(p.size for p in jax.tree_util.tree_leaves(params))
 
-print(f"\n[Model Architecture]")
-print(f"  Nodes: {len(structure.nodes)}")
-print(f"  Edges: {len(structure.edges)}")
-print(f"  Total parameters: {num_params:,}")
-print(f"\n  Layer sizes: ", end="")
-for node in structure.nodes.values():
-    print(f"{node.node_info.shape} → ", end="")
-print("(output)")
+def parse_args() -> argparse.Namespace:
+    """Parse CLI args. Env fallback: FABRICPC_OPTIMIZER."""
+    default_optimizer = os.environ.get("FABRICPC_OPTIMIZER", "adamw")
+    parser = argparse.ArgumentParser(description="FabricPC MNIST demo (advanced)")
+    parser.add_argument(
+        "--optimizer",
+        default=default_optimizer,
+        help=(
+            "Optimizer preset to use. "
+            f"Choices: {', '.join(OPTIMIZER_PRESETS.keys())}. "
+            "CLI flag overrides FABRICPC_OPTIMIZER."
+        ),
+    )
+    args = parser.parse_args()
+    if args.optimizer.lower() not in OPTIMIZER_PRESETS:
+        valid = ", ".join(OPTIMIZER_PRESETS.keys())
+        parser.error(f"unknown optimizer '{args.optimizer}'. valid choices: {valid}")
+    return args
 
-# ==============================================================================
-# LOAD DATA
-# ==============================================================================
 
-print(f"\n[Data Loading]")
+def get_optimizer(name: str) -> optax.GradientTransformation:
+    """Return optimizer preset by name."""
+    key = name.lower()
+    if key not in OPTIMIZER_PRESETS:
+        valid = ", ".join(OPTIMIZER_PRESETS.keys())
+        raise ValueError(f"unknown optimizer '{name}'. valid choices: {valid}")
+    return OPTIMIZER_PRESETS[key]()
 
-train_loader = MnistLoader(
-    "train", batch_size=batch_size, tensor_format="flat", shuffle=True, seed=42
-)
-test_loader = MnistLoader(
-    "test", batch_size=batch_size, tensor_format="flat", shuffle=False
-)
 
-print(f"  Train samples: {train_loader.num_examples:,}")
-print(f"  Test samples: {test_loader.num_examples:,}")
-print(f"  Batch size: {batch_size}")
-print(f"  Train batches: {len(train_loader)}")
+# --- Train & Evaluate ---
 
-# ==============================================================================
-# CUSTOM TRAINING LOOP WITH MONITORING
-# ==============================================================================
+if __name__ == "__main__":
+    args = parse_args()
+    optimizer = get_optimizer(args.optimizer)
 
-print(f"\n[Training Configuration]")
-print(f"  Optimizer: adamw")
-print(f"  Learning rate: 0.001")
-print(f"  Weight decay: 0.001")
-print(f"  Inference steps: {structure.config['inference'].config['infer_steps']}")
-print(f"  Inference eta: {structure.config['inference'].config['eta_infer']}")
+    master_rng_key = jax.random.PRNGKey(42)
+    graph_key, train_key, eval_key = jax.random.split(master_rng_key, 3)
 
-opt_state = optimizer.init(params)
+    params = initialize_params(structure, graph_key)
+    num_params = sum(p.size for p in jax.tree_util.tree_leaves(params))
 
-# JIT compile training step
-print(f"\n[Compiling JIT functions...]")
-jit_train_step = jax.jit(
-    lambda p, o, b, k: train_step(p, o, b, structure, optimizer, k)
-)
+    print(
+        f"\n{len(structure.nodes)} nodes, {len(structure.edges)} edges, "
+        f"{num_params:,} parameters"
+    )
+    print(f"Optimizer: {args.optimizer}")
 
-# Training loop with detailed monitoring
-print(f"\n[Training for {num_epochs} epochs]")
-print("  (First batch will be slow due to JIT compilation)\n")
+    train_loader = MnistLoader(
+        "train", batch_size=batch_size, tensor_format="flat", shuffle=True, seed=42
+    )
+    test_loader = MnistLoader(
+        "test", batch_size=batch_size, tensor_format="flat", shuffle=False
+    )
 
-best_accuracy = 0.0
-training_history = []
+    opt_state = optimizer.init(params)
 
-# Prepare keys for all epochs and batches
-num_batches = len(train_loader)
-# split keys into (num_epochs x num_batches)
-all_rng_keys = jax.random.split(train_key, num_epochs * num_batches)
-all_rng_keys = all_rng_keys.reshape((num_epochs, num_batches, 2))
+    jit_train_step = jax.jit(
+        lambda p, o, b, k: train_step(p, o, b, structure, optimizer, k)
+    )
 
-for epoch in range(num_epochs):
-    epoch_start = time.time()
-    epoch_energies = []
+    print(f"\nTraining for {num_epochs} epochs (JIT compilation on first batch)...\n")
 
-    for batch_idx, (x, y) in enumerate(train_loader):
-        batch = {"x": jnp.array(x), "y": y}
+    best_accuracy = 0.0
+    training_history = []
 
-        # Training step with unique rng_key
-        params, opt_state, energy, _ = jit_train_step(
-            params, opt_state, batch, all_rng_keys[epoch, batch_idx]
+    num_batches = len(train_loader)
+    all_rng_keys = jax.random.split(train_key, num_epochs * num_batches)
+    all_rng_keys = all_rng_keys.reshape((num_epochs, num_batches, 2))
+
+    for epoch in range(num_epochs):
+        epoch_start = time.time()
+        epoch_energies = []
+
+        for batch_idx, (x, y) in enumerate(train_loader):
+            batch = {"x": jnp.array(x), "y": y}
+
+            params, opt_state, energy, _ = jit_train_step(
+                params, opt_state, batch, all_rng_keys[epoch, batch_idx]
+            )
+            epoch_energies.append(float(energy))
+
+            if (batch_idx + 1) % 100 == 0:
+                avg_energy = sum(epoch_energies[-100:]) / len(epoch_energies[-100:])
+                print(
+                    f"  Epoch {epoch+1}/{num_epochs}, "
+                    f"Batch {batch_idx+1}/{num_batches}, "
+                    f"energy: {avg_energy:.4f}"
+                )
+
+        epoch_time = time.time() - epoch_start
+        avg_energy = sum(epoch_energies) / len(epoch_energies)
+
+        epoch_eval_key, eval_key = jax.random.split(eval_key)
+        metrics = evaluate_pcn(
+            params, structure, test_loader, train_config, epoch_eval_key
         )
-        epoch_energies.append(float(energy))
+        accuracy = metrics["accuracy"] * 100
 
-        # Progress indicator every n_batch_update batches
-        n_batch_update = 100
-        if (batch_idx + 1) % n_batch_update == 0:
-            avg_energy = sum(epoch_energies[-n_batch_update:]) / len(
-                epoch_energies[-n_batch_update:]
-            )
-            print(
-                f"  Epoch {epoch+1}/{num_epochs}, Batch {batch_idx+1}/{len(train_loader)}, energy: {avg_energy:.4f}"
-            )
+        if accuracy > best_accuracy:
+            best_accuracy = accuracy
+            best_params = params
 
-    epoch_time = time.time() - epoch_start
-    avg_energy = sum(epoch_energies) / len(epoch_energies)
+        print(
+            f"  Epoch {epoch+1}/{num_epochs} - "
+            f"energy: {avg_energy:.4f}, Accuracy: {accuracy:.2f}%, "
+            f"Time: {epoch_time:.1f}s"
+        )
 
-    # Evaluate on test set with unique eval key for this epoch
-    epoch_eval_key, eval_key = jax.random.split(eval_key)
-    metrics = evaluate_pcn(params, structure, test_loader, train_config, epoch_eval_key)
-    accuracy = metrics["accuracy"] * 100  # convert to percentage
+        training_history.append(
+            {
+                "epoch": epoch + 1,
+                "energy": avg_energy,
+                "accuracy": accuracy,
+                "time": epoch_time,
+            }
+        )
 
-    # Track best model
-    if accuracy > best_accuracy:
-        best_accuracy = accuracy
-        best_params = params
-        print(f"  ★ New best accuracy: {accuracy:.2f}%")
+    # --- Results ---
 
-    print(
-        f"  Epoch {epoch+1}/{num_epochs} - energy: {avg_energy:.4f}, Accuracy: {accuracy:.2f}%, Time: {epoch_time:.1f}s"
-    )
+    print(f"\nBest accuracy:  {best_accuracy:.2f}%")
+    print(f"Final accuracy: {training_history[-1]['accuracy']:.2f}%")
+    print(f"Total time:     {sum(h['time'] for h in training_history):.1f}s")
 
-    training_history.append(
-        {
-            "epoch": epoch + 1,
-            "energy": avg_energy,
-            "accuracy": accuracy,
-            "time": epoch_time,
-        }
-    )
-
-# ==============================================================================
-# FINAL EVALUATION
-# ==============================================================================
-
-print(f"\n[Final Results]")
-print(f"  Best accuracy: {best_accuracy:.2f}%")
-print(f"  Final accuracy: {training_history[-1]['accuracy']:.2f}%")
-print(f"  Total training time: {sum(h['time'] for h in training_history):.1f}s")
-
-# Print training history
-print(f"\n[Training History]")
-print("  Epoch | Energy    | Accuracy | Time")
-print("  ------|---------|----------|------")
-for h in training_history:
-    print(
-        f"  {h['epoch']:5d} | {h['energy']:7.4f} | {h['accuracy']:7.2f}% | {h['time']:4.1f}s"
-    )
-
-print("\n" + "=" * 70)
-print("Advanced Training Complete!")
-print("\nKey takeaways:")
-print("  ✓ JIT compilation makes training fast")
-print("  ✓ Monitoring and checkpointing are easy")
-print("\nNext steps:")
-print("  - Try even deeper architectures")
-print("  - Experiment with different optimizers")
-print("  - Add learning rate scheduling")
-print("=" * 70)
+    print(f"\n{'Epoch':>5} | {'Energy':>7} | {'Accuracy':>8} | {'Time':>5}")
+    print(f"{'-----':>5}-+-{'-------':>7}-+-{'--------':>8}-+-{'-----':>5}")
+    for h in training_history:
+        print(
+            f"{h['epoch']:5d} | {h['energy']:7.4f} | {h['accuracy']:7.2f}% | {h['time']:4.1f}s"
+        )

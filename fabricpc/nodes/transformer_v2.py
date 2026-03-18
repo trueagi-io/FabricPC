@@ -9,6 +9,7 @@ import jax.numpy as jnp
 from fabricpc.nodes.base import NodeBase, SlotSpec
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.initializers import (
+    InitializerBase,
     initialize,
     NormalInitializer,
     XavierInitializer,
@@ -26,6 +27,7 @@ from fabricpc.core.activations import (
     SoftmaxActivation,
 )
 from fabricpc.core.energy import KLDivergenceEnergy, GaussianEnergy
+from fabricpc.core.inference import InferenceBase
 
 # ==============================================================================
 # EMBEDDING NODE
@@ -36,13 +38,25 @@ class EmbeddingNode(NodeBase):
     DEFAULT_ENERGY = GaussianEnergy
     DEFAULT_ACTIVATION = IdentityActivation
 
-    def __init__(self, shape, name, vocab_size, embed_dim, weight_init=None, **kwargs):
+    def __init__(
+        self,
+        shape,
+        name,
+        vocab_size,
+        embed_dim,
+        weight_init=None,
+        latent_init=None,
+        energy=None,
+        **kwargs,
+    ):
         super().__init__(
             shape=shape,
             name=name,
             vocab_size=vocab_size,
             embed_dim=embed_dim,
             weight_init=weight_init or NormalInitializer(std=0.02),
+            latent_init=latent_init or NormalInitializer(),
+            energy=energy or GaussianEnergy(),
             **kwargs,
         )
 
@@ -55,11 +69,11 @@ class EmbeddingNode(NodeBase):
         key: jax.Array,
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
+        weight_init: Optional[InitializerBase],
         config: Dict[str, Any],
     ) -> NodeParams:
         vocab_size = config["vocab_size"]
         embed_dim = config["embed_dim"]
-        weight_init = config["weight_init"]
 
         weights = {"embeddings": initialize(key, (vocab_size, embed_dim), weight_init)}
         return NodeParams(weights=weights, biases={})
@@ -81,9 +95,7 @@ class EmbeddingNode(NodeBase):
         z_mu = params.weights["embeddings"][indices_int]
 
         error = state.z_latent - z_mu
-        state = state._replace(
-            z_mu=z_mu, error=error, substructure={"gain_mod_error": error}
-        )
+        state = state._replace(z_mu=z_mu, error=error)
 
         state = node_info.node_class.energy_functional(state, node_info)
         return jnp.sum(state.energy), state
@@ -116,6 +128,8 @@ class MhaResidualNode(NodeBase):
         rope_theta=10000.0,
         is_causal=True,
         weight_init=None,
+        latent_init=None,
+        energy=None,
         **kwargs,
     ):
         super().__init__(
@@ -127,6 +141,8 @@ class MhaResidualNode(NodeBase):
             rope_theta=rope_theta,
             is_causal=is_causal,
             weight_init=weight_init or XavierInitializer(),
+            latent_init=latent_init or NormalInitializer(),
+            energy=energy or GaussianEnergy(),
             **kwargs,
         )
 
@@ -135,9 +151,8 @@ class MhaResidualNode(NodeBase):
         return {"in": SlotSpec("in", False), "mask": SlotSpec("mask", False)}
 
     @staticmethod
-    def initialize_params(key, node_shape, input_shapes, config):
+    def initialize_params(key, node_shape, input_shapes, weight_init, config):
         dim = config["embed_dim"]
-        weight_init = config["weight_init"]
         keys = jax.random.split(key, 6)
 
         def init_w(k, s):
@@ -206,14 +221,7 @@ class MhaResidualNode(NodeBase):
         z_mu = x + mha
         error = state.z_latent - z_mu
 
-        substructure = {
-            "gain_mod_error": error,
-            "attn_matrix": attn,
-            "Q": Q,
-            "K": K,
-            "V": V,
-        }
-        state = state._replace(z_mu=z_mu, error=error, substructure=substructure)
+        state = state._replace(z_mu=z_mu, error=error)
         state = node_info.node_class.energy_functional(state, node_info)
         return jnp.sum(state.energy), state
 
@@ -235,6 +243,8 @@ class LnMlp1Node(NodeBase):
         ff_dim,
         activation=None,
         weight_init=None,
+        latent_init=None,
+        energy=None,
         **kwargs,
     ):
         super().__init__(
@@ -244,6 +254,8 @@ class LnMlp1Node(NodeBase):
             ff_dim=ff_dim,
             activation=activation or GeluActivation(),
             weight_init=weight_init or KaimingInitializer(),
+            latent_init=latent_init or NormalInitializer(),
+            energy=energy or GaussianEnergy(),
             **kwargs,
         )
 
@@ -252,9 +264,8 @@ class LnMlp1Node(NodeBase):
         return {"in": SlotSpec("in", False)}
 
     @staticmethod
-    def initialize_params(key, node_shape, input_shapes, config):
+    def initialize_params(key, node_shape, input_shapes, weight_init, config):
         embed_dim, ff_dim = config["embed_dim"], config["ff_dim"]
-        weight_init = config["weight_init"]
         keys = jax.random.split(key, 2)
 
         weights = {
@@ -275,9 +286,7 @@ class LnMlp1Node(NodeBase):
         f_prime = type(act_obj).derivative(h, act_obj.config)
 
         error = state.z_latent - z_mu
-        state = state._replace(
-            z_mu=z_mu, error=error, substructure={"gain_mod_error": error * f_prime}
-        )
+        state = state._replace(z_mu=z_mu, error=error)
         state = node_info.node_class.energy_functional(state, node_info)
         return jnp.sum(state.energy), state
 
@@ -291,13 +300,25 @@ class Mlp2ResidualNode(NodeBase):
     DEFAULT_ENERGY = GaussianEnergy
     DEFAULT_ACTIVATION = IdentityActivation
 
-    def __init__(self, shape, name, embed_dim, ff_dim, weight_init=None, **kwargs):
+    def __init__(
+        self,
+        shape,
+        name,
+        embed_dim,
+        ff_dim,
+        weight_init=None,
+        latent_init=None,
+        energy=None,
+        **kwargs,
+    ):
         super().__init__(
             shape=shape,
             name=name,
             embed_dim=embed_dim,
             ff_dim=ff_dim,
             weight_init=weight_init or XavierInitializer(),
+            latent_init=latent_init or NormalInitializer(),
+            energy=energy or GaussianEnergy(),
             **kwargs,
         )
 
@@ -306,12 +327,8 @@ class Mlp2ResidualNode(NodeBase):
         return {"in": SlotSpec("in", False), "residual": SlotSpec("residual", False)}
 
     @staticmethod
-    def initialize_params(key, node_shape, input_shapes, config):
-        embed_dim, ff_dim, weight_init = (
-            config["embed_dim"],
-            config["ff_dim"],
-            config["weight_init"],
-        )
+    def initialize_params(key, node_shape, input_shapes, weight_init, config):
+        embed_dim, ff_dim = config["embed_dim"], config["ff_dim"]
         weights = {"W_ff2": initialize(key, (ff_dim, embed_dim), weight_init)}
         return NodeParams(weights, {"b_ff2": jnp.zeros((embed_dim,))})
 
@@ -324,9 +341,7 @@ class Mlp2ResidualNode(NodeBase):
         z_mu = res_in + mlp2
 
         error = state.z_latent - z_mu
-        state = state._replace(
-            z_mu=z_mu, error=error, substructure={"gain_mod_error": error}
-        )
+        state = state._replace(z_mu=z_mu, error=error)
         state = node_info.node_class.energy_functional(state, node_info)
         return jnp.sum(state.energy), state
 
@@ -340,13 +355,27 @@ class VocabProjectionNode(NodeBase):
     DEFAULT_ENERGY = KLDivergenceEnergy
     DEFAULT_ACTIVATION = SoftmaxActivation
 
-    def __init__(self, shape, name, vocab_size, embed_dim, weight_init=None, **kwargs):
+    def __init__(
+        self,
+        shape,
+        name,
+        vocab_size,
+        embed_dim,
+        activation=None,
+        weight_init=None,
+        latent_init=None,
+        energy=None,
+        **kwargs,
+    ):
         super().__init__(
             shape=shape,
             name=name,
             vocab_size=vocab_size,
             embed_dim=embed_dim,
+            activation=activation or SoftmaxActivation(),
             weight_init=weight_init or XavierInitializer(),
+            latent_init=latent_init or NormalInitializer(),
+            energy=energy or KLDivergenceEnergy(),
             **kwargs,
         )
 
@@ -355,12 +384,8 @@ class VocabProjectionNode(NodeBase):
         return {"in": SlotSpec("in", False)}
 
     @staticmethod
-    def initialize_params(key, node_shape, input_shapes, config):
-        vocab, dim, weight_init = (
-            config["vocab_size"],
-            config["embed_dim"],
-            config["weight_init"],
-        )
+    def initialize_params(key, node_shape, input_shapes, weight_init, config):
+        vocab, dim = config["vocab_size"], config["embed_dim"]
         weights = {"W_out": initialize(key, (dim, vocab), weight_init)}
         return NodeParams(weights, {"b_out": jnp.zeros((vocab,))})
 
@@ -373,9 +398,7 @@ class VocabProjectionNode(NodeBase):
         z_mu = type(act_obj).forward(logits, act_obj.config)
 
         error = state.z_latent - z_mu
-        state = state._replace(
-            z_mu=z_mu, error=error, substructure={"gain_mod_error": error}
-        )
+        state = state._replace(z_mu=z_mu, error=error)
         state = node_info.node_class.energy_functional(state, node_info)
         return jnp.sum(state.energy), state
 
@@ -392,6 +415,7 @@ def create_deep_transformer(
     mlp_dim: int,
     seq_len: int,
     vocab_size: int,
+    inference: InferenceBase,
     weight_init: Optional[Dict[str, Any]] = None,
 ):
     """
@@ -473,4 +497,9 @@ def create_deep_transformer(
     nodes.append(logits)
     edges.append(Edge(source=previous_residual, target=logits.slot("in")))
 
-    return graph(nodes=nodes, edges=edges, task_map=TaskMap(x=input_node, y=logits))
+    return graph(
+        nodes=nodes,
+        edges=edges,
+        task_map=TaskMap(x=input_node, y=logits),
+        inference=inference,
+    )

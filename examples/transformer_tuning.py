@@ -1,79 +1,29 @@
 """
-Hyperparameter Tuning for Transformer on Tiny Shakespeare (Multi-GPU Version)
-=====================================================================
+Hyperparameter Tuning — Transformer on Tiny Shakespeare (multi-GPU)
 """
 
 from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
 
 set_jax_flags_before_importing_jax()
 
-import os
 import jax
-import torch
+import optax
 import optuna
-import random
-from torch.utils.data import DataLoader, Dataset
 from fabricpc.graph import initialize_params
+from fabricpc.core.inference import InferenceSGD
 from fabricpc.nodes.transformer_v2 import create_deep_transformer
 from fabricpc.training.multi_gpu import (
     train_pcn_multi_gpu,
     evaluate_transformer_multi_gpu,
 )
 from fabricpc.tuning.bayesian_tuner import BayesianTuner
+from fabricpc.utils.data import CharDataLoader
+
+# --- Model Factory ---
 
 
-# ----------------------------------------------------------------------
-# DATA LOADING
-# ----------------------------------------------------------------------
-def load_data(path="data/tiny_shakespeare.txt"):
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Dataset file not found: {path}")
-    with open(path, "r", encoding="utf-8") as f:
-        text = f.read()
-
-    chars = sorted(list(set(text)))
-    vocab_size = len(chars)
-    char_to_ix = {ch: i for i, ch in enumerate(chars)}
-    ix_to_char = {i: ch for i, ch in enumerate(chars)}
-    data = [char_to_ix[ch] for ch in text]
-
-    return data, vocab_size, char_to_ix, ix_to_char
-
-
-def split_data(data, train_frac=0.8, val_frac=0.1):
-    data = random.sample(data, max(1, int(len(data) * 0.05)))
-    N = len(data)
-    n_train = int(N * train_frac)
-    n_val = int(N * val_frac)
-    train_data = data[:n_train]
-    val_data = data[n_train : n_train + n_val]
-    return train_data, val_data
-
-
-class TextDataset(Dataset):
-    def __init__(self, data, seq_len, vocab_size):
-        self.data = data
-        self.seq_len = seq_len
-        self.vocab_size = vocab_size
-
-    def __len__(self):
-        return len(self.data) - self.seq_len - 1
-
-    def __getitem__(self, i):
-        x = torch.tensor(self.data[i : i + self.seq_len], dtype=torch.float32)
-        y = torch.tensor(self.data[i + 1 : i + self.seq_len + 1], dtype=torch.long)
-        y_one_hot = torch.nn.functional.one_hot(y, num_classes=self.vocab_size).float()
-        return x, y_one_hot
-
-
-# ----------------------------------------------------------------------
-# MODEL FACTORY — RETURN PARAMS + STRUCTURE FOR MULTI-GPU TRAINING
-# ----------------------------------------------------------------------
 def trial_model(config, rng_key):
-    """
-    Creates the PC transformer graph using the provided config.
-    Returns (params, structure) for multi-GPU training.
-    """
+    """Create the PC transformer graph; returns (params, structure)."""
     embed_dim = config.get("embed_dim", 64)
     num_heads = config.get("num_heads", 4)
     mlp_dim = config.get("mlp_dim", 128)
@@ -81,7 +31,6 @@ def trial_model(config, rng_key):
     seq_len = config.get("seq_len", 32)
     vocab_size = config.get("vocab_size", 65)
 
-    # Weight initialization config
     weight_init_std = config.get("weight_init_std", 0.02)
     weight_init = {"type": "normal", "std": weight_init_std}
 
@@ -90,7 +39,10 @@ def trial_model(config, rng_key):
             f"embed_dim={embed_dim} not divisible by num_heads={num_heads}"
         )
 
-    # Create the structure directly
+    inference = InferenceSGD(
+        eta_infer=config.get("eta_infer", 0.05),
+        infer_steps=config.get("infer_steps", 20),
+    )
     structure = create_deep_transformer(
         depth=depth,
         embed_dim=embed_dim,
@@ -98,21 +50,18 @@ def trial_model(config, rng_key):
         mlp_dim=mlp_dim,
         seq_len=seq_len,
         vocab_size=vocab_size,
+        inference=inference,
         weight_init=weight_init,
     )
 
-    # Initialize params using the structure
     params = initialize_params(structure, rng_key)
 
     return params, structure
 
 
-# ----------------------------------------------------------------------
-# OPTUNA SEARCH SPACE
-# ----------------------------------------------------------------------
+# --- Optuna Search Space ---
 
 
-# Scaled down since bigger range gives NAN values
 def search_space_transformer(trial):
     lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
     embed_dim = trial.suggest_categorical("embed_dim", [32, 64])
@@ -123,7 +72,6 @@ def search_space_transformer(trial):
     eta_infer = trial.suggest_float("eta_infer", 0.01, 0.2)
     depth = trial.suggest_int("depth", 1, 12)
 
-    # Tuning weight initialization scale
     weight_init_std = trial.suggest_float("weight_init_std", 0.005, 0.05, log=True)
 
     return {
@@ -139,16 +87,20 @@ def search_space_transformer(trial):
     }
 
 
-# ----------------------------------------------------------------------
-# INTEGRATE MULTI-GPU TRAINING INSIDE TUNER PIPELINE
-# ----------------------------------------------------------------------
+# --- Multi-GPU Train/Eval ---
+
+
 def multi_gpu_train_eval(params, structure, train_loader, val_loader, config, rng_key):
     train_key, eval_key = jax.random.split(rng_key)
+
+    lr = config.get("lr", 1e-3)
+    optimizer = optax.adam(lr)
 
     trained_params = train_pcn_multi_gpu(
         params=params,
         structure=structure,
         train_loader=train_loader,
+        optimizer=optimizer,
         config=config,
         rng_key=train_key,
         verbose=False,
@@ -167,33 +119,32 @@ def multi_gpu_train_eval(params, structure, train_loader, val_loader, config, rn
     return metrics
 
 
-# ----------------------------------------------------------------------
-# MAIN — TUNING SETUP
-# ----------------------------------------------------------------------
+# --- Main ---
+
 if __name__ == "__main__":
-    print("Loading tiny_shakespeare...")
-    data, vocab_size, _, _ = load_data()
-
-    N = len(data)
-
-    print(f"Using all {N} characters ({100}%) of the dataset")
-
-    train_data, val_data = split_data(data)
-
     seq_len = 32
     batch_size = 32
+    max_tuning_samples = 50_000
 
-    train_loader = DataLoader(
-        TextDataset(train_data, seq_len, vocab_size),
+    train_loader = CharDataLoader(
+        "train",
+        seq_len=seq_len,
         batch_size=batch_size,
         shuffle=True,
-        drop_last=True,
+        seed=42,
+        max_samples=max_tuning_samples,
     )
-    val_loader = DataLoader(
-        TextDataset(val_data, seq_len, vocab_size),
+    val_loader = CharDataLoader(
+        "validation",
+        seq_len=seq_len,
         batch_size=batch_size,
-        shuffle=True,
-        drop_last=True,
+        shuffle=False,
+    )
+    vocab_size = train_loader.vocab_size
+
+    print(
+        f"Tuning subset: {train_loader.num_sequences} train sequences, "
+        f"{val_loader.num_sequences} val sequences"
     )
 
     base_config = {

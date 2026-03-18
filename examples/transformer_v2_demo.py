@@ -1,86 +1,31 @@
 """
-FabricPC Transformer Execution Script
+Transformer PC — Tiny Shakespeare (multi-GPU)
 
-This script trains the decomposed PC Transformer model on the Tiny
-Shakespeare dataset using JAX's multi-GPU capabilities (`pmap`),
-evaluates its performance, and generates sample text using temperature
-sampling to prevent repetitive loops.
-
-USAGE:
-Run this script from the root of the project directory. You must set
-the PYTHONPATH so Python can locate the `fabricpc` package.
+Trains a decomposed PC Transformer on character-level language modeling,
+evaluates perplexity, and generates sample text.
 
     $ PYTHONPATH=. python examples/transformer_v2_demo.py
-
 """
 
 from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
 
 set_jax_flags_before_importing_jax()
 
-import os
 import jax
 import jax.numpy as jnp
-import torch
-from torch.utils.data import DataLoader, Dataset
 from fabricpc.graph import initialize_params
 from fabricpc.training.multi_gpu import (
     train_pcn_multi_gpu,
     evaluate_transformer_multi_gpu,
 )
-from fabricpc.core.inference import run_inference
+from fabricpc.core.inference import run_inference, InferenceSGD
 from fabricpc.graph.state_initializer import initialize_graph_state
 from fabricpc.nodes.transformer_v2 import create_deep_transformer
+from fabricpc.utils.data import CharDataLoader
+import optax
 
+# --- Data ---
 
-# ----------------------------------------------------------------------
-# LOAD LOCAL DATA
-# ----------------------------------------------------------------------
-def load_data(path="data/tiny_shakespeare.txt"):
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Dataset file not found: {path}")
-    with open(path, "r", encoding="utf-8") as f:
-        text = f.read()
-
-    chars = sorted(list(set(text)))
-    vocab_size = len(chars)
-    char_to_ix = {ch: i for i, ch in enumerate(chars)}
-    ix_to_char = {i: ch for i, ch in enumerate(chars)}
-    data = [char_to_ix[ch] for ch in text]
-
-    return data, vocab_size, char_to_ix, ix_to_char
-
-
-def split_data(data, train_frac=0.8, val_frac=0.1):
-    N = len(data)
-    n_train = int(N * train_frac)
-    n_val = int(N * val_frac)
-
-    train_data = data[:n_train]
-    val_data = data[n_train : n_train + n_val]
-    test_data = data[n_train + n_val :]
-    return train_data, val_data, test_data
-
-
-class TextDataset(Dataset):
-    def __init__(self, data, seq_len, vocab_size):
-        self.data = data
-        self.seq_len = seq_len
-        self.vocab_size = vocab_size
-
-    def __len__(self):
-        return len(self.data) - self.seq_len - 1
-
-    def __getitem__(self, i):
-        x = torch.tensor(self.data[i : i + self.seq_len], dtype=torch.float32)
-        y = torch.tensor(self.data[i + 1 : i + self.seq_len + 1], dtype=torch.long)
-        y_one_hot = torch.nn.functional.one_hot(y, num_classes=self.vocab_size).float()
-        return x, y_one_hot
-
-
-# ----------------------------------------------------------------------
-# INITIALIZE DATA
-# ----------------------------------------------------------------------
 seq_len = 32
 
 n_devices = jax.device_count()
@@ -88,26 +33,21 @@ base_batch_size = 32
 batch_size = base_batch_size * n_devices
 print(f"Running on {n_devices} device(s). Total batch size: {batch_size}")
 
-data, vocab_size, char_to_ix, ix_to_char = load_data()
-train_data, val_data, test_data = split_data(data)
-
-train_dataset = TextDataset(train_data, seq_len, vocab_size)
-val_dataset = TextDataset(val_data, seq_len, vocab_size)
-test_dataset = TextDataset(test_data, seq_len, vocab_size)
-
-train_loader = DataLoader(
-    train_dataset, batch_size=batch_size, shuffle=True, drop_last=True
+train_loader = CharDataLoader(
+    "train", seq_len=seq_len, batch_size=batch_size, shuffle=True, seed=42
 )
-val_loader = DataLoader(
-    val_dataset, batch_size=batch_size, shuffle=False, drop_last=True
+val_loader = CharDataLoader(
+    "validation", seq_len=seq_len, batch_size=batch_size, shuffle=False
 )
-test_loader = DataLoader(
-    test_dataset, batch_size=batch_size, shuffle=False, drop_last=True
+test_loader = CharDataLoader(
+    "test", seq_len=seq_len, batch_size=batch_size, shuffle=False
 )
+vocab_size = train_loader.vocab_size
+char_to_ix = train_loader.char_to_idx
+ix_to_char = train_loader.idx_to_char
 
-# ----------------------------------------------------------------------
-# MODEL ARCHITECTURE
-# ----------------------------------------------------------------------
+# --- Model ---
+
 structure = create_deep_transformer(
     depth=4,
     embed_dim=64,
@@ -115,12 +55,12 @@ structure = create_deep_transformer(
     mlp_dim=128,
     seq_len=seq_len,
     vocab_size=vocab_size,
+    inference=InferenceSGD(eta_infer=0.033195052120243505, infer_steps=17),
     weight_init={"type": "normal", "std": 0.04402197307582635},
 )
 
-# ----------------------------------------------------------------------
-# INIT PARAMS & TRAIN
-# ----------------------------------------------------------------------
+# --- Train & Evaluate ---
+
 master_rng_key = jax.random.PRNGKey(42)
 graph_key, train_key, eval_key = jax.random.split(master_rng_key, 3)
 
@@ -128,17 +68,14 @@ params = initialize_params(structure, graph_key)
 
 train_config = {
     "num_epochs": 5,
-    "infer_steps": 17,
-    "eta_infer": 0.033195052120243505,
-    "optimizer": {"type": "adam", "lr": 1e-5},
 }
+optimizer = optax.adam(1e-5)
 
-print(f"Vocab Size: {vocab_size} | Training on local tiny_shakespeare.txt...")
+print(f"Vocab size: {vocab_size}")
 trained_params = train_pcn_multi_gpu(
-    params, structure, train_loader, train_config, train_key, verbose=True
+    params, structure, train_loader, optimizer, train_config, train_key, verbose=True
 )
 
-# Evaluate
 metrics = evaluate_transformer_multi_gpu(
     trained_params, structure, test_loader, train_config, eval_key
 )
@@ -149,9 +86,9 @@ print(f"Test Perplexity: {metrics['perplexity']:.2f}")
 print(f"Test Energy:     {metrics['energy']:.4f}")
 
 
-# ----------------------------------------------------------------------
-# TEXT GENERATION
-# ----------------------------------------------------------------------
+# --- Text Generation ---
+
+
 def generate(
     trained_params, structure, start_text="ROMEO: ", length=50, temperature=0.8
 ):
@@ -174,14 +111,7 @@ def generate(
             structure, batch_size, gen_key, clamps=inputs, params=trained_params
         )
 
-        final_state = run_inference(
-            trained_params,
-            state,
-            clamps=inputs,
-            structure=structure,
-            infer_steps=train_config["infer_steps"],
-            eta_infer=train_config["eta_infer"],
-        )
+        final_state = run_inference(trained_params, state, inputs, structure)
 
         logits_node_state = final_state.nodes["logits"]
         last_step_logits = logits_node_state.z_latent[0, -1, :]

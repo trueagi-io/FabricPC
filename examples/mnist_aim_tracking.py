@@ -1,26 +1,12 @@
 """
 MNIST with Aim Experiment Tracking
-==================================
 
-This example demonstrates comprehensive experiment tracking for predictive
-coding networks using Aim. It tracks:
+Tracks batch/epoch energy, weight/latent distributions, per-node energy,
+and inference dynamics using Aim.
 
-1. Batch and epoch-level energy/accuracy metrics
-2. Weight distributions per layer per epoch
-3. Latent state distributions (z_latent, z_mu, pre_activation)
-4. Per-node energy values
-5. Inference dynamics: how energy and gradients evolve over inference steps
+After running, launch the Aim UI with:  aim up
 
-This provides deep insights for debugging and tuning predictive coding models.
-
-After running, launch the Aim UI with:
-    aim up
-
-Click on the link returned in the console to explore the dashboard.
-Be sure to run the python script and start aim from the same working directory to ensure the tracking data is correctly linked.
-
-Requirements:
-    pip install fabricpc[viz]  # Includes aim
+Requirements: pip install fabricpc[viz]
 """
 
 from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
@@ -66,14 +52,11 @@ else:
     TRACKING_ENABLED = True
     print("Aim is available. Experiment tracking enabled.")
 
-# Set random seeds
 jax.config.update("jax_default_prng_impl", "threefry2x32")
 master_rng_key = jax.random.PRNGKey(42)
 graph_key, train_key, eval_key = jax.random.split(master_rng_key, 3)
 
-# ==============================================================================
-# NETWORK CONFIGURATION
-# ==============================================================================
+# --- Network ---
 
 pixels = IdentityNode(shape=(784,), name="pixels")
 h1 = Linear(
@@ -124,26 +107,14 @@ batch_size = 200
 num_epochs = 1
 INFERENCE_COLLECT_EVERY = 5  # Inference history collection interval
 
-# ==============================================================================
-# CREATE MODEL
-# ==============================================================================
-
-print("=" * 70)
-print("MNIST with Aim Experiment Tracking")
-print("=" * 70)
+# --- Create Model ---
 
 params = initialize_params(structure, graph_key)
 num_params = sum(p.size for p in jax.tree_util.tree_leaves(params))
 
-print(f"\n[Model Architecture]")
-print(f"  Nodes: {len(structure.nodes)}")
-print(f"  Total parameters: {num_params:,}")
+print(f"{len(structure.nodes)} nodes, {num_params:,} parameters")
 
-# ==============================================================================
-# LOAD DATA
-# ==============================================================================
-
-print(f"\n[Data Loading]")
+# --- Data ---
 
 train_loader = MnistLoader(
     "train", batch_size=batch_size, tensor_format="flat", shuffle=True, seed=42
@@ -152,17 +123,9 @@ test_loader = MnistLoader(
     "test", batch_size=batch_size, tensor_format="flat", shuffle=False
 )
 
-print(f"  Train samples: {train_loader.num_examples:,}")
-print(f"  Test samples: {test_loader.num_examples:,}")
-print(f"  Batch size: {batch_size}")
-
-# ==============================================================================
-# SETUP AIM TRACKING
-# ==============================================================================
+# --- Aim Tracking Setup ---
 
 if TRACKING_ENABLED:
-    print(f"\n[Setting up Aim Tracking]")
-
     tracking_config = TrackingConfig(
         experiment_name="mnist_pcn_tracking",
         run_name=f"5layer_lr0.001_infer{structure.config['inference'].config['infer_steps']}",
@@ -177,7 +140,6 @@ if TRACKING_ENABLED:
 
     tracker = AimExperimentTracker(config=tracking_config)
 
-    # Log hyperparameters
     tracker.log_hyperparams(
         {
             "model_config": {
@@ -194,25 +156,14 @@ if TRACKING_ENABLED:
         }
     )
 
-    # Log graph structure
     tracker.log_graph_structure(structure)
-    print("  Tracker initialized successfully")
 else:
     tracker = None
 
-# ==============================================================================
-# TRAINING WITH DETAILED TRACKING
-# ==============================================================================
-
-print(f"\n[Training Configuration]")
-print(f"  Optimizer: adamw")
-print(f"  Learning rate: 0.001")
-print(f"  Inference steps: {structure.config['inference'].config['infer_steps']}")
+# --- Training ---
 
 opt_state = optimizer.init(params)
 
-# JIT compile training step with history
-print(f"\n[Compiling JIT functions...]")
 jit_train_step = jax.jit(
     lambda p, o, b, k: train_step_with_history(
         p,
@@ -225,14 +176,12 @@ jit_train_step = jax.jit(
     )
 )
 
-print(f"\n[Training for {num_epochs} epochs with full tracking]")
-print("  (First batch will be slow due to JIT compilation)\n")
+print(f"Training for {num_epochs} epochs (JIT compilation on first batch)...\n")
 
 best_accuracy = 0.0
 training_history = []
 global_step = 0
 
-# Prepare RNG keys
 num_batches = len(train_loader)
 all_rng_keys = jax.random.split(train_key, num_epochs * num_batches)
 all_rng_keys = all_rng_keys.reshape((num_epochs, num_batches, 2))
@@ -245,12 +194,10 @@ for epoch in range(num_epochs):
         batch = {"x": jnp.array(x), "y": y}
 
         energy = 0
-        # Training step with inference history (returns stacked metrics)
         params, opt_state, energy, final_state, stacked_history = jit_train_step(
             params, opt_state, batch, all_rng_keys[epoch, batch_idx]
         )
 
-        # Unstack inference history outside of JIT (converts JAX arrays to Python floats)
         inference_history = unstack_inference_history(
             stacked_history, collect_every=INFERENCE_COLLECT_EVERY
         )
@@ -258,23 +205,17 @@ for epoch in range(num_epochs):
         normalized_energy = float(energy) / batch_size
         epoch_energies.append(normalized_energy)
 
-        # Track with Aim
         if tracker is not None:
-            # Batch energy
             tracker.track_batch_energy(normalized_energy, epoch=epoch, batch=batch_idx)
-
-            # Per-node energy
             tracker.track_batch_energy_per_node(
                 final_state, structure, epoch=epoch, batch=batch_idx
             )
 
-            # State stats/distributions (at configured frequency)
             if batch_idx % tracker.config.tracking_every_n_batches == 0:
                 tracker.track_state(
                     final_state, epoch=epoch, batch=batch_idx, infer_step=0
                 )
 
-            # Inference dynamics (at configured frequency)
             if batch_idx % tracker.config.tracking_every_n_batches == 0:
                 for step_idx, step_metrics in enumerate(inference_history):
                     for node_name, metrics in step_metrics.items():
@@ -302,13 +243,11 @@ for epoch in range(num_epochs):
 
         global_step += 1
 
-        # Progress update
         n_batch_update = 100
         if (batch_idx + 1) % n_batch_update == 0:
             avg_energy = sum(epoch_energies[-n_batch_update:]) / len(
                 epoch_energies[-n_batch_update:]
             )
-            # Summarize inference convergence
             convergence = summarize_inference_convergence(inference_history)
             h1_final = convergence.get("h1", {}).get("final_energy", 0)
             print(
@@ -321,16 +260,13 @@ for epoch in range(num_epochs):
     epoch_time = time.time() - epoch_start
     avg_energy = sum(epoch_energies) / len(epoch_energies)
 
-    # Track weight distributions at end of epoch
     if tracker is not None:
         tracker.track_weight_distributions(params, structure, epoch=epoch, batch=0)
 
-    # Evaluate on test set
     epoch_eval_key, eval_key = jax.random.split(eval_key)
     metrics = evaluate_pcn(params, structure, test_loader, train_config, epoch_eval_key)
     accuracy = metrics["accuracy"] * 100
 
-    # Track epoch metrics
     if tracker is not None:
         tracker.track_epoch_metrics(
             {"energy": avg_energy, "accuracy": accuracy / 100},
@@ -338,7 +274,6 @@ for epoch in range(num_epochs):
             subset="val",
         )
 
-    # Track best model
     if accuracy > best_accuracy:
         best_accuracy = accuracy
         best_params = params
@@ -360,16 +295,12 @@ for epoch in range(num_epochs):
         }
     )
 
-# ==============================================================================
-# FINAL RESULTS
-# ==============================================================================
+# --- Results ---
 
-print(f"\n[Final Results]")
-print(f"  Best accuracy: {best_accuracy:.2f}%")
-print(f"  Final accuracy: {training_history[-1]['accuracy']:.2f}%")
-print(f"  Total training time: {sum(h['time'] for h in training_history):.1f}s")
+print(f"\nBest accuracy:  {best_accuracy:.2f}%")
+print(f"Final accuracy: {training_history[-1]['accuracy']:.2f}%")
+print(f"Total time:     {sum(h['time'] for h in training_history):.1f}s")
 
-# Track final metrics and close
 if tracker is not None:
     tracker.track_epoch_metrics(
         {"final_best_accuracy": best_accuracy / 100},
@@ -377,14 +308,4 @@ if tracker is not None:
         subset="final",
     )
     tracker.close()
-    print("\n[Experiment Tracking Complete]")
-    print("  Run 'aim up' to view the dashboard")
-    print("  Tracked metrics:")
-    print("    - Batch-level: energy, per-node energy")
-    print("    - Epoch-level: energy, accuracy, weight distributions")
-    print("    - State: z_latent, z_mu, energy (stats + distributions) per node")
-    print("    - Inference dynamics: energy convergence per step")
-
-print("\n" + "=" * 70)
-print("Training Complete!")
-print("=" * 70)
+    print("\nRun 'aim up' to view the dashboard.")

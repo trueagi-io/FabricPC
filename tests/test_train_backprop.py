@@ -3,11 +3,6 @@
 Test suite for backprop training functions: train_backprop and evaluate_backprop.
 """
 
-import os
-
-os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
-os.environ.setdefault("JAX_TRACEBACK_FILTERING", "off")
-
 import pytest
 import jax
 import jax.numpy as jnp
@@ -25,8 +20,6 @@ from fabricpc.training.train_backprop import (
     compute_forward_pass,
     validate_feedforward_init,
 )
-
-jax.config.update("jax_platform_name", "cpu")
 
 
 class MockDataLoader:
@@ -49,11 +42,6 @@ class MockDataLoader:
         item = self.data[self._index]
         self._index += 1
         return item
-
-
-@pytest.fixture
-def rng_key():
-    return jax.random.PRNGKey(42)
 
 
 @pytest.fixture

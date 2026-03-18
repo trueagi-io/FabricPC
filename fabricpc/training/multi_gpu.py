@@ -23,6 +23,7 @@ import optax
 
 from fabricpc.core.types import GraphParams, GraphState, GraphStructure
 from fabricpc.graph.state_initializer import initialize_graph_state
+from fabricpc.core.inference import run_inference
 from fabricpc.training.train import get_graph_param_gradient
 
 
@@ -333,9 +334,6 @@ def evaluate_transformer_multi_gpu(
     # Replicate params across devices
     params = replicate_params(params, n_devices)
 
-    infer_steps = config.get("infer_steps", 20)
-    eta_infer = config.get("eta_infer", 0.1)
-
     # Handle loader length safely
     try:
         num_batches = len(test_loader)
@@ -363,9 +361,7 @@ def evaluate_transformer_multi_gpu(
             structure, batch_size_, randgen_key, clamps=clamps, params=params_obj
         )
 
-        final_state = run_inference(
-            params_obj, state, clamps, structure, infer_steps, eta_infer
-        )
+        final_state = run_inference(params_obj, state, clamps, structure)
         return final_state
 
     pmap_inference = jax.pmap(inference_fn, axis_name="devices")

@@ -38,18 +38,18 @@ FABRICPC_DISABLE_TRITON_GEMM=1 python examples/mnist_demo.py --optimizer adam
 
 **Expected Results**:
 ```
-Epoch 1/20, energy: 0.7254
-Epoch 2/20, energy: 0.1355
-Epoch 3/20, energy: 0.0688
-Epoch 4/20, energy: 0.0420
+Epoch 1/20, energy: 0.3991
+Epoch 2/20, energy: 0.0994
+Epoch 3/20, energy: 0.0566
+Epoch 4/20, energy: 0.0374
 ...
-Epoch 18/20, energy: 0.0029
-Epoch 19/20, energy: 0.0027
-Epoch 20/20, energy: 0.0026
-Avg Training time: 1.37 seconds per epoch
+Epoch 18/20, energy: 0.0026
+Epoch 19/20, energy: 0.0023
+Epoch 20/20, energy: 0.0020
+Avg Training time: 1.30 seconds per epoch
 
 Evaluating...
-Test Accuracy: 98.05%
+Test Accuracy: 98.14%
 ```
 
 ### `PC_backprop_compare.py`

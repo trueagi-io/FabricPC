@@ -192,23 +192,25 @@ class XavierInitializer(InitializerBase):
         distribution: "normal" or "uniform" (default: "normal")
     """
 
-    def __init__(self, distribution="normal"):
-        super().__init__(distribution=distribution)
+    def __init__(self, distribution="normal", gain=1.0):
+        super().__init__(distribution=distribution, gain=gain)
 
     @staticmethod
     def initialize(
         key: jax.Array, shape: Tuple[int, ...], config: Dict[str, Any] = None
     ) -> jnp.ndarray:
         """Initialize using Xavier/Glorot scheme."""
-        distribution = config.get("distribution", "normal") if config else "normal"
+        config = config or {}
+        distribution = config.get("distribution", "normal")
+        gain = config.get("gain", 1.0)
         fan_in = shape[0]
         fan_out = shape[1] if len(shape) > 1 else shape[0]
 
         if distribution == "uniform":
-            limit = jnp.sqrt(6.0 / (fan_in + fan_out))
+            limit = gain * jnp.sqrt(6.0 / (fan_in + fan_out))
             return jax.random.uniform(key, shape, minval=-limit, maxval=limit)
         else:  # normal
-            std = jnp.sqrt(2.0 / (fan_in + fan_out))
+            std = gain * jnp.sqrt(2.0 / (fan_in + fan_out))
             return std * jax.random.normal(key, shape)
 
 
@@ -234,10 +236,19 @@ class KaimingInitializer(InitializerBase):
     """
 
     def __init__(
-        self, mode="fan_in", nonlinearity="relu", distribution="normal", a=0.01
+        self,
+        mode="fan_in",
+        nonlinearity="relu",
+        distribution="normal",
+        a=0.01,
+        gain=1.0,
     ):
         super().__init__(
-            mode=mode, nonlinearity=nonlinearity, distribution=distribution, a=a
+            mode=mode,
+            nonlinearity=nonlinearity,
+            distribution=distribution,
+            a=a,
+            gain=gain,
         )
 
     @staticmethod
@@ -249,6 +260,7 @@ class KaimingInitializer(InitializerBase):
         mode = config.get("mode", "fan_in")
         nonlinearity = config.get("nonlinearity", "relu")
         distribution = config.get("distribution", "normal")
+        gain_scaling = config.get("gain", 1.0)
 
         if mode == "fan_out":
             fan = shape[1] if len(shape) > 1 else shape[0]
@@ -262,10 +274,10 @@ class KaimingInitializer(InitializerBase):
             gain = jnp.sqrt(2.0)
 
         if distribution == "uniform":
-            limit = gain * jnp.sqrt(3.0 / fan)
+            limit = gain_scaling * gain * jnp.sqrt(3.0 / fan)
             return jax.random.uniform(key, shape, minval=-limit, maxval=limit)
         else:  # normal
-            std = gain / jnp.sqrt(fan)
+            std = gain_scaling * gain / jnp.sqrt(fan)
             return std * jax.random.normal(key, shape)
 
 

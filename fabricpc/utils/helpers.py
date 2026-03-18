@@ -40,7 +40,7 @@ def set_jax_flags_before_importing_jax(jax_platforms: str = "cuda"):
             _xla_flags = (_xla_flags + " --xla_gpu_enable_triton_gemm=false").strip()
 
     # Set XLA flags for good performance and reproducibility
-    _xla_flags = "--xla_gpu_autotune_level=1 --xla_gpu_enable_async_all_reduce=false"
+    _xla_flags = (_xla_flags + " --xla_gpu_autotune_level=1").strip()
 
     os.environ["XLA_FLAGS"] = _xla_flags
 
