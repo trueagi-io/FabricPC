@@ -13,13 +13,14 @@ User Extensibility
 Users can create custom initializers by extending InitializerBase:
 
     class MyInitializer(InitializerBase):
-        def __init__(self, scale=1.0):
-            super().__init__(scale=scale)
+        def __init__(self, gain=1.0):
+            super().__init__(gain=gain)
 
         @staticmethod
         def initialize(key, shape, config=None):
-            scale = config.get("scale", 1.0) if config else 1.0
-            return scale * jax.random.normal(key, shape)
+            config = config or {}
+            gain = config.get("gain", 1.0)
+            return gain * jax.random.normal(key, shape)
 
 Usage
 -----
@@ -53,16 +54,6 @@ class InitializerBase(ABC):
 
     Required methods:
         - initialize(): Generate initialized array
-
-    Example implementation:
-        class MyInitializer(InitializerBase):
-            def __init__(self, scale=1.0):
-                super().__init__(scale=scale)
-
-            @staticmethod
-            def initialize(key, shape, config=None):
-                scale = config.get("scale", 1.0) if config else 1.0
-                return scale * jax.random.normal(key, shape)
     """
 
     def __init__(self, **config):
@@ -99,7 +90,7 @@ class ZerosInitializer(InitializerBase):
     Useful for biases or initial states where zero is a sensible default.
     """
 
-    def __init__(self):
+    def __init__(self, gain=1.0):
         super().__init__()
 
     @staticmethod
@@ -117,15 +108,17 @@ class OnesInitializer(InitializerBase):
     Useful for scaling factors or multiplicative parameters.
     """
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, gain=1.0):
+        super().__init__(gain=gain)
 
     @staticmethod
     def initialize(
         key: jax.Array, shape: Tuple[int, ...], config: Dict[str, Any] = None
     ) -> jnp.ndarray:
+        config = config or {}
+        gain = config.get("gain", 1.0)
         """Return array of ones."""
-        return jnp.ones(shape)
+        return gain * jnp.ones(shape)
 
 
 class NormalInitializer(InitializerBase):
@@ -139,17 +132,19 @@ class NormalInitializer(InitializerBase):
         std: Standard deviation (default: 0.05)
     """
 
-    def __init__(self, mean=0.0, std=0.05):
-        super().__init__(mean=mean, std=std)
+    def __init__(self, mean=0.0, std=0.05, gain=1.0):
+        super().__init__(mean=mean, std=std, gain=gain)
 
     @staticmethod
     def initialize(
         key: jax.Array, shape: Tuple[int, ...], config: Dict[str, Any] = None
     ) -> jnp.ndarray:
         """Initialize from normal distribution: mean + std * N(0, 1)."""
-        mean = config.get("mean", 0.0) if config else 0.0
-        std = config.get("std", 0.05) if config else 0.05
-        return mean + std * jax.random.normal(key, shape)
+        config = config or {}
+        mean = config.get("mean", 0.0)
+        std = config.get("std", 0.05)
+        gain = config.get("gain", 1.0)
+        return mean + gain * std * jax.random.normal(key, shape)
 
 
 class UniformInitializer(InitializerBase):
