@@ -317,6 +317,7 @@ class NodeBase(ABC):
         state: NodeState,
         node_info: NodeInfo,
         is_clamped: bool,
+        var_inputs: Dict[str, jnp.ndarray] = None,
     ) -> Tuple[NodeState, Dict[str, jnp.ndarray]]:
         """
         Forward pass: updates node state and computes gradients w.r.t. inputs.

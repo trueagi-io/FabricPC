@@ -101,7 +101,7 @@ class EmbeddingNode(NodeBase):
         return jnp.sum(state.energy), state
 
     @staticmethod
-    def forward_inference(params, inputs, state, node_info, is_clamped=False):
+    def forward_inference(params, inputs, state, node_info, is_clamped=False, var_inputs=None):
         _, new_state = node_info.node_class.forward(params, inputs, state, node_info)
         input_grads = {
             edge_key: jnp.zeros_like(inp) for edge_key, inp in inputs.items()

@@ -58,6 +58,24 @@ def gather_inputs(
     return in_edges_data
 
 
+def gather_variances(
+    node_info: NodeInfo,
+    structure: GraphStructure,
+    state: GraphState,
+) -> Dict[str, jax.Array]:
+    """
+    Gather propagated variances (z_var) from source nodes.
+    Parallel to gather_inputs — used by Bayesian nodes for moment propagation.
+    Deterministic nodes carry z_var=zeros, so this is safe to call for any node.
+    """
+    var_inputs = {}
+    for edge_key in node_info.in_edges:
+        edge_info = structure.edges[edge_key]
+        source_name = edge_info.source
+        var_inputs[edge_key] = state.nodes[source_name].z_var
+    return var_inputs
+
+
 # =============================================================================
 # Inference Base Class
 # =============================================================================
@@ -145,8 +163,9 @@ class InferenceBase(ABC):
             node_state = state.nodes[node_name]
             node_params = params.nodes[node_name]
 
-            # Gather inputs for each slot
+            # Gather inputs and propagated variances for each slot
             in_edges_data = gather_inputs(node_info, structure, state)
+            var_inputs = gather_variances(node_info, structure, state)
 
             # Compute predictions, error, and latent gradient contributions
             node_state, inedge_grads = node_class.forward_inference(
@@ -155,6 +174,7 @@ class InferenceBase(ABC):
                 node_state,
                 node_info,
                 is_clamped=(node_name in clamps),
+                var_inputs=var_inputs,
             )
 
             # Update the graph state with node state containing errors and energy

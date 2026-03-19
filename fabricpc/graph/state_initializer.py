@@ -141,6 +141,7 @@ class GlobalStateInit(StateInitBase):
             node_state_dict[node_name] = NodeState(
                 z_latent=z_latent,
                 z_mu=jnp.zeros(shape),
+                z_var=jnp.zeros(shape),
                 error=jnp.zeros(shape),
                 energy=jnp.zeros((batch_size,)),
                 pre_activation=jnp.zeros(shape),
@@ -191,6 +192,7 @@ class NodeDistributionStateInit(StateInitBase):
             node_state_dict[node_name] = NodeState(
                 z_latent=z_latent,
                 z_mu=jnp.zeros(shape),
+                z_var=jnp.zeros(shape),
                 error=jnp.zeros(shape),
                 energy=jnp.zeros((batch_size,)),
                 pre_activation=jnp.zeros(shape),
@@ -250,6 +252,7 @@ class FeedforwardStateInit(StateInitBase):
             node_state_dict[node_name] = NodeState(
                 z_latent=z_latent,
                 z_mu=jnp.zeros(shape),
+                z_var=jnp.zeros(shape),
                 error=jnp.zeros(shape),
                 energy=jnp.zeros((batch_size,)),
                 pre_activation=jnp.zeros(shape),

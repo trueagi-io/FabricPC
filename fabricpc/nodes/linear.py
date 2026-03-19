@@ -266,6 +266,7 @@ class LinearExplicitGrad(Linear):
         state: NodeState,
         node_info: NodeInfo,
         is_clamped: bool,
+        var_inputs: Dict[str, jnp.ndarray] = None,
     ) -> Tuple[NodeState, Dict[str, jnp.ndarray]]:
         """Forward pass with explicit gradient computation."""
         node_class = node_info.node_class

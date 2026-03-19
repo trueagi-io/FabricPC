@@ -102,6 +102,9 @@ class NodeState(NamedTuple):
     Attributes:
         z_latent: Latent states (what the network infers)
         z_mu: Predicted expectations (what the network predicts)
+        z_var: Propagated activation variance from moment propagation.
+               Zero for deterministic nodes. Bayesian nodes write their
+               output variance here so it can flow to downstream nodes.
         error: Prediction errors (z_latent - z_mu)
         energy: Energy
         pre_activation: Pre-activation values (before activation function)
@@ -110,6 +113,7 @@ class NodeState(NamedTuple):
 
     z_latent: jnp.ndarray
     z_mu: jnp.ndarray
+    z_var: jnp.ndarray  # propagated variance; zeros for deterministic nodes
     error: jnp.ndarray
     energy: jnp.ndarray  # per-sample energy, shape (batch_size,)
     pre_activation: jnp.ndarray
@@ -224,6 +228,7 @@ tree_util.register_pytree_node(
         (
             ns.z_latent,
             ns.z_mu,
+            ns.z_var,
             ns.error,
             ns.energy,
             ns.pre_activation,
