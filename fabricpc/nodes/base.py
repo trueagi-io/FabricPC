@@ -451,8 +451,11 @@ class NodeBase(ABC):
         energy_cls = type(energy_obj)
         config = energy_obj.config
 
-        energy = energy_cls.energy(state.z_latent, state.z_mu, config)
-        grad = energy_cls.grad_latent(state.z_latent, state.z_mu, config)
+        context = {"node_info": node_info}
+        energy = energy_cls.energy(state.z_latent, state.z_mu, config, context=context)
+        grad = energy_cls.grad_latent(
+            state.z_latent, state.z_mu, config, context=context
+        )
 
         latent_grad = state.latent_grad + grad
         state = state._replace(energy=energy, latent_grad=latent_grad)

@@ -16,11 +16,15 @@ from fabricpc.core.energy import (
     CrossEntropyEnergy,
     LaplacianEnergy,
     KLDivergenceEnergy,
+    NavierStokesEnergy,
 )
 from fabricpc.nodes import Linear
+from fabricpc.nodes.identity import IdentityNode
 from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params
-from fabricpc.core.inference import InferenceSGD
+from fabricpc.graph import initialize_params, initialize_graph_state
+from fabricpc.core.activations import IdentityActivation
+from fabricpc.core.inference import InferenceSGD, run_inference
+from fabricpc.graph.graph_net import compute_local_weight_gradients
 
 
 class TestGaussianEnergy:
@@ -141,13 +145,13 @@ class TestCustomEnergy:
                 super().__init__()
 
             @staticmethod
-            def energy(z_latent, z_mu, config=None):
+            def energy(z_latent, z_mu, config=None, context=None):
                 diff = z_latent - z_mu
                 axes = tuple(range(1, len(diff.shape)))
                 return jnp.sum(jnp.abs(diff), axis=axes)
 
             @staticmethod
-            def grad_latent(z_latent, z_mu, config=None):
+            def grad_latent(z_latent, z_mu, config=None, context=None):
                 return jnp.sign(z_latent - z_mu)
 
         z_latent = jnp.array([[1.0, -2.0, 3.0]])
@@ -177,3 +181,138 @@ class TestIntegration:
 
         assert isinstance(structure.nodes["input"].node_info.energy, GaussianEnergy)
         assert isinstance(structure.nodes["output"].node_info.energy, BernoulliEnergy)
+
+
+class TestNavierStokesEnergy:
+    """Test Navier-Stokes energy functional."""
+
+    @staticmethod
+    def _field_from_uvp(u, v, p):
+        return jnp.stack([u, v, p], axis=-1)[None, ...]
+
+    def test_zero_energy_for_matching_constant_divergence_free_field(self):
+        zeros = jnp.zeros((4, 4))
+        ones = jnp.ones((4, 4))
+        field = self._field_from_uvp(ones, zeros, zeros)
+        energy_obj = NavierStokesEnergy(viscosity=0.1)
+
+        energy = energy_obj.energy(field, field, energy_obj.config)
+
+        assert energy.shape == (1,)
+        assert jnp.allclose(energy, 0.0, atol=1e-6)
+
+    def test_positive_divergence_penalty(self):
+        xs = jnp.arange(4, dtype=jnp.float32)
+        u = jnp.tile(xs[None, :], (4, 1))
+        zeros = jnp.zeros((4, 4))
+        field = self._field_from_uvp(u, zeros, zeros)
+
+        energy_obj = NavierStokesEnergy(
+            viscosity=0.1,
+            data_weight=0.0,
+            latent_ns_weight=1.0,
+            prediction_ns_weight=0.0,
+        )
+        energy = energy_obj.energy(field, field, energy_obj.config)
+
+        assert energy[0] > 0
+
+    def test_positive_momentum_residual(self):
+        ys = jnp.arange(4, dtype=jnp.float32)
+        u = jnp.tile(jnp.sin(2 * jnp.pi * ys / 4)[:, None], (1, 4))
+        zeros = jnp.zeros((4, 4))
+        field = self._field_from_uvp(u, zeros, zeros)
+
+        energy_obj = NavierStokesEnergy(
+            viscosity=0.1,
+            data_weight=0.0,
+            latent_ns_weight=1.0,
+            prediction_ns_weight=0.0,
+        )
+        energy = energy_obj.energy(field, field, energy_obj.config)
+
+        assert energy[0] > 0
+
+    def test_zero_energy_when_all_weights_disabled(self):
+        zeros = jnp.zeros((4, 4, 3))
+        ones = jnp.ones((4, 4, 3))
+        z_latent = zeros[None, ...]
+        z_mu = ones[None, ...]
+
+        energy_obj = NavierStokesEnergy(
+            viscosity=0.1,
+            data_weight=0.0,
+            latent_ns_weight=0.0,
+            prediction_ns_weight=0.0,
+        )
+
+        energy = energy_obj.energy(z_latent, z_mu, energy_obj.config)
+        grad = energy_obj.grad_latent(z_latent, z_mu, energy_obj.config)
+
+        assert jnp.allclose(energy, 0.0, atol=1e-6)
+        assert jnp.allclose(grad, 0.0, atol=1e-6)
+
+    def test_validation_errors(self):
+        energy_obj = NavierStokesEnergy(viscosity=0.1)
+
+        with pytest.raises(ValueError, match="rank-4 tensors"):
+            energy_obj.energy(
+                jnp.zeros((4, 4, 3)),
+                jnp.zeros((4, 4, 3)),
+                energy_obj.config,
+            )
+
+        with pytest.raises(ValueError, match="channels for u, v, and p"):
+            energy_obj.energy(
+                jnp.zeros((1, 4, 4, 2)),
+                jnp.zeros((1, 4, 4, 2)),
+                energy_obj.config,
+            )
+
+        with pytest.raises(ValueError, match="H >= 3 and W >= 3"):
+            energy_obj.energy(
+                jnp.zeros((1, 2, 4, 3)),
+                jnp.zeros((1, 2, 4, 3)),
+                energy_obj.config,
+            )
+
+
+class TestNavierStokesIntegration:
+    """Integration tests for Navier-Stokes energy in graph training."""
+
+    def test_graph_runs_inference_and_local_gradients(self):
+        input_node = IdentityNode(shape=(4, 4, 3), name="input")
+        output_node = Linear(
+            shape=(4, 4, 3),
+            name="output",
+            activation=IdentityActivation(),
+            energy=NavierStokesEnergy(viscosity=0.1),
+        )
+
+        structure = graph(
+            nodes=[input_node, output_node],
+            edges=[Edge(source=input_node, target=output_node.slot("in"))],
+            task_map=TaskMap(x=input_node, y=output_node),
+            inference=InferenceSGD(eta_infer=0.01, infer_steps=2),
+        )
+
+        params = initialize_params(structure, jax.random.PRNGKey(0))
+        clamps = {
+            structure.task_map["x"]: jnp.ones((2, 4, 4, 3), dtype=jnp.float32),
+            structure.task_map["y"]: jnp.ones((2, 4, 4, 3), dtype=jnp.float32) * 0.5,
+        }
+
+        state = initialize_graph_state(
+            structure,
+            batch_size=2,
+            rng_key=jax.random.PRNGKey(1),
+            clamps=clamps,
+            params=params,
+        )
+        final_state = run_inference(params, state, clamps, structure)
+        grads = compute_local_weight_gradients(params, final_state, structure)
+
+        assert final_state.nodes["output"].energy.shape == (2,)
+        assert grads.nodes["output"].weights
+        for key, weight in params.nodes["output"].weights.items():
+            assert grads.nodes["output"].weights[key].shape == weight.shape

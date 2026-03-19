@@ -3,7 +3,7 @@ Energy functionals for predictive coding networks.
 
 This module provides:
 - EnergyFunctional base class with constructor-based configuration
-- Built-in energy functionals (Gaussian, Bernoulli, CrossEntropy, Laplacian, Huber, KLDivergence)
+- Built-in energy functionals (Gaussian, Bernoulli, CrossEntropy, Laplacian, Huber, KLDivergence, NavierStokes)
 
 Energy functionals define how prediction errors are quantified into scalar energy
 values, which drives both inference (latent state updates) and learning (weight updates).
@@ -17,13 +17,13 @@ Users can create custom energy functionals by extending EnergyFunctional:
             super().__init__(temperature=temperature)
 
         @staticmethod
-        def energy(z_latent, z_mu, config=None):
+        def energy(z_latent, z_mu, config=None, context=None):
             temp = config.get("temperature", 1.0) if config else 1.0
             diff = z_latent - z_mu
             return 0.5 * jnp.sum(diff ** 2, axis=-1) / temp
 
         @staticmethod
-        def grad_latent(z_latent, z_mu, config=None):
+        def grad_latent(z_latent, z_mu, config=None, context=None):
             temp = config.get("temperature", 1.0) if config else 1.0
             return (z_latent - z_mu) / temp
 
@@ -39,11 +39,8 @@ import types
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Tuple
 
+import jax
 import jax.numpy as jnp
-
-# =============================================================================
-# Energy Functional Base Class
-# =============================================================================
 
 
 class EnergyFunctional(ABC):
@@ -59,31 +56,18 @@ class EnergyFunctional(ABC):
     Required methods:
         - energy(): Compute E(z_latent, z_mu) per sample
         - grad_latent(): Compute dE/dz_latent
-
-    Example implementation:
-        class MyEnergy(EnergyFunctional):
-            def __init__(self, temperature=1.0):
-                super().__init__(temperature=temperature)
-
-            @staticmethod
-            def energy(z_latent, z_mu, config=None):
-                temp = config.get("temperature", 1.0) if config else 1.0
-                diff = z_latent - z_mu
-                return 0.5 * jnp.sum(diff ** 2, axis=-1) / temp
-
-            @staticmethod
-            def grad_latent(z_latent, z_mu, config=None):
-                temp = config.get("temperature", 1.0) if config else 1.0
-                return (z_latent - z_mu) / temp
     """
 
     def __init__(self, **config):
-        self.config = types.MappingProxyType(config)  # Immutable dictionary
+        self.config = types.MappingProxyType(config)
 
     @staticmethod
     @abstractmethod
     def energy(
-        z_latent: jnp.ndarray, z_mu: jnp.ndarray, config: Dict[str, Any] = None
+        z_latent: jnp.ndarray,
+        z_mu: jnp.ndarray,
+        config: Dict[str, Any] = None,
+        context: Dict[str, Any] = None,
     ) -> jnp.ndarray:
         """
         Compute energy E(z_latent, z_mu).
@@ -92,19 +76,20 @@ class EnergyFunctional(ABC):
             z_latent: Latent states, shape (batch, *dims)
             z_mu: Predicted expectations, shape (batch, *dims)
             config: Optional configuration dict for energy parameters
+            context: Optional runtime metadata (for example node_info)
 
         Returns:
             Energy per sample, shape (batch,)
-
-        Note:
-            Should sum over all non-batch dimensions to produce per-sample energy.
         """
         pass
 
     @staticmethod
     @abstractmethod
     def grad_latent(
-        z_latent: jnp.ndarray, z_mu: jnp.ndarray, config: Dict[str, Any] = None
+        z_latent: jnp.ndarray,
+        z_mu: jnp.ndarray,
+        config: Dict[str, Any] = None,
+        context: Dict[str, Any] = None,
     ) -> jnp.ndarray:
         """
         Compute gradient dE/dz_latent of the node's self latent state.
@@ -113,343 +98,383 @@ class EnergyFunctional(ABC):
             z_latent: Latent states, shape (batch, *dims)
             z_mu: Predicted expectations, shape (batch, *dims)
             config: Optional configuration dict for energy parameters
+            context: Optional runtime metadata (for example node_info)
 
         Returns:
             Gradient w.r.t. z_latent, same shape as z_latent
-
-        Note:
-            This is the signal used to update latent states during inference:
-            z_latent_new = z_latent - eta * grad_latent(z_latent, z_mu)
         """
         pass
 
 
-# =============================================================================
-# Built-in Energy Functionals
-# =============================================================================
+def _sum_non_batch(x: jnp.ndarray) -> jnp.ndarray:
+    axes_to_sum = tuple(range(1, x.ndim))
+    return jnp.sum(x, axis=axes_to_sum)
 
 
 class GaussianEnergy(EnergyFunctional):
-    """
-    Gaussian (quadratic) energy functional.
-
-    E = (1/2sigma^2) * ||z - mu||^2
-
-    This is the standard MSE-based energy, equivalent to assuming Gaussian
-    distributions for predictions with fixed variance.
-
-    This is the DEFAULT energy functional if none is specified.
-
-    Args:
-        precision: 1/sigma^2 (default: 1.0). Higher values = sharper distributions.
-    """
+    """Gaussian (quadratic) energy functional."""
 
     def __init__(self, precision=1.0):
         super().__init__(precision=precision)
 
     @staticmethod
     def energy(
-        z_latent: jnp.ndarray, z_mu: jnp.ndarray, config: Dict[str, Any] = None
+        z_latent: jnp.ndarray,
+        z_mu: jnp.ndarray,
+        config: Dict[str, Any] = None,
+        context: Dict[str, Any] = None,
     ) -> jnp.ndarray:
-        """
-        Compute Gaussian energy: E = (precision/2) * ||z - mu||^2
-
-        Sums over all non-batch dimensions.
-        """
         precision = config.get("precision", 1.0) if config else 1.0
         diff = z_latent - z_mu
-        # Sum over all non-batch dimensions
-        axes_to_sum = tuple(range(1, len(diff.shape)))
-        return 0.5 * precision * jnp.sum(diff**2, axis=axes_to_sum)
+        return 0.5 * precision * _sum_non_batch(diff**2)
 
     @staticmethod
     def grad_latent(
-        z_latent: jnp.ndarray, z_mu: jnp.ndarray, config: Dict[str, Any] = None
+        z_latent: jnp.ndarray,
+        z_mu: jnp.ndarray,
+        config: Dict[str, Any] = None,
+        context: Dict[str, Any] = None,
     ) -> jnp.ndarray:
-        """
-        Compute gradient: dE/dz = precision * (z - mu)
-        """
         precision = config.get("precision", 1.0) if config else 1.0
         return precision * (z_latent - z_mu)
 
 
 class BernoulliEnergy(EnergyFunctional):
-    """
-    Bernoulli (binary cross-entropy) energy functional.
-
-    E = -sum[z*log(mu) + (1-z)*log(1-mu)]
-
-    Use for binary outputs where mu represents probabilities in [0, 1].
-    The target z_latent should be clamped to binary values (0 or 1).
-
-    Args:
-        eps: Small constant for numerical stability (default: 1e-7)
-    """
+    """Bernoulli (binary cross-entropy) energy functional."""
 
     def __init__(self, eps=1e-7):
         super().__init__(eps=eps)
 
     @staticmethod
     def energy(
-        z_latent: jnp.ndarray, z_mu: jnp.ndarray, config: Dict[str, Any] = None
+        z_latent: jnp.ndarray,
+        z_mu: jnp.ndarray,
+        config: Dict[str, Any] = None,
+        context: Dict[str, Any] = None,
     ) -> jnp.ndarray:
-        """
-        Compute Bernoulli (BCE) energy: E = -sum[z*log(mu) + (1-z)*log(1-mu)]
-        """
         eps = config.get("eps", 1e-7) if config else 1e-7
         z_mu_safe = jnp.clip(z_mu, eps, 1 - eps)
-
         bce = -(z_latent * jnp.log(z_mu_safe) + (1 - z_latent) * jnp.log(1 - z_mu_safe))
-
-        # Sum over all non-batch dimensions
-        axes_to_sum = tuple(range(1, len(bce.shape)))
-        return jnp.sum(bce, axis=axes_to_sum)
+        return _sum_non_batch(bce)
 
     @staticmethod
     def grad_latent(
-        z_latent: jnp.ndarray, z_mu: jnp.ndarray, config: Dict[str, Any] = None
+        z_latent: jnp.ndarray,
+        z_mu: jnp.ndarray,
+        config: Dict[str, Any] = None,
+        context: Dict[str, Any] = None,
     ) -> jnp.ndarray:
-        """
-        Compute gradient: dE/dz = -log(mu) + log(1-mu) = log((1-mu)/mu)
-
-        Note: In standard PC with clamped targets, this gradient is used
-        to propagate errors backward. For binary targets, the gradient
-        pushes z toward z_mu.
-        """
         eps = config.get("eps", 1e-7) if config else 1e-7
         z_mu_safe = jnp.clip(z_mu, eps, 1 - eps)
-
-        # dBCE/dz = -log(mu) + log(1-mu)
         return -jnp.log(z_mu_safe) + jnp.log(1 - z_mu_safe)
 
 
 class CrossEntropyEnergy(EnergyFunctional):
-    """
-    Categorical (cross-entropy) energy functional.
-
-    E = -sum z_i * log(mu_i)
-
-    Use for classification where:
-    - z_latent is one-hot encoded targets
-    - z_mu is softmax probabilities (should sum to 1 along last axis)
-
-    Args:
-        eps: Small constant for numerical stability (default: 1e-7)
-        axis: Axis along which probabilities sum to 1 (default: -1)
-    """
+    """Categorical cross-entropy energy functional."""
 
     def __init__(self, eps=1e-7, axis=-1):
         super().__init__(eps=eps, axis=axis)
 
     @staticmethod
     def energy(
-        z_latent: jnp.ndarray, z_mu: jnp.ndarray, config: Dict[str, Any] = None
+        z_latent: jnp.ndarray,
+        z_mu: jnp.ndarray,
+        config: Dict[str, Any] = None,
+        context: Dict[str, Any] = None,
     ) -> jnp.ndarray:
-        """
-        Compute cross_entropy (CE) energy: E = -sum z_i * log(mu_i)
-        """
         eps = config.get("eps", 1e-7) if config else 1e-7
         z_mu_safe = jnp.clip(z_mu, eps, 1.0)
-
         ce = -z_latent * jnp.log(z_mu_safe)
-
-        # Sum over all non-batch dimensions
-        axes_to_sum = tuple(range(1, len(ce.shape)))
-        return jnp.sum(ce, axis=axes_to_sum)
+        return _sum_non_batch(ce)
 
     @staticmethod
     def grad_latent(
-        z_latent: jnp.ndarray, z_mu: jnp.ndarray, config: Dict[str, Any] = None
+        z_latent: jnp.ndarray,
+        z_mu: jnp.ndarray,
+        config: Dict[str, Any] = None,
+        context: Dict[str, Any] = None,
     ) -> jnp.ndarray:
-        """
-        Compute gradient: dE/dz = -log(mu)
-
-        For one-hot targets with clamped latents, this gradient is used
-        to propagate classification errors backward through the network.
-        """
         eps = config.get("eps", 1e-7) if config else 1e-7
         z_mu_safe = jnp.clip(z_mu, eps, 1.0)
-
         return -jnp.log(z_mu_safe)
 
 
 class LaplacianEnergy(EnergyFunctional):
-    """
-    Laplacian (L1) energy functional.
-
-    E = (1/b) * sum|z - mu|
-
-    More robust to outliers than Gaussian. Corresponds to assuming
-    Laplace distributions for predictions.
-
-    Args:
-        scale: b parameter (default: 1.0). Larger = more tolerance.
-    """
+    """Laplacian (L1) energy functional."""
 
     def __init__(self, scale=1.0):
         super().__init__(scale=scale)
 
     @staticmethod
     def energy(
-        z_latent: jnp.ndarray, z_mu: jnp.ndarray, config: Dict[str, Any] = None
+        z_latent: jnp.ndarray,
+        z_mu: jnp.ndarray,
+        config: Dict[str, Any] = None,
+        context: Dict[str, Any] = None,
     ) -> jnp.ndarray:
-        """
-        Compute Laplacian energy: E = (1/b) * sum|z - mu|
-        """
         scale = config.get("scale", 1.0) if config else 1.0
         diff = jnp.abs(z_latent - z_mu)
-
-        axes_to_sum = tuple(range(1, len(diff.shape)))
-        return jnp.sum(diff, axis=axes_to_sum) / scale
+        return _sum_non_batch(diff) / scale
 
     @staticmethod
     def grad_latent(
-        z_latent: jnp.ndarray, z_mu: jnp.ndarray, config: Dict[str, Any] = None
+        z_latent: jnp.ndarray,
+        z_mu: jnp.ndarray,
+        config: Dict[str, Any] = None,
+        context: Dict[str, Any] = None,
     ) -> jnp.ndarray:
-        """
-        Compute gradient: dE/dz = (1/b) * sign(z - mu)
-        """
         scale = config.get("scale", 1.0) if config else 1.0
         return jnp.sign(z_latent - z_mu) / scale
 
 
 class HuberEnergy(EnergyFunctional):
-    """
-    Huber energy functional (smooth L1).
-
-    E = {  0.5 * (z - mu)^2           if |z - mu| <= delta
-        {  delta * (|z - mu| - 0.5*delta)    if |z - mu| > delta
-
-    Combines advantages of L2 (smooth gradients) and L1 (robustness).
-
-    Args:
-        delta: Transition threshold (default: 1.0)
-    """
+    """Huber energy functional."""
 
     def __init__(self, delta=1.0):
         super().__init__(delta=delta)
 
     @staticmethod
     def energy(
-        z_latent: jnp.ndarray, z_mu: jnp.ndarray, config: Dict[str, Any] = None
+        z_latent: jnp.ndarray,
+        z_mu: jnp.ndarray,
+        config: Dict[str, Any] = None,
+        context: Dict[str, Any] = None,
     ) -> jnp.ndarray:
-        """
-        Compute Huber energy.
-        """
         delta = config.get("delta", 1.0) if config else 1.0
         diff = z_latent - z_mu
         abs_diff = jnp.abs(diff)
-
-        # Quadratic region
         quadratic = 0.5 * diff**2
-        # Linear region
         linear = delta * (abs_diff - 0.5 * delta)
-
         huber = jnp.where(abs_diff <= delta, quadratic, linear)
-
-        axes_to_sum = tuple(range(1, len(huber.shape)))
-        return jnp.sum(huber, axis=axes_to_sum)
+        return _sum_non_batch(huber)
 
     @staticmethod
     def grad_latent(
-        z_latent: jnp.ndarray, z_mu: jnp.ndarray, config: Dict[str, Any] = None
+        z_latent: jnp.ndarray,
+        z_mu: jnp.ndarray,
+        config: Dict[str, Any] = None,
+        context: Dict[str, Any] = None,
     ) -> jnp.ndarray:
-        """
-        Compute gradient: clipped to [-delta, delta]
-        """
         delta = config.get("delta", 1.0) if config else 1.0
         diff = z_latent - z_mu
-
         return jnp.clip(diff, -delta, delta)
 
 
 class KLDivergenceEnergy(EnergyFunctional):
-    """
-    KL Divergence energy functional.
-
-    E = sum z * log(z / mu) = sum z * (log(z) - log(mu))
-
-    Computes D_KL(z || mu), the Kullback-Leibler divergence from mu to z.
-    Both z_latent and z_mu should be valid probability distributions
-    (non-negative, summing to 1 along the specified axis).
-
-    Use for:
-    - Matching probability distributions
-    - Variational inference objectives
-    - Information-theoretic losses
-
-    Note:
-        KL divergence is asymmetric: D_KL(z || mu) != D_KL(mu || z).
-        This implementation computes D_KL(z_latent || z_mu), penalizing
-        cases where z_latent has mass but z_mu does not.
-
-    Args:
-        eps: Small constant for numerical stability (default: 1e-7)
-        axis: Axis along which probabilities sum to 1 (default: -1)
-    """
+    """KL divergence energy functional."""
 
     def __init__(self, eps=1e-7, axis=-1):
         super().__init__(eps=eps, axis=axis)
 
     @staticmethod
     def energy(
-        z_latent: jnp.ndarray, z_mu: jnp.ndarray, config: Dict[str, Any] = None
+        z_latent: jnp.ndarray,
+        z_mu: jnp.ndarray,
+        config: Dict[str, Any] = None,
+        context: Dict[str, Any] = None,
     ) -> jnp.ndarray:
-        """
-        Compute KL divergence energy: E = sum z * log(z / mu)
-
-        For numerical stability, uses: z * log(z) - z * log(mu)
-        with clipping to avoid log(0).
-        """
         eps = config.get("eps", 1e-7) if config else 1e-7
-
-        # Clip for numerical stability
         z_latent_safe = jnp.clip(z_latent, eps, 1.0)
         z_mu_safe = jnp.clip(z_mu, eps, 1.0)
-
-        # KL divergence: z * log(z) - z * log(mu)
-        # Note: z * log(z) term handles the case where z -> 0 (gives 0, not -inf)
         kl = z_latent_safe * (jnp.log(z_latent_safe) - jnp.log(z_mu_safe))
-
-        # Handle z = 0 case: 0 * log(0) should be 0, not nan
         kl = jnp.where(z_latent < eps, 0.0, kl)
-
-        # Sum over all non-batch dimensions
-        axes_to_sum = tuple(range(1, len(kl.shape)))
-        return jnp.sum(kl, axis=axes_to_sum)
+        return _sum_non_batch(kl)
 
     @staticmethod
     def grad_latent(
-        z_latent: jnp.ndarray, z_mu: jnp.ndarray, config: Dict[str, Any] = None
+        z_latent: jnp.ndarray,
+        z_mu: jnp.ndarray,
+        config: Dict[str, Any] = None,
+        context: Dict[str, Any] = None,
     ) -> jnp.ndarray:
-        """
-        Compute gradient: dE/dz = log(z / mu) + 1 = log(z) - log(mu) + 1
-
-        For KL(z || mu):
-            d/dz [z * log(z) - z * log(mu)] = log(z) + 1 - log(mu)
-        """
         eps = config.get("eps", 1e-7) if config else 1e-7
-
         z_latent_safe = jnp.clip(z_latent, eps, 1.0)
         z_mu_safe = jnp.clip(z_mu, eps, 1.0)
-
-        # Gradient: log(z) - log(mu) + 1
         grad = jnp.log(z_latent_safe) - jnp.log(z_mu_safe) + 1.0
-
-        # For z near 0, gradient should push toward matching mu
-        # Use a smooth approximation
         grad = jnp.where(z_latent < eps, -jnp.log(z_mu_safe), grad)
-
         return grad
 
 
-# =============================================================================
-# Convenience Functions
-# =============================================================================
+def _channel_config(config: Dict[str, Any]) -> Dict[str, int]:
+    channel_map = dict(config.get("channel_map", {"u": 0, "v": 1, "p": 2}))
+    required = {"u", "v", "p"}
+    missing = required.difference(channel_map)
+    if missing:
+        missing_str = ", ".join(sorted(missing))
+        raise ValueError(
+            f"NavierStokesEnergy channel_map must define channels for {missing_str}"
+        )
+    return channel_map
+
+
+def _validate_navier_stokes_field(
+    x: jnp.ndarray,
+    config: Dict[str, Any],
+    context: Dict[str, Any] = None,
+) -> Dict[str, int]:
+    if x.ndim != 4:
+        raise ValueError(
+            f"NavierStokesEnergy requires rank-4 tensors (batch, H, W, C); got {x.shape}"
+        )
+
+    _, height, width, channels = x.shape
+    if height < 3 or width < 3:
+        raise ValueError(
+            f"NavierStokesEnergy requires H >= 3 and W >= 3; got {(height, width)}"
+        )
+
+    channel_map = _channel_config(config)
+    max_channel = max(channel_map.values())
+    if channels <= max_channel:
+        raise ValueError(
+            "NavierStokesEnergy requires channels for u, v, and p; "
+            f"got C={channels} with channel_map={channel_map}"
+        )
+
+    return channel_map
+
+
+def _periodic_central_diff_x(field: jnp.ndarray, dx: float) -> jnp.ndarray:
+    return (jnp.roll(field, -1, axis=2) - jnp.roll(field, 1, axis=2)) / (2.0 * dx)
+
+
+def _periodic_central_diff_y(field: jnp.ndarray, dy: float) -> jnp.ndarray:
+    return (jnp.roll(field, -1, axis=1) - jnp.roll(field, 1, axis=1)) / (2.0 * dy)
+
+
+def _periodic_laplacian(field: jnp.ndarray, dx: float, dy: float) -> jnp.ndarray:
+    d2dx2 = (jnp.roll(field, -1, axis=2) - 2.0 * field + jnp.roll(field, 1, axis=2)) / (
+        dx**2
+    )
+    d2dy2 = (jnp.roll(field, -1, axis=1) - 2.0 * field + jnp.roll(field, 1, axis=1)) / (
+        dy**2
+    )
+    return d2dx2 + d2dy2
+
+
+def _navier_stokes_residual_energy(
+    x: jnp.ndarray,
+    config: Dict[str, Any],
+    context: Dict[str, Any] = None,
+) -> jnp.ndarray:
+    channel_map = _validate_navier_stokes_field(x, config, context)
+    viscosity = config["viscosity"]
+    dx = config.get("dx", 1.0)
+    dy = config.get("dy", 1.0)
+    momentum_weight = config.get("momentum_weight", 1.0)
+    divergence_weight = config.get("divergence_weight", 1.0)
+
+    u = x[..., channel_map["u"]]
+    v = x[..., channel_map["v"]]
+    p = x[..., channel_map["p"]]
+
+    dudx = _periodic_central_diff_x(u, dx)
+    dudy = _periodic_central_diff_y(u, dy)
+    dvdx = _periodic_central_diff_x(v, dx)
+    dvdy = _periodic_central_diff_y(v, dy)
+    dpdx = _periodic_central_diff_x(p, dx)
+    dpdy = _periodic_central_diff_y(p, dy)
+
+    lap_u = _periodic_laplacian(u, dx, dy)
+    lap_v = _periodic_laplacian(v, dx, dy)
+
+    residual_u = u * dudx + v * dudy + dpdx - viscosity * lap_u
+    residual_v = u * dvdx + v * dvdy + dpdy - viscosity * lap_v
+    divergence = dudx + dvdy
+
+    momentum_energy = (
+        0.5 * momentum_weight * _sum_non_batch(residual_u**2 + residual_v**2)
+    )
+    divergence_energy = 0.5 * divergence_weight * _sum_non_batch(divergence**2)
+    return momentum_energy + divergence_energy
+
+
+class NavierStokesEnergy(EnergyFunctional):
+    """
+    2D incompressible steady-state Navier-Stokes energy for NHWC tensors.
+
+    Expects tensors shaped (batch, H, W, C) with channels mapped to u, v, and p.
+    Uses periodic finite differences and combines:
+    - data alignment between z_latent and z_mu
+    - momentum residual on z_latent
+    - momentum residual on z_mu
+    - divergence penalties on z_latent and z_mu
+    """
+
+    def __init__(
+        self,
+        viscosity: float,
+        dx: float = 1.0,
+        dy: float = 1.0,
+        data_weight: float = 1.0,
+        latent_ns_weight: float = 1.0,
+        prediction_ns_weight: float = 1.0,
+        momentum_weight: float = 1.0,
+        divergence_weight: float = 1.0,
+        channel_map: Dict[str, int] = None,
+    ):
+        super().__init__(
+            viscosity=viscosity,
+            dx=dx,
+            dy=dy,
+            data_weight=data_weight,
+            latent_ns_weight=latent_ns_weight,
+            prediction_ns_weight=prediction_ns_weight,
+            momentum_weight=momentum_weight,
+            divergence_weight=divergence_weight,
+            channel_map=channel_map or {"u": 0, "v": 1, "p": 2},
+        )
+
+    @staticmethod
+    def energy(
+        z_latent: jnp.ndarray,
+        z_mu: jnp.ndarray,
+        config: Dict[str, Any] = None,
+        context: Dict[str, Any] = None,
+    ) -> jnp.ndarray:
+        if config is None:
+            raise ValueError("NavierStokesEnergy requires a config")
+
+        _validate_navier_stokes_field(z_latent, config, context)
+        _validate_navier_stokes_field(z_mu, config, context)
+
+        data_weight = config.get("data_weight", 1.0)
+        latent_ns_weight = config.get("latent_ns_weight", 1.0)
+        prediction_ns_weight = config.get("prediction_ns_weight", 1.0)
+
+        diff = z_latent - z_mu
+        data_energy = 0.5 * data_weight * _sum_non_batch(diff**2)
+        latent_energy = latent_ns_weight * _navier_stokes_residual_energy(
+            z_latent, config, context
+        )
+        prediction_energy = prediction_ns_weight * _navier_stokes_residual_energy(
+            z_mu, config, context
+        )
+        return data_energy + latent_energy + prediction_energy
+
+    @staticmethod
+    def grad_latent(
+        z_latent: jnp.ndarray,
+        z_mu: jnp.ndarray,
+        config: Dict[str, Any] = None,
+        context: Dict[str, Any] = None,
+    ) -> jnp.ndarray:
+        if config is None:
+            raise ValueError("NavierStokesEnergy requires a config")
+
+        def total_energy(latent):
+            return jnp.sum(
+                NavierStokesEnergy.energy(latent, z_mu, config=config, context=context)
+            )
+
+        return jax.grad(total_energy)(z_latent)
 
 
 def compute_energy(
-    z_latent: jnp.ndarray, z_mu: jnp.ndarray, energy: EnergyFunctional = None
+    z_latent: jnp.ndarray,
+    z_mu: jnp.ndarray,
+    energy: EnergyFunctional = None,
+    context: Dict[str, Any] = None,
 ) -> jnp.ndarray:
     """
     Compute energy using the specified energy functional.
@@ -458,6 +483,7 @@ def compute_energy(
         z_latent: Latent states, shape (batch, *dims)
         z_mu: Predicted expectations, shape (batch, *dims)
         energy: EnergyFunctional instance. If None, uses GaussianEnergy with defaults.
+        context: Optional runtime metadata (for example node_info)
 
     Returns:
         Energy per sample, shape (batch,)
@@ -465,11 +491,14 @@ def compute_energy(
     if energy is None:
         energy = GaussianEnergy()
 
-    return type(energy).energy(z_latent, z_mu, energy.config)
+    return type(energy).energy(z_latent, z_mu, energy.config, context=context)
 
 
 def compute_energy_gradient(
-    z_latent: jnp.ndarray, z_mu: jnp.ndarray, energy: EnergyFunctional = None
+    z_latent: jnp.ndarray,
+    z_mu: jnp.ndarray,
+    energy: EnergyFunctional = None,
+    context: Dict[str, Any] = None,
 ) -> jnp.ndarray:
     """
     Compute energy gradient w.r.t. z_latent.
@@ -478,6 +507,7 @@ def compute_energy_gradient(
         z_latent: Latent states, shape (batch, *dims)
         z_mu: Predicted expectations, shape (batch, *dims)
         energy: EnergyFunctional instance. If None, uses GaussianEnergy with defaults.
+        context: Optional runtime metadata (for example node_info)
 
     Returns:
         Gradient dE/dz_latent, same shape as z_latent
@@ -485,11 +515,14 @@ def compute_energy_gradient(
     if energy is None:
         energy = GaussianEnergy()
 
-    return type(energy).grad_latent(z_latent, z_mu, energy.config)
+    return type(energy).grad_latent(z_latent, z_mu, energy.config, context=context)
 
 
 def get_energy_and_gradient(
-    z_latent: jnp.ndarray, z_mu: jnp.ndarray, energy: EnergyFunctional = None
+    z_latent: jnp.ndarray,
+    z_mu: jnp.ndarray,
+    energy: EnergyFunctional = None,
+    context: Dict[str, Any] = None,
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Compute both energy and gradient efficiently.
@@ -498,19 +531,16 @@ def get_energy_and_gradient(
         z_latent: Latent states, shape (batch, *dims)
         z_mu: Predicted expectations, shape (batch, *dims)
         energy: EnergyFunctional instance. If None, uses GaussianEnergy with defaults.
+        context: Optional runtime metadata (for example node_info)
 
     Returns:
-        Tuple of (energy, gradient):
-            - energy: per-sample energy, shape (batch,)
-            - gradient: dE/dz_latent, same shape as z_latent
+        Tuple of (energy, gradient)
     """
     if energy is None:
         energy = GaussianEnergy()
 
     energy_cls = type(energy)
     config = energy.config
-
-    e = energy_cls.energy(z_latent, z_mu, config)
-    g = energy_cls.grad_latent(z_latent, z_mu, config)
-
+    e = energy_cls.energy(z_latent, z_mu, config, context=context)
+    g = energy_cls.grad_latent(z_latent, z_mu, config, context=context)
     return e, g

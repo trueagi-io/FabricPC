@@ -11,6 +11,9 @@ pip install -e ".[dev,tfds,viz]"
 # Run MNIST demo
 python examples/mnist_demo.py
 
+# Run Navier-Stokes energy smoke test on MNIST data
+python examples/mnist_navier_stokes_smoke.py
+
 # Choose optimizer preset at runtime (no code edits)
 python examples/mnist_demo.py --optimizer adam
 # or via environment variable
@@ -51,6 +54,16 @@ Avg Training time: 1.30 seconds per epoch
 Evaluating...
 Test Accuracy: 98.14%
 ```
+
+### `mnist_navier_stokes_smoke.py`
+
+**Description**: Smoke test the `NavierStokesEnergy` runtime on real MNIST images.
+
+**Behavior**:
+- Loads MNIST in NHWC format
+- Adapts each grayscale image `(28, 28, 1)` into a pseudo-fluid field `(28, 28, 3)`
+- Runs a short predictive-coding training pass and held-out inference check
+- Reports finite energy values instead of classification accuracy
 
 ### `PC_backprop_compare.py`
 **Description**: Compare accuracy and training time of Predictive Coding vs Backpropagation on MNIST.
