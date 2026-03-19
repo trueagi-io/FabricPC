@@ -443,6 +443,45 @@ class KLDivergenceEnergy(EnergyFunctional):
         return grad
 
 
+class HeteroscedasticGaussianEnergy(EnergyFunctional):
+    """
+    Gaussian energy with prediction uncertainty from moment propagation.
+
+    E = 0.5 * (z - mu)^2 / (sigma_noise^2 + var) + 0.5 * log(sigma_noise^2 + var)
+
+    The var term is the propagated activation variance (state.z_var) injected
+    into the config dict by Bayesian nodes before calling this functional.
+    High-variance predictions generate weaker, precision-weighted error signals.
+
+    When var=0 (deterministic limit), reduces to standard GaussianEnergy with
+    precision = 1/sigma_noise^2.
+
+    Args:
+        sigma_noise: Observation noise std (default: 1.0)
+    """
+
+    def __init__(self, sigma_noise=1.0):
+        super().__init__(sigma_noise=sigma_noise)
+
+    @staticmethod
+    def energy(z_latent, z_mu, config=None):
+        sigma_noise = config.get("sigma_noise", 1.0) if config else 1.0
+        z_var = config.get("z_var", 0.0) if config else 0.0
+        total_var = sigma_noise**2 + z_var
+        diff = z_latent - z_mu
+        axes = tuple(range(1, len(diff.shape)))
+        nll = 0.5 * jnp.sum(diff**2 / total_var, axis=axes)
+        log_term = 0.5 * jnp.sum(jnp.log(total_var), axis=axes)
+        return nll + log_term
+
+    @staticmethod
+    def grad_latent(z_latent, z_mu, config=None):
+        sigma_noise = config.get("sigma_noise", 1.0) if config else 1.0
+        z_var = config.get("z_var", 0.0) if config else 0.0
+        precision = 1.0 / (sigma_noise**2 + z_var)
+        return precision * (z_latent - z_mu)
+
+
 # =============================================================================
 # Convenience Functions
 # =============================================================================
