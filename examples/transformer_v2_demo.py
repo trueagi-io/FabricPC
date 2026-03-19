@@ -1,10 +1,17 @@
 """
-Transformer PC — Tiny Shakespeare (multi-GPU)
+FabricPC Transformer Execution Script
 
-Trains a decomposed PC Transformer on character-level language modeling,
-evaluates perplexity, and generates sample text.
+This script trains the decomposed PC Transformer model on the Tiny
+Shakespeare dataset using JAX's multi-GPU capabilities (`pmap`),
+evaluates its performance, and generates sample text using temperature
+sampling to prevent repetitive loops.
+
+USAGE:
+Run this script from the root of the project directory. You must set
+the PYTHONPATH so Python can locate the `fabricpc` package.
 
     $ PYTHONPATH=. python examples/transformer_v2_demo.py
+
 """
 
 from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
@@ -71,11 +78,12 @@ train_config = {
 }
 optimizer = optax.adam(1e-5)
 
-print(f"Vocab size: {vocab_size}")
+print(f"Vocab Size: {vocab_size} | Training on local tiny_shakespeare.txt...")
 trained_params = train_pcn_multi_gpu(
     params, structure, train_loader, optimizer, train_config, train_key, verbose=True
 )
 
+# Evaluate
 metrics = evaluate_transformer_multi_gpu(
     trained_params, structure, test_loader, train_config, eval_key
 )

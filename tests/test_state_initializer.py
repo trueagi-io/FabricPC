@@ -14,7 +14,7 @@ from fabricpc.nodes import Linear
 from fabricpc.nodes.transformer import TransformerBlock
 from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.graph import initialize_params
-from fabricpc.core.inference import InferenceSGD
+from fabricpc.core.inference import InferenceSGD, run_inference
 from fabricpc.core.activations import (
     IdentityActivation,
     ReLUActivation,
@@ -327,9 +327,7 @@ class TestFeedforwardZeroError:
             name: state.nodes[name].z_latent for name in structure.nodes
         }
 
-        final_state = type(structure.config["inference"]).run_inference(
-            params, state, clamps, structure
-        )
+        final_state = run_inference(params, state, clamps, structure)
 
         for node_name in structure.nodes:
             original = original_latents[node_name]

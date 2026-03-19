@@ -12,6 +12,7 @@ import jax.numpy as jnp
 import optax
 
 from fabricpc.core.types import GraphParams, GraphState, GraphStructure
+from fabricpc.core.inference import run_inference
 from fabricpc.graph.graph_net import compute_local_weight_gradients
 
 
@@ -56,9 +57,7 @@ def get_graph_param_gradient(
     )
 
     # Run inference to convergence
-    final_state = type(structure.config["inference"]).run_inference(
-        params, init_state, clamps, structure
-    )
+    final_state = run_inference(params, init_state, clamps, structure)
 
     # Compute energy (ignore source nodes)
     energy = sum(
@@ -284,9 +283,7 @@ def eval_step(
 
     # Run inference steps
     # TODO - can skip inference in evaluation mode (no labels) if 1. initialization method is feed-forward AND 2. the graph has no cycles.
-    final_state = type(structure.config["inference"]).run_inference(
-        params, state, clamps, structure
-    )
+    final_state = run_inference(params, state, clamps, structure)
 
     # Compute total network energy
     total_energy = jnp.array(0.0)

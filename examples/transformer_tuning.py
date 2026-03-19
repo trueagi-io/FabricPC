@@ -31,6 +31,7 @@ def trial_model(config, rng_key):
     seq_len = config.get("seq_len", 32)
     vocab_size = config.get("vocab_size", 65)
 
+    # Weight initialization config
     weight_init_std = config.get("weight_init_std", 0.02)
     weight_init = {"type": "normal", "std": weight_init_std}
 
@@ -43,6 +44,8 @@ def trial_model(config, rng_key):
         eta_infer=config.get("eta_infer", 0.05),
         infer_steps=config.get("infer_steps", 20),
     )
+
+    # Create the structure directly
     structure = create_deep_transformer(
         depth=depth,
         embed_dim=embed_dim,
@@ -54,14 +57,18 @@ def trial_model(config, rng_key):
         weight_init=weight_init,
     )
 
+    # Initialize params using the structure
     params = initialize_params(structure, rng_key)
 
     return params, structure
 
 
-# --- Optuna Search Space ---
+# ----------------------------------------------------------------------
+# OPTUNA SEARCH SPACE
+# ----------------------------------------------------------------------
 
 
+# Scaled down since bigger range gives NAN values
 def search_space_transformer(trial):
     lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
     embed_dim = trial.suggest_categorical("embed_dim", [32, 64])
@@ -72,6 +79,7 @@ def search_space_transformer(trial):
     eta_infer = trial.suggest_float("eta_infer", 0.01, 0.2)
     depth = trial.suggest_int("depth", 1, 12)
 
+    # Tuning weight initialization scale
     weight_init_std = trial.suggest_float("weight_init_std", 0.005, 0.05, log=True)
 
     return {
@@ -119,7 +127,7 @@ def multi_gpu_train_eval(params, structure, train_loader, val_loader, config, rn
     return metrics
 
 
-# --- Main ---
+# --- MAIN — TUNING SETUP ---
 
 if __name__ == "__main__":
     seq_len = 32

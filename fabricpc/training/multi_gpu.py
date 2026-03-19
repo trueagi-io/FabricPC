@@ -537,9 +537,7 @@ def evaluate_pcn_multi_gpu(
             clamps=clamps,
             params=params_obj,
         )
-        final_state = type(structure.config["inference"]).run_inference(
-            params_obj, state, clamps, structure
-        )
+        final_state = run_inference(params_obj, state, clamps, structure)
         return final_state
 
     pmap_inference = jax.pmap(inference_fn, axis_name="devices")

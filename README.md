@@ -52,10 +52,10 @@ python examples/mnist_demo.py
 ## Contributions
 Contributions are welcome! Please open issues or pull requests on the GitHub repository.
 - Develop on a branch using convention "feature/your_feature_name"
-- All demos must match baseline results and test suites must pass before merging new code.
+- All demos must match baseline results or explain divergence and test suites must pass on rebased PR.
 - Write unit tests and docstrings for new code
-- Use pre-commit hooks for PEP8 style and code quality (run `pre-commit install` once after cloning!)
-- Follow the rebase instructions in `docs/rebasing_feature_branch.md` before merging to main.
+- Use the pre-commit hooks for PEP8 style and code quality (run `pre-commit install` once after cloning!)
+- Follow the rebase instructions in `docs/rebasing_feature_branch.md` before opening a PR.
 
 This is a research-first project.
 - APIs may change frequently until v1.0 release.
@@ -92,13 +92,26 @@ params = initialize_params(structure, rng_key)
 
 ### Custom Nodes
 
-Create custom node types by subclassing `NodeBase`:
+Create custom node types by subclassing `NodeBase`. Implement the `forward()` and `initialize_params()` methods. Nodes have a single output. Define slots for incoming connections. Slots are named arguments of the node's transfer function and are referenced in edges when building the graph.
 
 See `examples/custom_node.py` for a complete Conv2D implementation.
 
+### Inference Algorithms
+Create custom inference algorithms by subclassing `InferenceBase` and implementing the `compute_new_latent()` method.
+
+### Learning Algorithms
+Weight learning loop algorithm abstraction is planned for a future release. Optimizer chains are fully supported with Optax and can be used directly in the training loop.
+
+### Custom Initializers
+Create custom initializers by subclassing `StateInitializerBase` for latent state initialization and implementing the `initialize()` method.
+
+Graph-aware weight initializers are in progress and will be added in a future release.
+
+Node level initializers extend `InitializerBase` and implement `initialize_weights()` method. These are agnostic to acting on node state or parameters.
+
 ## Shape Conventions
 
- All shapes use batch-first, channels-last format (NHWC, NLC, NDHWC):
+ All shapes use batch-first, channels-last format (NHWC, NLC, NDHWC) and the batch size is not included in node shape definitions.
 
  - Consistent with JAX's default conv behavior
  - Linear: shape=(features,) - e.g., (128,) for 128-dimensional vector

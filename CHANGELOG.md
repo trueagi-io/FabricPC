@@ -1,11 +1,11 @@
 # Changelog
 
 ## [0.2.9] - 2026-03-17
-- Added transformer_v2 nodes and example decomposing transformer blocks to use PC inference at the attention and feedfordward layers. See examples/transformer_v2 for details.
-- Improved training stability and convergence of the v1 transformer block by adding layer normalization and residual connections. See examples/transformer for details.
+- Added transformer_v2 nodes and example decomposing transformer blocks to use PC inference at the attention and feedfordward layers. See examples/transformer_v2_demo.py for details.
+- Improved training stability and inference convergence of the v1 transformer block by gradient clipping and residual connections. See examples/transformer_demo.py for details.
 - Refactored optimizer integration to use Optax directly. Trainer signature is now train_pcn(..., optimizer=optax.adamw(0.001, weight_decay=0.001))
-- Refactored nodes to use weight initializer objects instead of config dicts. See examples folder for updated node definitions.
-- Added extensible inference abstraction. New API is structure = graph(nodes=[...], edges=[...], task_map=..., inference=InferenceSGD(eta_infer=0.05, infer_steps=20)).
+- Refactored nodes to use weight initializer objects instead of config dicts. New API is node = Linear(shape=(128,), ..., weight_init=XavierInitializer())
+- Refactored inference to use algorithm abstraction. New API is structure = graph(nodes=[...], edges=[...], task_map, inference=InferenceSGD(eta_infer=0.05, infer_steps=20))
 - Refactored Aim TrackingConfig parameters to improve configurable logging intervals.
 - Added ABExperiment class for comparing model variants statistically.
 - Added a fixed scaling factor argument to IdentityNode for better control over signal propagation.

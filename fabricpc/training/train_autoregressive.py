@@ -21,7 +21,7 @@ import jax.numpy as jnp
 import optax
 
 from fabricpc.core.types import GraphParams, GraphState, GraphStructure, NodeParams
-from fabricpc.core.inference import gather_inputs
+from fabricpc.core.inference import gather_inputs, run_inference
 from fabricpc.graph.state_initializer import initialize_graph_state
 
 
@@ -183,9 +183,7 @@ def train_step_autoregressive(
     )
 
     # Run inference
-    final_state = type(structure.config["inference"]).run_inference(
-        params, init_state, clamps, structure
-    )
+    final_state = run_inference(params, init_state, clamps, structure)
 
     # Compute total energy (sum over non-source nodes)
     energy = jnp.array(0.0)
@@ -388,9 +386,7 @@ def _generation_step(
         clamps=clamps,
         params=params,
     )
-    final_state = type(structure.config["inference"]).run_inference(
-        params, state, clamps, structure
-    )
+    final_state = run_inference(params, state, clamps, structure)
 
     # Get output for the last position
     # z_mu contains the predicted output after activation (softmax for output node)
@@ -584,9 +580,7 @@ def _eval_step_autoregressive(
         clamps=clamps,
         params=params,
     )
-    final_state = type(structure.config["inference"]).run_inference(
-        params, state, clamps, structure
-    )
+    final_state = run_inference(params, state, clamps, structure)
 
     # Compute loss and get predictions
     output_node = structure.task_map["y"]
