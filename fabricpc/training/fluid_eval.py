@@ -34,7 +34,9 @@ def predict_fluid_batch(
 
     output_node_name = output_node_name or structure.task_map.get("y")
     if output_node_name is None:
-        raise ValueError("structure.task_map must contain 'y' or output_node_name must be provided")
+        raise ValueError(
+            "structure.task_map must contain 'y' or output_node_name must be provided"
+        )
 
     clamps = {structure.task_map["x"]: batch["x"]}
     state = initialize_graph_state(

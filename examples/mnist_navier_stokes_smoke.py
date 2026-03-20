@@ -21,7 +21,9 @@ import numpy as np
 from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
 
 set_jax_flags_before_importing_jax(jax_platforms="cpu")
-os.environ.setdefault("TFDS_DATA_DIR", os.path.join(tempfile.gettempdir(), "fabricpc_tfds"))
+os.environ.setdefault(
+    "TFDS_DATA_DIR", os.path.join(tempfile.gettempdir(), "fabricpc_tfds")
+)
 
 import jax
 import jax.numpy as jnp

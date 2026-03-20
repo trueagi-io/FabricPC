@@ -24,7 +24,9 @@ def _validate_field(field: jnp.ndarray, channel_map: Dict[str, int]) -> None:
         )
     _, height, width, channels = field.shape
     if height < 3 or width < 3:
-        raise ValueError(f"fluid metrics require H >= 3 and W >= 3; got {(height, width)}")
+        raise ValueError(
+            f"fluid metrics require H >= 3 and W >= 3; got {(height, width)}"
+        )
     if channels <= max(channel_map.values()):
         raise ValueError(
             "fluid metrics require channels for u, v, and p; "
@@ -133,7 +135,9 @@ def compute_fluid_metrics(
         channel_map=mapping,
     )
     metrics["divergence_norm"] = float(jnp.mean(diagnostics["divergence"] ** 2))
-    metrics["momentum_residual_norm"] = float(jnp.mean(diagnostics["momentum_residual"]))
+    metrics["momentum_residual_norm"] = float(
+        jnp.mean(diagnostics["momentum_residual"])
+    )
 
     if mask is not None:
         if mask.shape != prediction.shape:

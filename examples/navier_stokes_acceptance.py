@@ -33,7 +33,11 @@ from fabricpc.core.energy import GaussianEnergy, NavierStokesEnergy
 from fabricpc.core.inference import InferenceSGD
 from fabricpc.graph import initialize_params
 from fabricpc.nodes import IdentityNode, Linear
-from fabricpc.training import evaluate_fluid_reconstruction, predict_fluid_batch, train_pcn
+from fabricpc.training import (
+    evaluate_fluid_reconstruction,
+    predict_fluid_batch,
+    train_pcn,
+)
 from fabricpc.utils.data import (
     ArrayBatchLoader,
     apply_observation_model,
@@ -111,7 +115,9 @@ def build_loaders(
         observed_fraction=observed_fraction,
         seed=OBSERVATION_MASK_SEED,
     )
-    train_x = apply_observation_model(train_y, mask, noise_std=noise_std, seed=seed + 10)
+    train_x = apply_observation_model(
+        train_y, mask, noise_std=noise_std, seed=seed + 10
+    )
     val_x = apply_observation_model(val_y, mask, noise_std=noise_std, seed=seed + 20)
     test_x = apply_observation_model(test_y, mask, noise_std=noise_std, seed=seed + 30)
 
@@ -173,7 +179,9 @@ def normalize_panel_image(field: np.ndarray) -> np.ndarray:
     return np.clip(255.0 * scaled, 0.0, 255.0).astype(np.uint8)
 
 
-def build_panel(arrays: list[np.ndarray], rows: int, cols: int, pad: int = 2) -> np.ndarray:
+def build_panel(
+    arrays: list[np.ndarray], rows: int, cols: int, pad: int = 2
+) -> np.ndarray:
     height, width = arrays[0].shape
     canvas = np.full(
         (rows * height + (rows - 1) * pad, cols * width + (cols - 1) * pad),
@@ -239,14 +247,18 @@ def save_visualizations(
     save_pgm(output_dir / f"{scenario_name}_{model_name}_physics.pgm", physics_panel)
 
 
-def aggregate_metrics(runs: list[dict[str, dict[str, float]]]) -> dict[str, dict[str, dict[str, float]]]:
+def aggregate_metrics(
+    runs: list[dict[str, dict[str, float]]],
+) -> dict[str, dict[str, dict[str, float]]]:
     summary: dict[str, dict[str, dict[str, float]]] = {}
     split_names = runs[0].keys()
     for split_name in split_names:
         metric_names = runs[0][split_name].keys()
         summary[split_name] = {}
         for metric_name in metric_names:
-            values = np.array([run[split_name][metric_name] for run in runs], dtype=np.float64)
+            values = np.array(
+                [run[split_name][metric_name] for run in runs], dtype=np.float64
+            )
             summary[split_name][metric_name] = {
                 "mean": float(np.mean(values)),
                 "std": float(np.std(values)),

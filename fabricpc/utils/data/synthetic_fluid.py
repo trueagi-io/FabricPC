@@ -33,8 +33,10 @@ def generate_taylor_green_vortex_dataset(
 
         u = amplitude * np.sin(x_grid + phase_x) * np.cos(y_grid + phase_y)
         v = -amplitude * np.cos(x_grid + phase_x) * np.sin(y_grid + phase_y)
-        p = 0.25 * amplitude**2 * (
-            np.cos(2.0 * (x_grid + phase_x)) + np.cos(2.0 * (y_grid + phase_y))
+        p = (
+            0.25
+            * amplitude**2
+            * (np.cos(2.0 * (x_grid + phase_x)) + np.cos(2.0 * (y_grid + phase_y)))
         )
         fields.append(np.stack([u, v, p], axis=-1).astype(np.float32))
 
@@ -49,7 +51,9 @@ def make_observation_mask(
 ) -> np.ndarray:
     """Create a fixed spatial observation mask shared across all channels."""
     rng = np.random.default_rng(seed)
-    base = (rng.random((grid_size, grid_size, 1)) < observed_fraction).astype(np.float32)
+    base = (rng.random((grid_size, grid_size, 1)) < observed_fraction).astype(
+        np.float32
+    )
     return np.repeat(base, channels, axis=-1)
 
 
@@ -85,7 +89,9 @@ class ArrayBatchLoader:
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.seed = seed
-        self.mask = None if mask is None else np.broadcast_to(mask, y.shape).astype(np.float32)
+        self.mask = (
+            None if mask is None else np.broadcast_to(mask, y.shape).astype(np.float32)
+        )
 
     def __len__(self) -> int:
         return math.ceil(len(self.x) / self.batch_size)
