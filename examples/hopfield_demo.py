@@ -42,7 +42,6 @@ from fabricpc.core.initializers import XavierInitializer
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.binarized_mnist import load_binarized_mnist
 
-
 # =========================================================================
 # Data Loader
 # =========================================================================
@@ -51,8 +50,7 @@ from fabricpc.utils.data.binarized_mnist import load_binarized_mnist
 class HopfieldMnistLoader:
     """Yields (image, one_hot_label) batches for supervised training."""
 
-    def __init__(self, images, labels, num_classes, batch_size,
-                 shuffle=True, seed=42):
+    def __init__(self, images, labels, num_classes, batch_size, shuffle=True, seed=42):
         self.images = images
         self.labels = labels
         self.num_classes = num_classes
@@ -83,39 +81,54 @@ class HopfieldMnistLoader:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Hopfield Network on Binarized MNIST"
-    )
+    parser = argparse.ArgumentParser(description="Hopfield Network on Binarized MNIST")
     parser.add_argument(
-        "--digits", type=int, nargs="+", default=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+        "--digits",
+        type=int,
+        nargs="+",
+        default=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
         help="Digit classes to store (default: all 10)",
     )
     parser.add_argument(
-        "--num_epochs", type=int, default=20,
+        "--num_epochs",
+        type=int,
+        default=20,
         help="Number of training epochs (default: 20)",
     )
     parser.add_argument(
-        "--infer_steps", type=int, default=20,
+        "--infer_steps",
+        type=int,
+        default=20,
         help="PC inference steps per training batch (default: 20)",
     )
     parser.add_argument(
-        "--lr", type=float, default=0.001,
+        "--lr",
+        type=float,
+        default=0.001,
         help="Learning rate (default: 0.001)",
     )
     parser.add_argument(
-        "--hidden_size", type=int, default=256,
+        "--hidden_size",
+        type=int,
+        default=256,
         help="HopfieldNode hidden layer size (default: 256)",
     )
     parser.add_argument(
-        "--n_train", type=int, default=5000,
+        "--n_train",
+        type=int,
+        default=5000,
         help="Training images per digit (default: 5000)",
     )
     parser.add_argument(
-        "--n_test", type=int, default=50,
+        "--n_test",
+        type=int,
+        default=50,
         help="Test images per digit (default: 50)",
     )
     parser.add_argument(
-        "--batch_size", type=int, default=200,
+        "--batch_size",
+        type=int,
+        default=200,
         help="Batch size (default: 200)",
     )
     args = parser.parse_args()
@@ -203,12 +216,18 @@ def main():
 
     # --- Training setup ---
     train_loader = HopfieldMnistLoader(
-        train_subset_imgs, train_subset_lbls, num_classes,
-        batch_size=args.batch_size, shuffle=True,
+        train_subset_imgs,
+        train_subset_lbls,
+        num_classes,
+        batch_size=args.batch_size,
+        shuffle=True,
     )
     train_eval_loader = HopfieldMnistLoader(
-        train_subset_imgs, train_subset_lbls, num_classes,
-        batch_size=args.batch_size, shuffle=False,
+        train_subset_imgs,
+        train_subset_lbls,
+        num_classes,
+        batch_size=args.batch_size,
+        shuffle=False,
     )
     optimizer = optax.adamw(args.lr, weight_decay=0.1)
 
@@ -229,9 +248,7 @@ def main():
         batch_energy_tracker.clear()
 
         rng_key, eval_rk = jax.random.split(rng_key)
-        metrics = evaluate_pcn(
-            params, structure, train_eval_loader, {}, eval_rk
-        )
+        metrics = evaluate_pcn(params, structure, train_eval_loader, {}, eval_rk)
         train_acc = metrics["accuracy"]
 
         print(
@@ -266,18 +283,21 @@ def main():
     print("=" * 70)
 
     test_loader = HopfieldMnistLoader(
-        test_subset_imgs, test_subset_lbls, num_classes,
-        batch_size=args.batch_size, shuffle=False,
+        test_subset_imgs,
+        test_subset_lbls,
+        num_classes,
+        batch_size=args.batch_size,
+        shuffle=False,
     )
     eval_key = jax.random.PRNGKey(99)
-    test_metrics = evaluate_pcn(
-        trained_params, structure, test_loader, {}, eval_key
-    )
+    test_metrics = evaluate_pcn(trained_params, structure, test_loader, {}, eval_key)
 
     print(f"  Test Energy:   {test_metrics['energy']:.4f}")
     print(f"  Test Accuracy: {test_metrics['accuracy'] * 100:.2f}%")
-    print(f"\n{len(structure.nodes)} nodes, {len(structure.edges)} edges, "
-          f"{total_params:,} parameters")
+    print(
+        f"\n{len(structure.nodes)} nodes, {len(structure.edges)} edges, "
+        f"{total_params:,} parameters"
+    )
     print("\nDone.")
 
 

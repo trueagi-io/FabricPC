@@ -463,7 +463,9 @@ def pattern_overlap(a: jnp.ndarray, b: jnp.ndarray) -> jnp.ndarray:
     return jnp.dot(jnp.sign(a), jnp.sign(b)) / a.shape[-1]
 
 
-def add_noise(pattern: jnp.ndarray, noise_level: float, rng_key: jax.Array) -> jnp.ndarray:
+def add_noise(
+    pattern: jnp.ndarray, noise_level: float, rng_key: jax.Array
+) -> jnp.ndarray:
     """Flip bits with given probability."""
     flip = jax.random.bernoulli(rng_key, p=noise_level, shape=pattern.shape)
     return pattern * (1.0 - 2.0 * flip.astype(jnp.float32))
