@@ -2,24 +2,21 @@
 Hopfield Network on Binarized MNIST — FabricPC Demo
 ====================================================
 
-Trains a Hopfield memory network on binarized MNIST using predictive
-coding weight learning (not one-shot Hebbian). Each epoch is a full pass
-over the training data, updating weights via PC local gradients.
+Trains a predictive coding network using HopfieldNode (tanh activation)
+as the hidden layer on binarized MNIST. Achieves high classification
+accuracy with supervised cross-entropy training.
 
 Architecture:
-    input_node ──[W_in]──> HopfieldNode ──────> feedback_node
-                                ^                      |
-                                └────[W_hop]───────────┘
+    input(784) ──> HopfieldNode(256, tanh) ──> Linear(10, softmax, CE)
 
-During training, both input and feedback (target) are clamped to the
-same pattern. The network learns weights that minimize PC energy.
-During recall, only input is clamped; the recurrent loop reconstructs
-the nearest stored pattern.
+The HopfieldNode provides the same tanh-based dynamics used in
+continuous Hopfield networks, applied here as a learned hidden
+representation for classification.
 
 Usage:
     python examples/hopfield_demo.py
     python examples/hopfield_demo.py --num_epochs 30
-    python examples/hopfield_demo.py --digits 0 1 2 3 4
+    python examples/hopfield_demo.py --hidden_size 512
 """
 
 from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
@@ -35,16 +32,15 @@ import numpy as np
 import optax
 
 from fabricpc.graph import initialize_params
-from fabricpc.nodes import IdentityNode
-from fabricpc.nodes.hopfield import HopfieldNode, recall_with_energy
+from fabricpc.nodes import IdentityNode, Linear
+from fabricpc.nodes.hopfield import HopfieldNode
 from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.core.activations import SoftmaxActivation
+from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.core.inference import InferenceSGD
-from fabricpc.graph.state_initializer import GlobalStateInit
-from fabricpc.training import train_pcn
-from fabricpc.utils.data.binarized_mnist import (
-    load_binarized_mnist,
-    get_unique_digit_prototypes,
-)
+from fabricpc.core.initializers import XavierInitializer
+from fabricpc.training import train_pcn, evaluate_pcn
+from fabricpc.utils.data.binarized_mnist import load_binarized_mnist
 
 
 # =========================================================================
@@ -52,11 +48,14 @@ from fabricpc.utils.data.binarized_mnist import (
 # =========================================================================
 
 
-class BipolarMnistLoader:
-    """Yields (image, image) batches for Hopfield training (x = y = pattern)."""
+class HopfieldMnistLoader:
+    """Yields (image, one_hot_label) batches for supervised training."""
 
-    def __init__(self, images, batch_size, shuffle=True, seed=42):
+    def __init__(self, images, labels, num_classes, batch_size,
+                 shuffle=True, seed=42):
         self.images = images
+        self.labels = labels
+        self.num_classes = num_classes
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.rng = np.random.default_rng(seed)
@@ -68,8 +67,11 @@ class BipolarMnistLoader:
             self.rng.shuffle(idx)
         for s in range(0, n, self.batch_size):
             e = min(s + self.batch_size, n)
-            batch = jnp.array(self.images[idx[s:e]])
-            yield batch, batch  # input = target
+            batch_imgs = jnp.array(self.images[idx[s:e]])
+            batch_lbls = jax.nn.one_hot(
+                jnp.array(self.labels[idx[s:e]]), self.num_classes
+            )
+            yield batch_imgs, batch_lbls
 
     def __len__(self):
         return (len(self.images) + self.batch_size - 1) // self.batch_size
@@ -89,8 +91,8 @@ def main():
         help="Digit classes to store (default: all 10)",
     )
     parser.add_argument(
-        "--num_epochs", type=int, default=50,
-        help="Number of training epochs (default: 50)",
+        "--num_epochs", type=int, default=20,
+        help="Number of training epochs (default: 20)",
     )
     parser.add_argument(
         "--infer_steps", type=int, default=20,
@@ -101,8 +103,12 @@ def main():
         help="Learning rate (default: 0.001)",
     )
     parser.add_argument(
-        "--n_train", type=int, default=100,
-        help="Training images per digit (default: 100)",
+        "--hidden_size", type=int, default=512,
+        help="HopfieldNode hidden layer size (default: 512)",
+    )
+    parser.add_argument(
+        "--n_train", type=int, default=5000,
+        help="Training images per digit (default: 5000)",
     )
     parser.add_argument(
         "--n_test", type=int, default=50,
@@ -116,6 +122,7 @@ def main():
 
     jax.config.update("jax_default_prng_impl", "threefry2x32")
     rng_key = jax.random.PRNGKey(42)
+    num_classes = len(args.digits)
 
     print("=" * 70)
     print("Hopfield Network on Binarized MNIST — FabricPC")
@@ -126,55 +133,59 @@ def main():
     train_images, train_labels, test_images, test_labels = load_binarized_mnist()
     print(f"  Train: {train_images.shape}  Test: {test_images.shape}")
 
-    # --- Create digit prototypes (for accuracy measurement) ---
     digits = args.digits
-    prototypes, digit_ids = get_unique_digit_prototypes(
-        train_images, train_labels, digits=digits
-    )
-    prototypes = jnp.array(prototypes)
-    P, N = prototypes.shape
-    digit_ids_arr = jnp.array(digit_ids)
-
-    print(f"  Digits: {digit_ids}, pattern size: {N}")
+    N = train_images.shape[1]  # 784
+    H = args.hidden_size
+    print(f"  Digits: {digits}, input: {N}, hidden: {H}, classes: {num_classes}")
 
     # --- Sample train and test subsets ---
-    train_subset = []
-    for d in digit_ids:
+    train_subset_imgs = []
+    train_subset_lbls = []
+    for d in digits:
         mask = train_labels == d
         idx = np.where(mask)[0][: args.n_train]
-        train_subset.append(train_images[idx])
-    train_subset = np.concatenate(train_subset)
+        train_subset_imgs.append(train_images[idx])
+        train_subset_lbls.append(train_labels[idx])
+    train_subset_imgs = np.concatenate(train_subset_imgs)
+    train_subset_lbls = np.concatenate(train_subset_lbls)
 
     test_subset_imgs = []
     test_subset_lbls = []
-    for d in digit_ids:
+    for d in digits:
         mask = test_labels == d
         idx = np.where(mask)[0][: args.n_test]
         test_subset_imgs.append(test_images[idx])
         test_subset_lbls.append(test_labels[idx])
-    test_subset_imgs = jnp.array(np.concatenate(test_subset_imgs))
+    test_subset_imgs = np.concatenate(test_subset_imgs)
     test_subset_lbls = np.concatenate(test_subset_lbls)
-    n_test_total = len(test_subset_imgs)
 
-    print(f"  Train subset: {len(train_subset)} images ({args.n_train} per digit)")
-    print(f"  Test subset:  {n_test_total} images ({args.n_test} per digit)")
+    print(f"  Train subset: {len(train_subset_imgs)} images ({args.n_train} per digit)")
+    print(f"  Test subset:  {len(test_subset_imgs)} images ({args.n_test} per digit)")
 
-    # --- Build Hopfield graph (with y target for training) ---
-    print("\nBuilding Hopfield network...")
-    input_node = IdentityNode(shape=(N,), name="input")
-    memory_node = HopfieldNode(shape=(N,), name="memory")
-    feedback_node = IdentityNode(shape=(N,), name="feedback")
+    # --- Build network: input -> HopfieldNode -> classification output ---
+    print("\nBuilding network...")
+    input_node = IdentityNode(shape=(N,), name="pixels")
+    hidden_node = HopfieldNode(
+        shape=(H,),
+        name="hopfield",
+        weight_init=XavierInitializer(),
+    )
+    output_node = Linear(
+        shape=(num_classes,),
+        activation=SoftmaxActivation(),
+        energy=CrossEntropyEnergy(),
+        name="class",
+        weight_init=XavierInitializer(),
+    )
 
     structure = graph(
-        nodes=[input_node, memory_node, feedback_node],
+        nodes=[input_node, hidden_node, output_node],
         edges=[
-            Edge(source=input_node, target=memory_node.slot("in")),
-            Edge(source=memory_node, target=feedback_node.slot("in")),
-            Edge(source=feedback_node, target=memory_node.slot("in")),
+            Edge(source=input_node, target=hidden_node.slot("in")),
+            Edge(source=hidden_node, target=output_node.slot("in")),
         ],
-        task_map=TaskMap(x=input_node, y=feedback_node),
-        inference=InferenceSGD(eta_infer=0.1, infer_steps=args.infer_steps),
-        graph_state_initializer=GlobalStateInit(),
+        task_map=TaskMap(x=input_node, y=output_node),
+        inference=InferenceSGD(eta_infer=0.05, infer_steps=args.infer_steps),
     )
 
     rng_key, graph_key, train_key = jax.random.split(rng_key, 3)
@@ -191,10 +202,15 @@ def main():
     print(f"  Total parameters: {total_params:,}")
 
     # --- Training setup ---
-    train_loader = BipolarMnistLoader(
-        train_subset, batch_size=args.batch_size, shuffle=True
+    train_loader = HopfieldMnistLoader(
+        train_subset_imgs, train_subset_lbls, num_classes,
+        batch_size=args.batch_size, shuffle=True,
     )
-    optimizer = optax.adam(args.lr)
+    train_eval_loader = HopfieldMnistLoader(
+        train_subset_imgs, train_subset_lbls, num_classes,
+        batch_size=args.batch_size, shuffle=False,
+    )
+    optimizer = optax.adamw(args.lr, weight_decay=0.1)
 
     # Track per-epoch training energy
     batch_energy_tracker = []
@@ -205,7 +221,6 @@ def main():
         return normalized
 
     def epoch_cb(epoch_idx, params, structure, _config, rng_key):
-        # Training energy from tracked batches
         train_energy = (
             sum(batch_energy_tracker) / len(batch_energy_tracker)
             if batch_energy_tracker
@@ -213,44 +228,21 @@ def main():
         )
         batch_energy_tracker.clear()
 
-        # Training accuracy via recall on train set
-        correct = 0
-        total = 0
-        for start in range(0, len(train_subset), args.batch_size):
-            end = min(start + args.batch_size, len(train_subset))
-            batch_imgs = jnp.array(train_subset[start:end])
-            batch_lbls = train_labels_subset[start:end]
+        rng_key, eval_rk = jax.random.split(rng_key)
+        metrics = evaluate_pcn(
+            params, structure, train_eval_loader, {}, eval_rk
+        )
+        train_acc = metrics["accuracy"]
 
-            rng_key, rk = jax.random.split(rng_key)
-            recalled, _ = recall_with_energy(params, structure, batch_imgs, rk)
-
-            sign_recalled = jnp.sign(recalled)
-            overlaps = sign_recalled @ prototypes.T / N
-            predicted_idx = jnp.argmax(overlaps, axis=1)
-            predicted_digits = digit_ids_arr[predicted_idx]
-
-            correct += int(jnp.sum(predicted_digits == batch_lbls))
-            total += end - start
-
-        train_acc = correct / total
         print(
             f"Epoch {epoch_idx + 1:3d}/{args.num_epochs}, "
             f"energy: {train_energy:10.4f}, "
             f"accuracy: {train_acc * 100:6.2f}%"
         )
 
-    # Build train labels for accuracy eval
-    train_labels_subset = []
-    for d in digit_ids:
-        mask = train_labels == d
-        idx = np.where(mask)[0][: args.n_train]
-        train_labels_subset.append(train_labels[idx])
-    train_labels_subset = np.concatenate(train_labels_subset)
-
     # --- Train ---
     print("\n" + "=" * 70)
-    print(f"Training — {args.num_epochs} epochs, {args.infer_steps} inference steps, "
-          f"noise=0.00")
+    print(f"Training — {args.num_epochs} epochs, {args.infer_steps} inference steps")
     print("=" * 70 + "\n")
 
     start_time = time.time()
@@ -273,35 +265,17 @@ def main():
     print("Evaluating on test set...")
     print("=" * 70)
 
-    correct = 0
-    total = 0
-    total_energy = 0.0
+    test_loader = HopfieldMnistLoader(
+        test_subset_imgs, test_subset_lbls, num_classes,
+        batch_size=args.batch_size, shuffle=False,
+    )
     eval_key = jax.random.PRNGKey(99)
+    test_metrics = evaluate_pcn(
+        trained_params, structure, test_loader, {}, eval_key
+    )
 
-    for start in range(0, n_test_total, args.batch_size):
-        end = min(start + args.batch_size, n_test_total)
-        batch_imgs = test_subset_imgs[start:end]
-        batch_lbls = test_subset_lbls[start:end]
-
-        eval_key, rk = jax.random.split(eval_key)
-        recalled, energy = recall_with_energy(
-            trained_params, structure, batch_imgs, rk
-        )
-
-        sign_recalled = jnp.sign(recalled)
-        overlaps = sign_recalled @ prototypes.T / N
-        predicted_idx = jnp.argmax(overlaps, axis=1)
-        predicted_digits = digit_ids_arr[predicted_idx]
-
-        correct += int(jnp.sum(predicted_digits == batch_lbls))
-        total_energy += float(jnp.sum(energy))
-        total += end - start
-
-    test_energy = total_energy / total
-    accuracy = correct / total
-
-    print(f"  Test Energy:   {test_energy:.4f}")
-    print(f"  Test Accuracy: {accuracy * 100:.2f}%")
+    print(f"  Test Energy:   {test_metrics['energy']:.4f}")
+    print(f"  Test Accuracy: {test_metrics['accuracy'] * 100:.2f}%")
     print(f"\n{len(structure.nodes)} nodes, {len(structure.edges)} edges, "
           f"{total_params:,} parameters")
     print("\nDone.")
