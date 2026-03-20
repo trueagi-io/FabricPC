@@ -30,8 +30,8 @@ import jax.numpy as jnp
 import optax
 
 from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.core.activations import IdentityActivation
-from fabricpc.core.energy import NavierStokesEnergy
+from fabricpc.core.activations import IdentityActivation, SoftmaxActivation
+from fabricpc.core.energy import NavierStokesEnergy, CrossEntropyEnergy
 from fabricpc.core.inference import InferenceSGD, run_inference
 from fabricpc.graph import initialize_graph_state, initialize_params
 from fabricpc.nodes import IdentityNode, Linear
@@ -55,17 +55,18 @@ class MnistFieldLoader:
         self.loader = MnistLoader(
             split=split,
             batch_size=batch_size,
+            max_batches=max_batches,
             tensor_format="NHWC",
             **loader_kwargs,
         )
         self.max_batches = max_batches
 
     def __iter__(self) -> Iterator[dict[str, np.ndarray]]:
-        for batch_idx, (images, _) in enumerate(self.loader):
+        for batch_idx, (images, labels) in enumerate(self.loader):
             if batch_idx >= self.max_batches:
                 break
             field = mnist_to_uvp(np.asarray(images))
-            yield {"x": field, "y": field}
+            yield {"x": field, "label": np.asarray(labels)}
 
     def __len__(self) -> int:
         return min(len(self.loader), self.max_batches)
@@ -86,11 +87,23 @@ def create_structure():
         ),
         name="field",
     )
+    
+    # Classification head
+    output_node = Linear(
+        shape=(10,),
+        activation=SoftmaxActivation(),
+        energy=CrossEntropyEnergy(),
+        name="classifier",
+        flatten_input=True
+    )
 
     return graph(
-        nodes=[input_node, field_node],
-        edges=[Edge(source=input_node, target=field_node.slot("in"))],
-        task_map=TaskMap(x=input_node, y=field_node),
+        nodes=[input_node, field_node, output_node],
+        edges=[
+            Edge(source=input_node, target=field_node.slot("in")),
+            Edge(source=field_node, target=output_node.slot("in"))
+        ],
+        task_map=TaskMap(x=input_node, label=output_node),
         inference=InferenceSGD(eta_infer=0.01, infer_steps=3),
     )
 
@@ -100,11 +113,11 @@ def mean_energy(history) -> float:
     return sum(values) / len(values) if values else math.nan
 
 
-def held_out_batch_energy(params, structure, batch, rng_key) -> float:
+def held_out_metrics(params, structure, batch, rng_key) -> dict[str, float]:
     batch_size = batch["x"].shape[0]
     clamps = {
         structure.task_map["x"]: jnp.array(batch["x"]),
-        structure.task_map["y"]: jnp.array(batch["y"]),
+        # Do not clamp label during evaluation to measure prediction
     }
     state = initialize_graph_state(
         structure,
@@ -114,7 +127,17 @@ def held_out_batch_energy(params, structure, batch, rng_key) -> float:
         params=params,
     )
     final_state = run_inference(params, state, clamps, structure)
-    return float(jnp.mean(final_state.nodes["field"].energy))
+    
+    # Accuracy
+    predictions = final_state.nodes["classifier"].z_mu
+    pred_labels = jnp.argmax(predictions, axis=1)
+    true_labels = jnp.argmax(batch["label"], axis=1)
+    accuracy = jnp.mean(pred_labels == true_labels)
+    
+    # Energy
+    energy = jnp.mean(final_state.nodes["field"].energy)
+    
+    return {"energy": float(energy), "accuracy": float(accuracy)}
 
 
 def main():
@@ -162,7 +185,7 @@ def main():
         dt=1.0
     )
     
-    train_config = {"num_epochs": 1}
+    train_config = {"num_epochs": 100}
 
     master_key = jax.random.PRNGKey(0)
     graph_key, train_key, eval_key = jax.random.split(master_key, 3)
@@ -180,13 +203,14 @@ def main():
     avg_training_energy = mean_energy(energy_history)
 
     held_out_batch = next(iter(test_loader))
-    held_out_energy = held_out_batch_energy(
+    metrics = held_out_metrics(
         trained_params, structure, held_out_batch, eval_key
     )
 
-    finite_values = jnp.array([avg_training_energy, held_out_energy])
+    finite_values = jnp.array([avg_training_energy, metrics["energy"]])
     print(f"Average training energy: {avg_training_energy:.6f}")
-    print(f"Held-out batch energy: {held_out_energy:.6f}")
+    print(f"Held-out batch energy:   {metrics['energy']:.6f}")
+    print(f"Held-out batch accuracy: {metrics['accuracy']*100:.2f}%")
     print(f"All reported energies finite: {bool(jnp.all(jnp.isfinite(finite_values)))}")
 
 

@@ -27,6 +27,7 @@ class MnistLoader:
         batch_size: int,
         shuffle: bool = True,
         seed: int = None,
+        max_batches: int = None,
         tensor_format: str = "NHWC",  # image tensor 'flat' or 'NHWC' batch-height-width-channels
         normalize_mean: float = 0.1307,
         normalize_std: float = 0.3081,
@@ -64,6 +65,8 @@ class MnistLoader:
         )
         self.num_examples = info.splits[split].num_examples
         self._num_batches = (self.num_examples + batch_size - 1) // batch_size
+        if max_batches is not None:
+            self._num_batches = min(self._num_batches, max_batches)
 
         # Build pipeline
         if shuffle:
@@ -71,6 +74,8 @@ class MnistLoader:
                 buffer_size=self.num_examples, seed=buffer_seed
             )  # mnist fits in memory (~60MB) so the buffer is the full dataset
         ds = ds.batch(batch_size, drop_remainder=False)
+        if max_batches is not None:
+            ds = ds.take(max_batches)
         ds = ds.prefetch(tf.data.AUTOTUNE)
 
         self.ds = ds
