@@ -25,7 +25,7 @@ from fabricpc.training.multi_gpu import (
     train_pcn_multi_gpu,
     evaluate_transformer_multi_gpu,
 )
-from fabricpc.core.inference import run_inference, InferenceSGD
+from fabricpc.core.inference import run_inference, InferenceSGDNormClip
 from fabricpc.graph.state_initializer import initialize_graph_state
 from fabricpc.nodes.transformer_v2 import create_deep_transformer
 from fabricpc.utils.data import CharDataLoader
@@ -56,14 +56,16 @@ ix_to_char = train_loader.idx_to_char
 # --- Model ---
 
 structure = create_deep_transformer(
-    depth=4,
+    depth=1,
     embed_dim=64,
-    num_heads=4,
+    num_heads=2,
     mlp_dim=128,
     seq_len=seq_len,
     vocab_size=vocab_size,
-    inference=InferenceSGD(eta_infer=0.033195052120243505, infer_steps=17),
-    weight_init={"type": "normal", "std": 0.04402197307582635},
+    inference=InferenceSGDNormClip(
+        eta_infer=0.07001187387724062, infer_steps=11, max_norm=0.5, latent_decay=0.0
+    ),
+    weight_init={"type": "normal", "std": 0.042070291563276484},
 )
 
 # --- Train & Evaluate ---
@@ -73,10 +75,14 @@ graph_key, train_key, eval_key = jax.random.split(master_rng_key, 3)
 
 params = initialize_params(structure, graph_key)
 
+LR = 1e-4
 train_config = {
-    "num_epochs": 5,
+    "num_epochs": 3,
 }
-optimizer = optax.adam(1e-5)
+optimizer = optax.chain(
+    optax.clip_by_global_norm(0.5),
+    optax.adamw(LR, weight_decay=0.01),
+)
 
 print(f"Vocab Size: {vocab_size} | Training on local tiny_shakespeare.txt...")
 trained_params = train_pcn_multi_gpu(
