@@ -89,12 +89,13 @@ def create_structure():
     )
 
 def main():
-    max_epochs = 10
+    max_epochs = 20
     batch_size = 200
     
     # Grid search parameters
-    viscosities = [0.2, 0.5, 0.9, 1.2]
-    transport_costs = [1e-5, 1e-4, 1e-3]
+    viscosities = [0.9, 1.0]
+    transport_costs = [1e-5]
+    learning_rates = [3e-4, 1e-3, 3e-5]
     
     results = []
     
@@ -104,13 +105,13 @@ def main():
     
     master_rng_key = jax.random.PRNGKey(42)
     
-    print(f"Starting Grid Search: {len(viscosities) * len(transport_costs)} combinations")
+    print(f"Starting Grid Search: {len(viscosities) * len(transport_costs) * len(learning_rates)} combinations")
     
-    for visc, cost in itertools.product(viscosities, transport_costs):
-        print(f"\n--- Testing Viscosity: {visc}, Transport Cost: {cost} ---")
+    for lr, visc, cost in itertools.product(learning_rates, viscosities, transport_costs):
+        print(f"\n--- Testing LR: {lr}, Viscosity: {visc}, Transport Cost: {cost} ---")
         
         optimizer = hj_ot_optimizer(
-            learning_rate=1e-3,
+            learning_rate=lr,
             viscosity=visc,
             transport_cost=cost,
             dt=1.0
@@ -138,6 +139,7 @@ def main():
             
             print(f"Result -> Accuracy: {accuracy:.2f}%, Time: {elapsed:.2f}s")
             results.append({
+                "learning_rate": lr,
                 "viscosity": visc,
                 "transport_cost": cost,
                 "accuracy": accuracy,
@@ -147,6 +149,7 @@ def main():
         except Exception as e:
             print(f"Failed -> Error: {str(e)}")
             results.append({
+                "learning_rate": lr,
                 "viscosity": visc,
                 "transport_cost": cost,
                 "accuracy": 0.0,
@@ -159,27 +162,33 @@ def main():
     df.to_csv("hj_ot_grid_search_results.csv", index=False)
     print("\nResults saved to hj_ot_grid_search_results.csv")
     
-    # Visualization
-    pivot_df = df.pivot(index="viscosity", columns="transport_cost", values="accuracy")
-    
-    plt.figure(figsize=(10, 8))
-    im = plt.imshow(pivot_df.values, cmap="viridis")
-    plt.colorbar(im, label="Accuracy (%)")
-    
-    plt.xticks(range(len(transport_costs)), transport_costs)
-    plt.yticks(range(len(viscosities)), viscosities)
-    
-    plt.xlabel("Transport Cost")
-    plt.ylabel("Viscosity")
-    plt.title(f"HJ-OT Hyperparameter Heatmap (Accuracy after {max_epochs} Epochs)")
-    
-    for i in range(len(viscosities)):
-        for j in range(len(transport_costs)):
-            val = pivot_df.values[i, j]
-            plt.text(j, i, f"{val:.1f}", ha="center", va="center", color="white" if val < 50 else "black")
+    # Visualization: Heatmaps per Learning Rate
+    for lr in learning_rates:
+        lr_df = df[df["learning_rate"] == lr]
+        if lr_df.empty:
+            continue
             
-    plt.savefig("hj_ot_grid_search_heatmap.png")
-    print("Heatmap saved to hj_ot_grid_search_heatmap.png")
+        pivot_df = lr_df.pivot(index="viscosity", columns="transport_cost", values="accuracy")
+        
+        plt.figure(figsize=(10, 8))
+        im = plt.imshow(pivot_df.values, cmap="viridis")
+        plt.colorbar(im, label="Accuracy (%)")
+        
+        plt.xticks(range(len(transport_costs)), transport_costs)
+        plt.yticks(range(len(viscosities)), viscosities)
+        
+        plt.xlabel("Transport Cost")
+        plt.ylabel("Viscosity")
+        plt.title(f"HJ-OT Heatmap (LR={lr}, {max_epochs} Epochs)")
+        
+        for i in range(len(viscosities)):
+            for j in range(len(transport_costs)):
+                val = pivot_df.values[i, j]
+                plt.text(j, i, f"{val:.1f}", ha="center", va="center", color="white" if val < 50 else "black")
+                
+        plot_path = f"hj_ot_grid_search_heatmap_lr_{lr}.png"
+        plt.savefig(plot_path)
+        print(f"Heatmap saved to {plot_path}")
 
 if __name__ == "__main__":
     main()
