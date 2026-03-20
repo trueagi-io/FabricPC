@@ -14,6 +14,9 @@ python examples/mnist_demo.py
 # Run Navier-Stokes energy smoke test on MNIST data
 python examples/mnist_navier_stokes_smoke.py
 
+# Run the synthetic fluid acceptance benchmark
+python examples/navier_stokes_acceptance.py
+
 # Choose optimizer preset at runtime (no code edits)
 python examples/mnist_demo.py --optimizer adam
 # or via environment variable
@@ -64,6 +67,16 @@ Test Accuracy: 98.14%
 - Adapts each grayscale image `(28, 28, 1)` into a pseudo-fluid field `(28, 28, 3)`
 - Runs a short predictive-coding training pass and held-out inference check
 - Reports finite energy values instead of classification accuracy
+
+### `navier_stokes_acceptance.py`
+
+**Description**: Acceptance benchmark for `NavierStokesEnergy` on a synthetic periodic fluid reconstruction task.
+
+**Behavior**:
+- Generates periodic `(u, v, p)` fields from a synthetic Taylor-Green-style family
+- Compares `GaussianEnergy` and `NavierStokesEnergy` across full-field, partial-observation, and noisy-observation scenarios
+- Reports train/validation/test fluid metrics instead of classification accuracy
+- Saves qualitative field and physics panels plus a JSON summary to a temporary artifact directory
 
 ### `PC_backprop_compare.py`
 **Description**: Compare accuracy and training time of Predictive Coding vs Backpropagation on MNIST.

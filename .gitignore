@@ -14,6 +14,10 @@ __pycache__/
 venv/
 env/
 envs/
+.venv311/
+.venv312/
+venv311/
+venv312/
 pip-wheel-metadata/
 
 # Packaging
@@ -68,6 +72,8 @@ models/*.pt
 models/*.pth
 *.pt
 *.pth
+!fabricpc/utils/data/
+!fabricpc/utils/data/synthetic_fluid.py
 
 # Project-specific folders that contain generated or big files
 experiments/log_dir/

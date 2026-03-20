@@ -4,6 +4,10 @@ Backprop trainers are provided for performance comparison to PC and as a referen
 """
 
 from fabricpc.training.train import train_step, train_pcn, evaluate_pcn
+from fabricpc.training.fluid_eval import (
+    evaluate_fluid_reconstruction,
+    predict_fluid_batch,
+)
 from fabricpc.training.multi_gpu import (
     train_pcn_multi_gpu,
     evaluate_transformer_multi_gpu,
@@ -33,6 +37,8 @@ __all__ = [
     "train_step",
     "train_pcn",
     "evaluate_pcn",
+    "evaluate_fluid_reconstruction",
+    "predict_fluid_batch",
     # Multi-GPU
     "train_pcn_multi_gpu",
     "evaluate_pcn_multi_gpu",
