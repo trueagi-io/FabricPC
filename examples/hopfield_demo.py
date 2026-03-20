@@ -103,8 +103,8 @@ def main():
         help="Learning rate (default: 0.001)",
     )
     parser.add_argument(
-        "--hidden_size", type=int, default=512,
-        help="HopfieldNode hidden layer size (default: 512)",
+        "--hidden_size", type=int, default=256,
+        help="HopfieldNode hidden layer size (default: 256)",
     )
     parser.add_argument(
         "--n_train", type=int, default=5000,
