@@ -55,6 +55,31 @@ ix_to_char = train_loader.idx_to_char
 
 # --- Model ---
 
+"""
+Optimization Changes Implemented:
+
+1. InferenceSGDNormClip (latent gradient clipping):
+   - Replaced InferenceSGD with InferenceSGDNormClip for the PC inference loop.
+   - Clips per-node latent gradients independently during inference (Phase 1),
+     preventing any single node from dominating the latent update step.
+   - V2's decomposed architecture has 3 PC nodes per layer (MHA, MLP1, MLP2),
+     each with its own error signal. Without clipping, large errors in one node
+     cause oscillation instead of smooth energy convergence.
+
+2. Gradient Norm Clipping (weight gradient clipping):
+   - Added optax.clip_by_global_norm(0.5) to the optimizer chain.
+   - Clips weight and bias gradients during the weight learning step (Phase 2).
+   - Computes the global L2 norm across all parameters and scales gradients down
+     if the norm exceeds max_norm, preserving direction but capping magnitude.
+   - Prevents exploding weight gradients from destabilizing training.
+
+3. AdamW Optimizer (decoupled weight decay):
+   - Replaced optax.adam with optax.adamw(weight_decay=0.01).
+   - AdamW applies weight decay directly to weights after the Adam step,
+     decoupled from the adaptive gradient scaling.
+   - Unlike Adam + L2, every parameter gets uniform regularization regardless
+     of gradient history, preventing overfitting and weight overgrowth.
+"""
 structure = create_deep_transformer(
     depth=1,
     embed_dim=64,
@@ -79,6 +104,7 @@ LR = 1e-4
 train_config = {
     "num_epochs": 3,
 }
+
 optimizer = optax.chain(
     optax.clip_by_global_norm(0.5),
     optax.adamw(LR, weight_decay=0.01),
