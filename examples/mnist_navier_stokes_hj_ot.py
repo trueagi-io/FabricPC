@@ -140,35 +140,39 @@ def train_and_eval(optimizer, name, use_navier_stokes=True, max_epochs=2):
     return accuracies
 
 def main():
-    max_epochs = 20
+    max_epochs = 40
     
-    # 1. HJ-OT with Low Viscosity (0.2)
-    hj_ot_low_visc = hj_ot_optimizer(
-        learning_rate=1e-3,
-        viscosity=0.2,
-        transport_cost=1e-4,
-        dt=1.0
-    )
-    low_visc_accs = train_and_eval(hj_ot_low_visc, "HJ-OT (Visc 0.2)", use_navier_stokes=True, max_epochs=max_epochs)
+    # 1. HJ-OT with Static Viscosity (0.9)
+    # hj_ot_static = hj_ot_optimizer(
+    #     learning_rate=1e-3,
+    #     viscosity=0.9,
+    #     transport_cost=1e-5,
+    #     dt=1.0,
+    #     mass=1.5
+    # )
+    # static_accs = train_and_eval(hj_ot_static, "HJ-OT (Static 0.9)", use_navier_stokes=True, max_epochs=max_epochs)
     
-    # 2. HJ-OT with High Viscosity (0.5)
-    hj_ot_high_visc = hj_ot_optimizer(
+    # 2. HJ-OT with Dynamic Viscosity (0.9 -> 0.3)
+    hj_ot_dynamic = hj_ot_optimizer(
         learning_rate=1e-3,
-        viscosity=0.5,
-        transport_cost=1e-4,
-        dt=1.0
+        viscosity=0.9,
+        viscosity_decay=0.4,
+        viscosity_min=0.3,
+        transport_cost=1e-5,
+        dt=1.0,
+        mass=1.5
     )
-    high_visc_accs = train_and_eval(hj_ot_high_visc, "HJ-OT (Visc 2.0)", use_navier_stokes=True, max_epochs=max_epochs)
+    dynamic_accs = train_and_eval(hj_ot_dynamic, "HJ-OT (Dynamic 0.9->0.3)", use_navier_stokes=True, max_epochs=max_epochs)
     
     # Plotting
     epochs = range(1, max_epochs + 1)
     
     plt.figure(figsize=(8, 6))
-    plt.plot(epochs, low_visc_accs, 'o-', label='HJ-OT (Visc 0.5)', color='teal')
-    plt.plot(epochs, high_visc_accs, 's-', label='HJ-OT (Visc 2.0)', color='crimson')
+    # plt.plot(epochs, static_accs, 'o-', label='Static Visc (0.9)', color='teal')
+    plt.plot(epochs, dynamic_accs, 's-', label='Dynamic Visc (0.9 -> 0.3)', color='crimson')
     plt.xlabel('Epochs')
     plt.ylabel('Test Accuracy (%)')
-    plt.title('HJ-OT Parameter Comparison (Viscosity 0.5 vs 2.0)')
+    plt.title('HJ-OT Viscosity Stability: Static vs Dynamic')
     plt.legend()
     plt.grid(True)
     
