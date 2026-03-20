@@ -36,6 +36,7 @@ from fabricpc.core.inference import InferenceSGD, run_inference
 from fabricpc.graph import initialize_graph_state, initialize_params
 from fabricpc.nodes import IdentityNode, Linear
 from fabricpc.training import train_pcn
+from fabricpc.training.hj_ot import hj_ot_optimizer  # Import the new Dual-Fluid optimizer
 from fabricpc.utils.data.dataloader import MnistLoader
 
 jax.config.update("jax_default_prng_impl", "threefry2x32")
@@ -150,7 +151,17 @@ def main():
     print(f"Adapted field batch shape: {tuple(preview_field.shape)}")
 
     structure = create_structure()
-    optimizer = optax.adam(1e-3)
+    
+    # Dual-Fluid: Use Hamilton-Jacobi Optimal Transport for weight propagation.
+    # The network predicts Navier-Stokes fluids, while weights travel through
+    # parameter space via HJ-OT transport viscous dynamics!
+    optimizer = hj_ot_optimizer(
+        learning_rate=1e-3,
+        viscosity=0.9,
+        transport_cost=1e-4,
+        dt=1.0
+    )
+    
     train_config = {"num_epochs": 1}
 
     master_key = jax.random.PRNGKey(0)
