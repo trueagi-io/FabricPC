@@ -1,0 +1,230 @@
+{
+  "global_step": 5,
+  "summaries": [
+    {
+      "task_id": 0,
+      "classes": [
+        0,
+        1
+      ],
+      "train_accuracy": 1.0,
+      "test_accuracy": 0.9995271867612293,
+      "train_loss": 0.0,
+      "test_loss": 0.0,
+      "train_energy": 0.0,
+      "test_energy": 0.0,
+      "epochs_trained": 5,
+      "training_time": 8.75885820388794,
+      "support_cols": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        28,
+        29,
+        30,
+        31
+      ],
+      "epoch_accuracies": [
+        0.9990543735224586,
+        0.9990543735224586,
+        0.9995271867612293,
+        0.9990543735224586,
+        0.9995271867612293
+      ],
+      "epoch_losses": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "selector_policy_used": true,
+      "selector_trust": 0.5
+    },
+    {
+      "task_id": 1,
+      "classes": [
+        2,
+        3
+      ],
+      "train_accuracy": 0.9968738002522898,
+      "test_accuracy": 0.9931439764936337,
+      "train_loss": 0.0,
+      "test_loss": 0.0,
+      "train_energy": 0.0,
+      "test_energy": 0.0,
+      "epochs_trained": 5,
+      "training_time": 11.502224445343018,
+      "support_cols": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        28,
+        29,
+        30,
+        31
+      ],
+      "epoch_accuracies": [
+        0.9711067580803134,
+        0.984818805093046,
+        0.9897159647404505,
+        0.9926542605288933,
+        0.9931439764936337
+      ],
+      "epoch_losses": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "selector_policy_used": true,
+      "selector_trust": 0.5
+    },
+    {
+      "task_id": 2,
+      "classes": [
+        4,
+        5
+      ],
+      "train_accuracy": 0.9994672980171648,
+      "test_accuracy": 0.996264674493063,
+      "train_loss": 0.0,
+      "test_loss": 0.0,
+      "train_energy": 0.0,
+      "test_energy": 0.0,
+      "epochs_trained": 5,
+      "training_time": 13.536281108856201,
+      "support_cols": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        28,
+        29,
+        30,
+        31
+      ],
+      "epoch_accuracies": [
+        0.987726787620064,
+        0.9925293489861259,
+        0.9935965848452508,
+        0.9935965848452508,
+        0.996264674493063
+      ],
+      "epoch_losses": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "selector_policy_used": false,
+      "selector_trust": 0.5
+    },
+    {
+      "task_id": 3,
+      "classes": [
+        6,
+        7
+      ],
+      "train_accuracy": 0.9993452283516123,
+      "test_accuracy": 0.9919436052366566,
+      "train_loss": 0.0,
+      "test_loss": 0.0,
+      "train_energy": 0.0,
+      "test_energy": 0.0,
+      "epochs_trained": 5,
+      "training_time": 12.409433603286743,
+      "support_cols": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        28,
+        29,
+        30,
+        31
+      ],
+      "epoch_accuracies": [
+        0.9838872104733132,
+        0.9848942598187311,
+        0.9884189325276939,
+        0.9914400805639476,
+        0.9919436052366566
+      ],
+      "epoch_losses": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "selector_policy_used": false,
+      "selector_trust": 0.5
+    },
+    {
+      "task_id": 4,
+      "classes": [
+        8,
+        9
+      ],
+      "train_accuracy": 0.9902334979793445,
+      "test_accuracy": 0.9843671205244579,
+      "train_loss": 0.0,
+      "test_loss": 0.0,
+      "train_energy": 0.0,
+      "test_energy": 0.0,
+      "epochs_trained": 5,
+      "training_time": 11.169525861740112,
+      "support_cols": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        28,
+        29,
+        30,
+        31
+      ],
+      "epoch_accuracies": [
+        0.956631366616238,
+        0.9773071104387292,
+        0.9793242561775088,
+        0.9798285426122038,
+        0.9843671205244579
+      ],
+      "epoch_losses": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "selector_policy_used": false,
+      "selector_trust": 0.5
+    }
+  ]
+}

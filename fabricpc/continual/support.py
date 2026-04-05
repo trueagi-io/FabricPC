@@ -6,10 +6,11 @@ Manages which memory columns are active for each task, using:
 - Demotion banks for tracking demoted columns
 - Hybrid selector policy combining multiple strategies
 - Trust controller for adjusting policy influence
+- Experience replay buffer for preventing catastrophic forgetting
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Optional, Sequence, Any
+from typing import Dict, List, Tuple, Optional, Sequence, Any, Iterator
 import numpy as np
 import jax.numpy as jnp
 
@@ -700,3 +701,242 @@ class SupportManager:
         tc = state["trust_controller"]
         self.trust_controller.trust = tc["trust"]
         self.trust_controller.history = tc["history"]
+
+
+class ReplayBuffer:
+    """
+    Experience replay buffer for continual learning.
+
+    Stores samples from previous tasks to be replayed during training
+    on new tasks, preventing catastrophic forgetting.
+
+    Uses reservoir sampling to maintain a fixed-size buffer with
+    representative samples from all seen tasks.
+    """
+
+    def __init__(
+        self,
+        max_samples_per_task: int = 500,
+        max_total_samples: int = 5000,
+    ):
+        """
+        Initialize replay buffer.
+
+        Args:
+            max_samples_per_task: Maximum samples to store per task
+            max_total_samples: Maximum total samples in buffer
+        """
+        self.max_samples_per_task = max_samples_per_task
+        self.max_total_samples = max_total_samples
+
+        # Storage: task_id -> (images, labels)
+        self._buffers: Dict[int, Tuple[np.ndarray, np.ndarray]] = {}
+        self._counts: Dict[int, int] = {}
+
+    def add_task_samples(
+        self,
+        task_id: int,
+        images: np.ndarray,
+        labels: np.ndarray,
+        replace: bool = False,
+    ):
+        """
+        Add samples from a task to the buffer.
+
+        Uses reservoir sampling if more samples than max_samples_per_task.
+
+        Args:
+            task_id: Task identifier
+            images: Array of images (N, ...)
+            labels: Array of labels (N, ...) - can be one-hot or integer
+            replace: Whether to replace existing samples for this task
+        """
+        n_samples = len(images)
+
+        if replace or task_id not in self._buffers:
+            # Initialize or replace buffer for this task
+            if n_samples <= self.max_samples_per_task:
+                # Store all samples
+                self._buffers[task_id] = (images.copy(), labels.copy())
+                self._counts[task_id] = n_samples
+            else:
+                # Reservoir sampling
+                indices = np.random.choice(
+                    n_samples, size=self.max_samples_per_task, replace=False
+                )
+                self._buffers[task_id] = (
+                    images[indices].copy(),
+                    labels[indices].copy(),
+                )
+                self._counts[task_id] = self.max_samples_per_task
+        else:
+            # Append to existing (with reservoir sampling if needed)
+            existing_imgs, existing_labels = self._buffers[task_id]
+            combined_imgs = np.concatenate([existing_imgs, images], axis=0)
+            combined_labels = np.concatenate([existing_labels, labels], axis=0)
+
+            if len(combined_imgs) <= self.max_samples_per_task:
+                self._buffers[task_id] = (combined_imgs, combined_labels)
+                self._counts[task_id] = len(combined_imgs)
+            else:
+                # Reservoir sampling
+                indices = np.random.choice(
+                    len(combined_imgs), size=self.max_samples_per_task, replace=False
+                )
+                self._buffers[task_id] = (
+                    combined_imgs[indices].copy(),
+                    combined_labels[indices].copy(),
+                )
+                self._counts[task_id] = self.max_samples_per_task
+
+        # Enforce total limit by reducing oldest tasks
+        self._enforce_total_limit()
+
+    def _enforce_total_limit(self):
+        """Reduce buffer sizes to stay within total limit."""
+        total = sum(self._counts.values())
+        if total <= self.max_total_samples:
+            return
+
+        # Reduce proportionally from all tasks
+        reduction_factor = self.max_total_samples / total
+
+        for task_id in list(self._buffers.keys()):
+            imgs, labels = self._buffers[task_id]
+            new_size = max(1, int(len(imgs) * reduction_factor))
+            if new_size < len(imgs):
+                indices = np.random.choice(len(imgs), size=new_size, replace=False)
+                self._buffers[task_id] = (imgs[indices], labels[indices])
+                self._counts[task_id] = new_size
+
+    def sample(
+        self,
+        batch_size: int,
+        exclude_task: Optional[int] = None,
+    ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        """
+        Sample a batch from the replay buffer.
+
+        Args:
+            batch_size: Number of samples to return
+            exclude_task: Task ID to exclude (e.g., current task)
+
+        Returns:
+            Tuple of (images, labels) or None if buffer is empty
+        """
+        # Get available tasks
+        available_tasks = [t for t in self._buffers.keys() if t != exclude_task]
+
+        if not available_tasks:
+            return None
+
+        # Collect all samples from available tasks
+        all_imgs = []
+        all_labels = []
+        for task_id in available_tasks:
+            imgs, labels = self._buffers[task_id]
+            all_imgs.append(imgs)
+            all_labels.append(labels)
+
+        all_imgs = np.concatenate(all_imgs, axis=0)
+        all_labels = np.concatenate(all_labels, axis=0)
+
+        if len(all_imgs) == 0:
+            return None
+
+        # Sample batch
+        actual_batch_size = min(batch_size, len(all_imgs))
+        indices = np.random.choice(len(all_imgs), size=actual_batch_size, replace=False)
+
+        return all_imgs[indices], all_labels[indices]
+
+    def sample_by_task(
+        self,
+        samples_per_task: int,
+        exclude_task: Optional[int] = None,
+    ) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        """
+        Sample equal numbers from each task.
+
+        Args:
+            samples_per_task: Samples to take from each task
+            exclude_task: Task ID to exclude
+
+        Returns:
+            Tuple of (images, labels) or None if buffer is empty
+        """
+        available_tasks = [t for t in self._buffers.keys() if t != exclude_task]
+
+        if not available_tasks:
+            return None
+
+        sampled_imgs = []
+        sampled_labels = []
+
+        for task_id in available_tasks:
+            imgs, labels = self._buffers[task_id]
+            n = min(samples_per_task, len(imgs))
+            if n > 0:
+                indices = np.random.choice(len(imgs), size=n, replace=False)
+                sampled_imgs.append(imgs[indices])
+                sampled_labels.append(labels[indices])
+
+        if not sampled_imgs:
+            return None
+
+        return np.concatenate(sampled_imgs, axis=0), np.concatenate(
+            sampled_labels, axis=0
+        )
+
+    def get_task_ids(self) -> List[int]:
+        """Return list of task IDs in buffer."""
+        return list(self._buffers.keys())
+
+    def get_task_count(self, task_id: int) -> int:
+        """Return sample count for a task."""
+        return self._counts.get(task_id, 0)
+
+    def total_samples(self) -> int:
+        """Return total samples in buffer."""
+        return sum(self._counts.values())
+
+    def __len__(self) -> int:
+        """Return number of tasks in buffer."""
+        return len(self._buffers)
+
+    def clear(self):
+        """Clear all samples from buffer."""
+        self._buffers.clear()
+        self._counts.clear()
+
+    def save_state(self) -> Dict[str, Any]:
+        """Save buffer state for checkpointing."""
+        return {
+            "buffers": {
+                str(k): {
+                    "images": v[0].tolist(),
+                    "labels": v[1].tolist(),
+                }
+                for k, v in self._buffers.items()
+            },
+            "counts": {str(k): v for k, v in self._counts.items()},
+            "max_samples_per_task": self.max_samples_per_task,
+            "max_total_samples": self.max_total_samples,
+        }
+
+    def load_state(self, state: Dict[str, Any]):
+        """Load buffer state from checkpoint."""
+        self.max_samples_per_task = state.get(
+            "max_samples_per_task", self.max_samples_per_task
+        )
+        self.max_total_samples = state.get("max_total_samples", self.max_total_samples)
+
+        self._buffers = {}
+        for k, v in state.get("buffers", {}).items():
+            task_id = int(k)
+            self._buffers[task_id] = (
+                np.array(v["images"]),
+                np.array(v["labels"]),
+            )
+
+        self._counts = {int(k): v for k, v in state.get("counts", {}).items()}
