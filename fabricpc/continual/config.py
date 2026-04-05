@@ -332,6 +332,13 @@ class AuditConfig:
     support_bank_exact_audit_topk: int = 24
     support_cloud_audit_topk: int = 12
 
+    # Support swap audit for causal learning
+    support_swap_audit_enable: bool = True
+    support_swap_audit_max_swaps: int = 45  # Max column swaps per audit
+    support_audit_current_weight: float = 1.0  # Weight for current task loss
+    support_audit_old_weight: float = 1.0  # Weight for old task loss
+    support_audit_max_batches: int = 4  # Max batches to evaluate per swap
+
 
 @dataclass
 class PredictorConfig:
@@ -412,6 +419,8 @@ def make_config(quick_smoke: bool = False) -> ExperimentConfig:
         cfg.audit.audit_batches_per_task = 1
         cfg.audit.smoke_per_micro_tier_quotas = (0, 1, 1)
         cfg.audit.per_micro_tier_quotas = (1, 2, 2)
+        cfg.audit.support_swap_audit_max_swaps = 12
+        cfg.audit.support_audit_max_batches = 2
 
         cfg.composer.hidden_dim = 16
         cfg.composer.num_heads = 2

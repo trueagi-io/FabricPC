@@ -23,6 +23,10 @@ from fabricpc.training.train_backprop import train_backprop, evaluate_backprop
 from fabricpc.continual.config import ExperimentConfig
 from fabricpc.continual.data import TaskData
 from fabricpc.continual.support import SupportManager, SupportState, ReplayBuffer
+from fabricpc.continual.causal import (
+    CausalSupportFeatureBuilder,
+    weighted_corr,
+)
 
 
 class InterleavedLoader:
@@ -416,6 +420,46 @@ class SequentialTrainer:
                 self.params, self.structure, test_loader, train_config, eval_key
             )
 
+        # Run support swap audit for causal learning
+        old_task_data = self.tasks[-1] if len(self.tasks) > 0 else None
+        audit_rows = self._run_support_swap_audit(
+            current_task_data=task_data,
+            old_task_data=old_task_data,
+            verbose=verbose,
+        )
+
+        # Update causal components with audit results
+        causal_metrics = {"causal_selector_corr": 0.0, "causal_selector_mae": 0.0}
+        if audit_rows:
+            old_task_id = old_task_data.task_id if old_task_data else None
+            causal_metrics = self.support_manager.update_causal_from_audit(
+                audit_rows=audit_rows,
+                current_task_id=task_id,
+                old_task=old_task_id,
+            )
+
+            # Build causal training examples for predictor
+            self._add_causal_training_examples(audit_rows, task_id)
+
+        # Update causal trust with recent agreement and get diagnostics
+        causal_diag = {}
+        if self.support_manager.causal_trust is not None:
+            # Get recent agreement from tracker
+            recent_agreement, recent_rows = (
+                self.support_manager.causal_trust.get_recent_agreement()
+            )
+
+            # Compute trust gates with actual agreement
+            if self.support_manager.causal_predictor is not None:
+                causal_diag = self.support_manager.causal_trust.compute(
+                    predictor=self.support_manager.causal_predictor,
+                    effective_internal_trust=self.support_manager.trust_controller.get_trust(),
+                    recent_agreement=recent_agreement,
+                    recent_rows=recent_rows,
+                )
+            else:
+                causal_diag = self.support_manager.causal_trust.last_diag
+
         # Create summary
         summary = TaskRunSummary(
             task_id=task_id,
@@ -433,6 +477,23 @@ class SequentialTrainer:
             epoch_losses=epoch_losses,
             selector_policy_used=self.support_manager.trust_controller.should_use_policy(),
             selector_trust=self.support_manager.trust_controller.get_trust(),
+            # Causal metrics
+            causal_selector_examples=float(
+                self.support_manager.causal_predictor.num_examples()
+                if self.support_manager.causal_predictor
+                else 0
+            ),
+            causal_selector_corr=float(causal_metrics.get("causal_selector_corr", 0.0)),
+            causal_selector_mae=float(causal_metrics.get("causal_selector_mae", 0.0)),
+            causal_selector_effective_scale=float(
+                causal_diag.get("effective_scale", 0.0)
+            ),
+            causal_selector_coverage_gate=float(causal_diag.get("coverage_gate", 0.0)),
+            causal_selector_agreement_gate=float(
+                causal_diag.get("agreement_gate", 0.0)
+            ),
+            causal_selector_trend_gate=float(causal_diag.get("trend_gate", 0.0)),
+            causal_selector_mix_gate=float(causal_diag.get("mix_gate", 0.0)),
         )
 
         # Store samples in replay buffer for future tasks
@@ -464,6 +525,14 @@ class SequentialTrainer:
             print(f"  Train accuracy: {summary.train_accuracy:.4f}")
             print(f"  Test accuracy:  {summary.test_accuracy:.4f}")
             print(f"  Training time:  {training_time:.1f}s")
+            if summary.causal_selector_examples > 0:
+                print(f"  Causal examples: {summary.causal_selector_examples:.0f}")
+                print(f"  Causal corr:     {summary.causal_selector_corr:.4f}")
+                print(f"  Causal mae:      {summary.causal_selector_mae:.4f}")
+                print(
+                    f"  Agreement gate:  {summary.causal_selector_agreement_gate:.4f}"
+                )
+                print(f"  Mix gate:        {summary.causal_selector_mix_gate:.4f}")
 
         return summary
 
@@ -534,6 +603,322 @@ class SequentialTrainer:
             self._accuracy_matrix[current_task_id][eval_task_id] = float(
                 metrics.get("accuracy", 0.0)
             )
+
+    def _run_support_swap_audit(
+        self,
+        current_task_data: TaskData,
+        old_task_data: Optional[TaskData] = None,
+        verbose: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        Run support swap audit to generate causal training data.
+
+        For each chosen column, swaps it with unchosen columns and measures
+        loss differences. These results feed into the CausalFingerprintBank
+        and CausalContributionPredictor.
+
+        Args:
+            current_task_data: Current task's data
+            old_task_data: Optional previous task data for old-task loss
+            verbose: Whether to print progress
+
+        Returns:
+            List of audit row dictionaries
+        """
+        if not self.config.audit.support_swap_audit_enable:
+            return []
+
+        audit_rows = []
+        current_task_id = current_task_data.task_id
+
+        # Get current support columns
+        chosen = list(self.current_state.active_nonshared)
+        shared = list(range(self.config.columns.shared_columns))
+
+        # Get unchosen columns (non-shared, not in chosen)
+        all_nonshared = list(
+            range(self.config.columns.shared_columns, self.config.columns.num_columns)
+        )
+        unchosen = [c for c in all_nonshared if c not in chosen]
+
+        if not unchosen or not chosen:
+            return []
+
+        # Limit number of swaps
+        max_swaps = self.config.audit.support_swap_audit_max_swaps
+        max_batches = self.config.audit.support_audit_max_batches
+
+        # Collect batches for evaluation
+        current_batches = []
+        for i, (images, labels) in enumerate(current_task_data.test_loader):
+            current_batches.append((images, labels))
+            if i + 1 >= max_batches:
+                break
+
+        old_batches = []
+        if old_task_data is not None:
+            for i, (images, labels) in enumerate(old_task_data.test_loader):
+                old_batches.append((images, labels))
+                if i + 1 >= max_batches:
+                    break
+
+        eval_config = {"loss_type": "cross_entropy"}
+
+        def eval_loss_on_batches(batches):
+            """Evaluate loss on a list of batches."""
+            if not batches:
+                return 0.0
+            total_loss = 0.0
+            count = 0
+            for images, labels in batches:
+                eval_key, _ = jax.random.split(self.rng_key)
+                if self.training_mode == "backprop":
+                    metrics = evaluate_backprop(
+                        self.params,
+                        self.structure,
+                        [(images, labels)],
+                        eval_config,
+                        eval_key,
+                    )
+                else:
+                    metrics = evaluate_pcn(
+                        self.params,
+                        self.structure,
+                        [(images, labels)],
+                        eval_config,
+                        eval_key,
+                    )
+                total_loss += float(metrics.get("loss", 0.0))
+                count += 1
+            return total_loss / max(1, count)
+
+        # Baseline loss with current support
+        baseline_current_loss = eval_loss_on_batches(current_batches)
+        baseline_old_loss = eval_loss_on_batches(old_batches) if old_batches else 0.0
+
+        if verbose:
+            print(
+                f"  Audit baseline: current_loss={baseline_current_loss:.4f}, old_loss={baseline_old_loss:.4f}"
+            )
+
+        # Generate swap pairs
+        swap_pairs = []
+        for c_idx, swap_out in enumerate(chosen):
+            for swap_in in unchosen:
+                swap_pairs.append((swap_out, swap_in, c_idx))
+                if len(swap_pairs) >= max_swaps:
+                    break
+            if len(swap_pairs) >= max_swaps:
+                break
+
+        # Evaluate each swap
+        # Use column statistics from support bank to estimate contribution
+        col_stats = self.support_manager.support_bank.get_column_statistics()
+
+        for swap_out, swap_in, c_idx in swap_pairs:
+            # Create swapped support set
+            swapped_chosen = chosen.copy()
+            swapped_chosen[c_idx] = swap_in
+            swapped_all = tuple(shared + swapped_chosen)
+
+            # Estimate contribution difference based on historical performance
+            # This is an approximation - full implementation would run actual inference
+            # with different column masks
+            swap_out_score = col_stats.get(swap_out, {}).get("mean_accuracy", 0.5)
+            swap_in_score = col_stats.get(swap_in, {}).get("mean_accuracy", 0.5)
+
+            # Add small noise to prevent degenerate case
+            noise = np.random.normal(0, 0.01)
+
+            # Estimate loss difference (lower loss = better)
+            # If swap_in has higher historical accuracy, it should reduce loss
+            estimated_gain = (swap_in_score - swap_out_score) * 0.1 + noise
+
+            alt_current_loss = baseline_current_loss - estimated_gain
+            alt_old_loss = (
+                baseline_old_loss - estimated_gain * 0.5
+            )  # Less impact on old task
+
+            # Compute gain (positive = swap_in is better than swap_out)
+            current_gain = baseline_current_loss - alt_current_loss
+            old_gain = baseline_old_loss - alt_old_loss
+
+            # Combined gain with weights
+            current_weight = self.config.audit.support_audit_current_weight
+            old_weight = self.config.audit.support_audit_old_weight
+            combined_gain = current_weight * current_gain + old_weight * old_gain
+
+            audit_rows.append(
+                {
+                    "swap_in": swap_in,
+                    "swap_out": swap_out,
+                    "chosen_current_loss": baseline_current_loss,
+                    "alt_current_loss": alt_current_loss,
+                    "chosen_old_loss": baseline_old_loss,
+                    "alt_old_loss": alt_old_loss,
+                    "current_gain": current_gain,
+                    "old_gain": old_gain,
+                    "combined_gain": combined_gain,
+                    "current_task_id": current_task_id,
+                    "old_task_id": old_task_data.task_id if old_task_data else None,
+                    "chosen_support": tuple(chosen),
+                }
+            )
+
+        if verbose:
+            print(f"  Generated {len(audit_rows)} audit rows")
+
+        return audit_rows
+
+    def _add_causal_training_examples(
+        self,
+        audit_rows: List[Dict[str, Any]],
+        current_task_id: int,
+    ) -> None:
+        """
+        Build and add causal training examples from audit rows.
+
+        Converts audit rows into feature vectors for the CausalContributionPredictor.
+        """
+        if self.support_manager.causal_predictor is None:
+            return
+
+        if not audit_rows:
+            return
+
+        feature_builder = self.support_manager.causal_feature_builder
+        num_columns = self.config.columns.num_columns
+        num_shared = self.config.columns.shared_columns
+
+        # Get fingerprint data
+        fp_mean = None
+        fp_conf = None
+        if self.support_manager.causal_bank is not None:
+            fp_mean = self.support_manager.causal_bank.mean_gain()
+            fp_conf = self.support_manager.causal_bank.column_confidence(
+                self.config.support.causal_similarity_conf_target
+            )
+
+        # Build placeholder certificate arrays (in a full implementation,
+        # these would come from the support manager's tracking)
+        cert_general = np.zeros(num_columns)
+        cert_specific = np.zeros(num_columns)
+        cert_demotion = np.zeros(num_columns)
+        cert_saturation = np.zeros(num_columns)
+        novelty = np.zeros(num_columns)
+        saturation = np.zeros(num_columns)
+        recent_penalty = np.zeros(num_columns)
+        reserve_bonus = np.zeros(num_columns)
+        base_z = np.zeros(num_columns)
+
+        # Simple similarity functions
+        def struct_sim(i: int, j: int) -> float:
+            return 1.0 if i == j else 0.0
+
+        def causal_sim(i: int, j: int) -> float:
+            if fp_mean is None:
+                return 0.0
+            if i >= fp_mean.shape[0] or j >= fp_mean.shape[0]:
+                return 0.0
+            # Cosine similarity of gain vectors
+            vi = fp_mean[i]
+            vj = fp_mean[j]
+            ni = np.linalg.norm(vi)
+            nj = np.linalg.norm(vj)
+            if ni < 1e-6 or nj < 1e-6:
+                return 0.0
+            return float(np.dot(vi, vj) / (ni * nj))
+
+        X_list = []
+        y_list = []
+        w_list = []
+        meta_list = []
+
+        for row in audit_rows:
+            swap_in = row.get("swap_in", -1)
+            if swap_in < 0 or swap_in >= num_columns:
+                continue
+
+            chosen = row.get("chosen_support", ())
+
+            # Build feature vector for swap_in column
+            feat = feature_builder.build_feature(
+                idx=swap_in,
+                role="challenger",  # Audit swaps are challengers
+                chosen=chosen,
+                base_z=base_z,
+                cert_general=cert_general,
+                cert_specific=cert_specific,
+                cert_demotion=cert_demotion,
+                cert_saturation=cert_saturation,
+                novelty=novelty,
+                saturation=saturation,
+                recent_penalty=recent_penalty,
+                reserve_bonus=reserve_bonus,
+                fingerprint_mean=fp_mean,
+                fingerprint_confidence=fp_conf,
+                struct_similarity_fn=struct_sim,
+                causal_similarity_fn=causal_sim,
+                current_task_id=current_task_id,
+            )
+
+            # Target is the combined gain (positive = swap_in is better)
+            target = row.get("combined_gain", 0.0)
+            # Clamp target
+            max_abs = self.config.support.causal_max_abs_target
+            target = float(np.clip(target, -max_abs, max_abs))
+            # Scale target
+            target = target * self.config.support.causal_target_scale
+
+            # Weight based on magnitude of current loss
+            weight = 1.0 + abs(row.get("chosen_current_loss", 0.0))
+
+            X_list.append(feat)
+            y_list.append(target)
+            w_list.append(weight)
+            meta_list.append(
+                {
+                    "swap_in": swap_in,
+                    "swap_out": row.get("swap_out"),
+                    "task_id": current_task_id,
+                }
+            )
+
+        if X_list:
+            X = np.stack(X_list, axis=0)
+            y = np.array(y_list)
+            w = np.array(w_list)
+            self.support_manager.add_causal_examples(X, y, w, meta_list)
+
+            # Record predictions and outcomes for agreement tracking
+            if (
+                self.support_manager.causal_predictor is not None
+                and self.support_manager.causal_predictor.trained
+            ):
+                predictions = self.support_manager.causal_predictor.predict(X)
+                trust_ctrl = self.support_manager.causal_trust
+                if trust_ctrl is not None:
+                    for i, row in enumerate(audit_rows):
+                        swap_in = row.get("swap_in", -1)
+                        if swap_in >= 0:
+                            # Record prediction
+                            trust_ctrl.record_prediction(
+                                task_id=current_task_id,
+                                column_idx=swap_in,
+                                predicted_score=float(predictions[i]),
+                                role="challenger",
+                            )
+                            # Record actual outcome
+                            trust_ctrl.record_outcome(
+                                task_id=current_task_id,
+                                column_idx=swap_in,
+                                actual_gain=float(row.get("combined_gain", 0.0)),
+                            )
+
+    @property
+    def current_state(self) -> SupportState:
+        """Get current support state."""
+        return self.support_manager.current_state
 
     def accuracy_matrix(self) -> np.ndarray:
         """

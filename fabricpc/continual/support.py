@@ -577,6 +577,10 @@ class SupportManager:
                 )
                 selected = tuple(nonshared_pool[i] for i in indices)
 
+        # Apply causal guidance if available and configured
+        if self.config is not None and self.config.causal_max_effective_scale > 0:
+            selected = self._apply_causal_guidance(task_id, list(selected))
+
         # Update state
         shared = tuple(range(self.num_shared))
         all_active = shared + selected
@@ -596,7 +600,156 @@ class SupportManager:
             self.current_state.task_usage_count[task_id] = 0
         self.current_state.task_usage_count[task_id] += 1
 
+        # Set causal guidance on state for tracking
+        self.set_causal_guidance_on_state(task_id)
+
         return self.current_state
+
+    def _apply_causal_guidance(
+        self,
+        task_id: int,
+        initial_selected: List[int],
+    ) -> Tuple[int, ...]:
+        """
+        Apply causal guidance to refine column selection.
+
+        Uses the CausalContributionPredictor to score candidate columns
+        and potentially swap in better ones.
+
+        Args:
+            task_id: Current task ID
+            initial_selected: Initially selected non-shared columns
+
+        Returns:
+            Refined selection as tuple
+        """
+        if self.causal_predictor is None or not self.causal_predictor.trained:
+            return tuple(initial_selected)
+
+        if self.causal_trust is None:
+            return tuple(initial_selected)
+
+        # Get current trust state
+        diag = self.causal_trust.last_diag
+        mix_gate = diag.get("mix_gate", 0.0)
+
+        # If mix_gate is too low, skip causal guidance
+        if mix_gate < 0.05:
+            return tuple(initial_selected)
+
+        # Get fingerprint data for feature building
+        fp_mean = None
+        fp_conf = None
+        if self.causal_bank is not None:
+            fp_mean = self.causal_bank.mean_gain()
+            fp_conf = self.causal_bank.column_confidence(
+                self.config.causal_similarity_conf_target if self.config else 8.0
+            )
+
+        # Build features for all candidate columns
+        all_nonshared = list(range(self.num_shared, self.num_columns))
+        unchosen = [c for c in all_nonshared if c not in initial_selected]
+
+        if not unchosen:
+            return tuple(initial_selected)
+
+        # Simple similarity functions
+        def struct_sim(i: int, j: int) -> float:
+            return 1.0 if i == j else 0.0
+
+        def causal_sim(i: int, j: int) -> float:
+            if fp_mean is None:
+                return 0.0
+            if i >= fp_mean.shape[0] or j >= fp_mean.shape[0]:
+                return 0.0
+            vi = fp_mean[i]
+            vj = fp_mean[j]
+            ni = np.linalg.norm(vi)
+            nj = np.linalg.norm(vj)
+            if ni < 1e-6 or nj < 1e-6:
+                return 0.0
+            return float(np.dot(vi, vj) / (ni * nj))
+
+        # Build placeholder certificate arrays
+        cert_general = np.zeros(self.num_columns)
+        cert_specific = np.zeros(self.num_columns)
+        cert_demotion = np.zeros(self.num_columns)
+        cert_saturation = np.zeros(self.num_columns)
+        novelty = np.zeros(self.num_columns)
+        saturation = np.zeros(self.num_columns)
+        recent_penalty = np.zeros(self.num_columns)
+        reserve_bonus = np.zeros(self.num_columns)
+        base_z = np.zeros(self.num_columns)
+
+        # Predict scores for unchosen columns
+        candidate_scores = []
+        for col in unchosen:
+            feat = self.causal_feature_builder.build_feature(
+                idx=col,
+                role="challenger",
+                chosen=initial_selected,
+                base_z=base_z,
+                cert_general=cert_general,
+                cert_specific=cert_specific,
+                cert_demotion=cert_demotion,
+                cert_saturation=cert_saturation,
+                novelty=novelty,
+                saturation=saturation,
+                recent_penalty=recent_penalty,
+                reserve_bonus=reserve_bonus,
+                fingerprint_mean=fp_mean,
+                fingerprint_confidence=fp_conf,
+                struct_similarity_fn=struct_sim,
+                causal_similarity_fn=causal_sim,
+                current_task_id=task_id,
+            )
+            pred = self.causal_predictor.predict(feat.reshape(1, -1))[0]
+            candidate_scores.append((col, float(pred)))
+
+        # Sort by predicted score (higher = better)
+        candidate_scores.sort(key=lambda x: x[1], reverse=True)
+
+        # Consider swapping in top candidates if they score well
+        # Use mix_gate to control how aggressive we are
+        selected = list(initial_selected)
+        swap_threshold = 0.01 * mix_gate  # Higher mix_gate = lower threshold
+
+        for cand_col, cand_score in candidate_scores[:2]:  # Consider top 2 candidates
+            if cand_score > swap_threshold:
+                # Find the lowest-scoring column in current selection to replace
+                chosen_scores = []
+                for i, col in enumerate(selected):
+                    feat = self.causal_feature_builder.build_feature(
+                        idx=col,
+                        role="reuse",
+                        chosen=[c for c in selected if c != col],
+                        base_z=base_z,
+                        cert_general=cert_general,
+                        cert_specific=cert_specific,
+                        cert_demotion=cert_demotion,
+                        cert_saturation=cert_saturation,
+                        novelty=novelty,
+                        saturation=saturation,
+                        recent_penalty=recent_penalty,
+                        reserve_bonus=reserve_bonus,
+                        fingerprint_mean=fp_mean,
+                        fingerprint_confidence=fp_conf,
+                        struct_similarity_fn=struct_sim,
+                        causal_similarity_fn=causal_sim,
+                        current_task_id=task_id,
+                    )
+                    pred = self.causal_predictor.predict(feat.reshape(1, -1))[0]
+                    chosen_scores.append((i, col, float(pred)))
+
+                if chosen_scores:
+                    chosen_scores.sort(key=lambda x: x[2])
+                    worst_idx, worst_col, worst_score = chosen_scores[0]
+                    # Swap if candidate is significantly better
+                    if cand_score - worst_score > swap_threshold:
+                        selected[worst_idx] = cand_col
+                        break  # Only one swap per selection
+
+        return tuple(selected)
 
     def record_outcome(
         self,

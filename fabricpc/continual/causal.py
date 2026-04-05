@@ -680,6 +680,140 @@ class CausalContributionPredictor:
 
 
 @dataclass
+class AgreementTracker:
+    """
+    Tracks agreement between predictor predictions and actual outcomes.
+
+    Stores recent predictions and computes agreement rate when outcomes are known.
+    """
+
+    max_history: int = 100
+    predictions: List[Dict[str, Any]] = field(default_factory=list)
+    outcomes: List[Dict[str, Any]] = field(default_factory=list)
+    recent_agreements: List[float] = field(default_factory=list)
+
+    def record_prediction(
+        self,
+        task_id: int,
+        column_idx: int,
+        predicted_score: float,
+        role: str = "challenger",
+    ) -> None:
+        """Record a predictor's score for a column."""
+        self.predictions.append(
+            {
+                "task_id": task_id,
+                "column_idx": column_idx,
+                "predicted_score": predicted_score,
+                "role": role,
+            }
+        )
+        # Trim old predictions
+        if len(self.predictions) > self.max_history * 2:
+            self.predictions = self.predictions[-self.max_history :]
+
+    def record_outcome(
+        self,
+        task_id: int,
+        column_idx: int,
+        actual_gain: float,
+    ) -> None:
+        """Record actual outcome for a column from audit."""
+        self.outcomes.append(
+            {
+                "task_id": task_id,
+                "column_idx": column_idx,
+                "actual_gain": actual_gain,
+            }
+        )
+        # Trim old outcomes
+        if len(self.outcomes) > self.max_history * 2:
+            self.outcomes = self.outcomes[-self.max_history :]
+
+    def compute_recent_agreement(self, window: int = 20) -> Tuple[float, int]:
+        """
+        Compute agreement rate over recent predictions/outcomes.
+
+        Agreement is measured as correlation between predicted scores
+        and actual gains for matched (task_id, column_idx) pairs.
+
+        Returns:
+            Tuple of (agreement_rate, num_matched_pairs)
+        """
+        # Build lookup for recent outcomes
+        outcome_lookup = {}
+        for o in self.outcomes[-self.max_history :]:
+            key = (o["task_id"], o["column_idx"])
+            outcome_lookup[key] = o["actual_gain"]
+
+        # Match predictions with outcomes
+        matched_pred = []
+        matched_actual = []
+
+        for p in self.predictions[-self.max_history :]:
+            key = (p["task_id"], p["column_idx"])
+            if key in outcome_lookup:
+                matched_pred.append(p["predicted_score"])
+                matched_actual.append(outcome_lookup[key])
+
+        if len(matched_pred) < 4:
+            return 0.0, len(matched_pred)
+
+        # Compute correlation as agreement measure
+        pred_arr = np.array(matched_pred[-window:])
+        actual_arr = np.array(matched_actual[-window:])
+
+        # Normalize to avoid scale issues
+        pred_std = np.std(pred_arr)
+        actual_std = np.std(actual_arr)
+
+        if pred_std < 1e-8 or actual_std < 1e-8:
+            # No variance - check if signs match
+            pred_signs = np.sign(pred_arr)
+            actual_signs = np.sign(actual_arr)
+            agreement = np.mean(pred_signs == actual_signs)
+            return float(agreement), len(pred_arr)
+
+        # Correlation coefficient
+        corr = np.corrcoef(pred_arr, actual_arr)[0, 1]
+        if np.isnan(corr):
+            corr = 0.0
+
+        # Convert correlation to agreement (0 to 1 scale)
+        # corr of 1 = perfect agreement, corr of -1 = perfect disagreement
+        agreement = (corr + 1.0) / 2.0
+
+        self.recent_agreements.append(agreement)
+        if len(self.recent_agreements) > self.max_history:
+            self.recent_agreements = self.recent_agreements[-self.max_history :]
+
+        return float(agreement), len(pred_arr)
+
+    def get_smoothed_agreement(self, window: int = 10) -> float:
+        """Get smoothed agreement over recent computations."""
+        if not self.recent_agreements:
+            return 0.0
+        recent = self.recent_agreements[-window:]
+        return float(np.mean(recent))
+
+    def save_state(self) -> Dict[str, Any]:
+        """Serialize for checkpointing."""
+        return {
+            "max_history": self.max_history,
+            "predictions": list(self.predictions),
+            "outcomes": list(self.outcomes),
+            "recent_agreements": list(self.recent_agreements),
+        }
+
+    def load_state(self, state: Dict[str, Any]) -> None:
+        """Restore from checkpoint."""
+        self.max_history = state.get("max_history", 100)
+        self.predictions = list(state.get("predictions", []))
+        self.outcomes = list(state.get("outcomes", []))
+        self.recent_agreements = list(state.get("recent_agreements", []))
+
+
+@dataclass
 class CausalSelectorTrustController:
     """
     Multi-gate trust controller for blending causal predictions with fallback.
@@ -695,6 +829,7 @@ class CausalSelectorTrustController:
 
     config: SupportConfig
     agreement_ema: Optional[float] = None
+    agreement_tracker: AgreementTracker = field(default_factory=AgreementTracker)
     last_diag: Dict[str, float] = field(
         default_factory=lambda: {
             "coverage_gate": 0.0,
@@ -804,12 +939,38 @@ class CausalSelectorTrustController:
         }
         return dict(self.last_diag)
 
+    def record_prediction(
+        self,
+        task_id: int,
+        column_idx: int,
+        predicted_score: float,
+        role: str = "challenger",
+    ) -> None:
+        """Record a predictor's score for tracking agreement."""
+        self.agreement_tracker.record_prediction(
+            task_id, column_idx, predicted_score, role
+        )
+
+    def record_outcome(
+        self,
+        task_id: int,
+        column_idx: int,
+        actual_gain: float,
+    ) -> None:
+        """Record actual outcome from audit for agreement tracking."""
+        self.agreement_tracker.record_outcome(task_id, column_idx, actual_gain)
+
+    def get_recent_agreement(self) -> Tuple[float, int]:
+        """Get recent agreement rate and sample count."""
+        return self.agreement_tracker.compute_recent_agreement()
+
     def save_state(self) -> Dict[str, Any]:
         """Serialize for checkpointing."""
         return {
             "agreement_ema": self.agreement_ema,
             "last_diag": dict(self.last_diag),
             "last_effective_scale": self.last_effective_scale,
+            "agreement_tracker": self.agreement_tracker.save_state(),
         }
 
     def load_state(self, state: Dict[str, Any]) -> None:
@@ -817,6 +978,8 @@ class CausalSelectorTrustController:
         self.agreement_ema = state.get("agreement_ema")
         self.last_diag = state.get("last_diag", dict(self.last_diag))
         self.last_effective_scale = state.get("last_effective_scale", 0.0)
+        if "agreement_tracker" in state:
+            self.agreement_tracker.load_state(state["agreement_tracker"])
 
 
 # ----------------------------
