@@ -123,11 +123,12 @@ def _load_mnist_manual(data_root: str):
     import gzip
     import urllib.request
 
+    # Using PyTorch's S3 mirror since yann.lecun.com is no longer available
     mnist_urls = {
-        "train_images": "http://yann.lecun.com/exdb/mnist/train-images-idx3-ubyte.gz",
-        "train_labels": "http://yann.lecun.com/exdb/mnist/train-labels-idx1-ubyte.gz",
-        "test_images": "http://yann.lecun.com/exdb/mnist/t10k-images-idx3-ubyte.gz",
-        "test_labels": "http://yann.lecun.com/exdb/mnist/t10k-labels-idx1-ubyte.gz",
+        "train_images": "https://ossci-datasets.s3.amazonaws.com/mnist/train-images-idx3-ubyte.gz",
+        "train_labels": "https://ossci-datasets.s3.amazonaws.com/mnist/train-labels-idx1-ubyte.gz",
+        "test_images": "https://ossci-datasets.s3.amazonaws.com/mnist/t10k-images-idx3-ubyte.gz",
+        "test_labels": "https://ossci-datasets.s3.amazonaws.com/mnist/t10k-labels-idx1-ubyte.gz",
     }
 
     os.makedirs(data_root, exist_ok=True)

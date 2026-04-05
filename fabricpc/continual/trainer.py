@@ -123,6 +123,22 @@ class TaskRunSummary:
     selector_policy_used: bool = False
     selector_trust: float = 0.5
 
+    # Causal selector metrics
+    causal_selector_examples: float = 0.0
+    causal_selector_corr: float = 0.0
+    causal_selector_mae: float = 0.0
+    causal_selector_effective_scale: float = 0.0
+    causal_selector_coverage_gate: float = 0.0
+    causal_selector_agreement_gate: float = 0.0
+    causal_selector_trend_gate: float = 0.0
+    causal_selector_mix_gate: float = 0.0
+    causal_similarity_mean: float = 0.0
+    fingerprint_coverage_mean: float = 0.0
+
+    # SB clarity metrics
+    sb_mean_kurtosis: float = 0.0
+    sb_mean_transport: float = 0.0
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -141,6 +157,23 @@ class TaskRunSummary:
             "epoch_losses": self.epoch_losses,
             "selector_policy_used": self.selector_policy_used,
             "selector_trust": float(self.selector_trust),
+            # Causal metrics
+            "causal_selector_examples": float(self.causal_selector_examples),
+            "causal_selector_corr": float(self.causal_selector_corr),
+            "causal_selector_mae": float(self.causal_selector_mae),
+            "causal_selector_effective_scale": float(
+                self.causal_selector_effective_scale
+            ),
+            "causal_selector_coverage_gate": float(self.causal_selector_coverage_gate),
+            "causal_selector_agreement_gate": float(
+                self.causal_selector_agreement_gate
+            ),
+            "causal_selector_trend_gate": float(self.causal_selector_trend_gate),
+            "causal_selector_mix_gate": float(self.causal_selector_mix_gate),
+            "causal_similarity_mean": float(self.causal_similarity_mean),
+            "fingerprint_coverage_mean": float(self.fingerprint_coverage_mean),
+            "sb_mean_kurtosis": float(self.sb_mean_kurtosis),
+            "sb_mean_transport": float(self.sb_mean_transport),
         }
 
 
@@ -215,6 +248,7 @@ class SequentialTrainer:
             num_shared=num_shared,
             topk_nonshared=topk_nonshared,
             config=config.support,
+            num_tasks=config.num_tasks,
         )
 
         # Training state

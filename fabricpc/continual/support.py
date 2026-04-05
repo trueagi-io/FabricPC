@@ -10,9 +10,12 @@ Manages which memory columns are active for each task, using:
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, Optional, Sequence, Any, Iterator
+from typing import Dict, List, Tuple, Optional, Sequence, Any, Iterator, TYPE_CHECKING
 import numpy as np
 import jax.numpy as jnp
+
+if TYPE_CHECKING:
+    from .config import SupportConfig
 
 
 @dataclass
@@ -38,6 +41,13 @@ class SupportState:
     task_usage_count: Dict[int, int] = field(default_factory=dict)
     column_scores: Optional[np.ndarray] = None
     last_support_score_table: List[Dict[str, Any]] = field(default_factory=list)
+
+    # Causal guidance state
+    causal_fingerprint_sim: Optional[np.ndarray] = None
+    causal_confidence: Optional[np.ndarray] = None
+    causal_fingerprint_mean: Optional[np.ndarray] = None
+    causal_effective_scale: float = 0.0
+    causal_mix_gate: float = 0.0
 
     def active_indices(self) -> Tuple[int, ...]:
         """Return all active column indices."""
@@ -480,7 +490,7 @@ class SupportManager:
     High-level manager for the support selection system.
 
     Coordinates the support bank, demotion bank, selector policy,
-    and trust controller.
+    trust controller, and causal components.
     """
 
     def __init__(
@@ -489,11 +499,13 @@ class SupportManager:
         num_shared: int,
         topk_nonshared: int,
         config: Optional["SupportConfig"] = None,
+        num_tasks: int = 5,
     ):
         self.num_columns = num_columns
         self.num_shared = num_shared
         self.topk_nonshared = topk_nonshared
         self.config = config
+        self.num_tasks = num_tasks
 
         # Initialize components
         self.support_bank = SupportBank()
@@ -506,6 +518,27 @@ class SupportManager:
         # Current state
         self.current_state = create_initial_support_state(
             num_columns, num_shared, topk_nonshared
+        )
+
+        # Causal components (lazy import to avoid circular dependencies)
+        from .causal import (
+            CausalFingerprintBank,
+            CausalContributionPredictor,
+            CausalSelectorTrustController,
+            CausalSupportFeatureBuilder,
+        )
+
+        self.causal_bank = CausalFingerprintBank.create(num_columns, num_tasks)
+        self.causal_predictor = (
+            CausalContributionPredictor(config=config) if config else None
+        )
+        self.causal_trust = (
+            CausalSelectorTrustController(config=config) if config else None
+        )
+        self.causal_feature_builder = CausalSupportFeatureBuilder.from_config(
+            num_columns=num_columns,
+            num_tasks=num_tasks,
+            topk_nonshared=topk_nonshared,
         )
 
     def select_support_for_task(
@@ -657,6 +690,16 @@ class SupportManager:
                 "trust": self.trust_controller.trust,
                 "history": self.trust_controller.history,
             },
+            # Causal components
+            "causal_bank": (
+                self.causal_bank.save_state() if self.causal_bank else None
+            ),
+            "causal_predictor": (
+                self.causal_predictor.save_state() if self.causal_predictor else None
+            ),
+            "causal_trust": (
+                self.causal_trust.save_state() if self.causal_trust else None
+            ),
         }
 
     def load_state(self, state: Dict[str, Any]):
@@ -701,6 +744,134 @@ class SupportManager:
         tc = state["trust_controller"]
         self.trust_controller.trust = tc["trust"]
         self.trust_controller.history = tc["history"]
+
+        # Restore causal components
+        if "causal_bank" in state and self.causal_bank is not None:
+            self.causal_bank.load_state(state["causal_bank"])
+        if "causal_predictor" in state and self.causal_predictor is not None:
+            self.causal_predictor.load_state(state["causal_predictor"])
+        if "causal_trust" in state and self.causal_trust is not None:
+            self.causal_trust.load_state(state["causal_trust"])
+
+    def update_causal_from_audit(
+        self,
+        audit_rows: List[Dict[str, Any]],
+        current_task_id: int,
+        old_task: Optional[int] = None,
+    ) -> Dict[str, float]:
+        """
+        Update causal bank and predictor from audit results.
+
+        Args:
+            audit_rows: List of audit/swap result dictionaries
+            current_task_id: Current task ID
+            old_task: Previous task ID (if any)
+
+        Returns:
+            Training metrics dictionary
+        """
+        if self.causal_bank is None:
+            return {"causal_selector_corr": 0.0, "causal_selector_mae": 0.0}
+
+        # Update fingerprint bank
+        self.causal_bank.update_from_support_rows(audit_rows, current_task_id, old_task)
+
+        # Train predictor if we have enough examples
+        metrics = {"causal_selector_corr": 0.0, "causal_selector_mae": 0.0}
+        if self.causal_predictor is not None:
+            metrics = self.causal_predictor.train_if_ready()
+
+        return metrics
+
+    def get_causal_guidance(
+        self,
+        task_id: int,
+        effective_internal_trust: float = 0.5,
+        recent_agreement: float = 0.0,
+        recent_rows: int = 0,
+    ) -> Tuple[
+        Optional[np.ndarray], Optional[np.ndarray], Optional[np.ndarray], float, float
+    ]:
+        """
+        Get causal guidance for support selection.
+
+        Args:
+            task_id: Current task ID
+            effective_internal_trust: Trust score from support state
+            recent_agreement: Recent prediction agreement rate
+            recent_rows: Number of recent audit rows
+
+        Returns:
+            Tuple of (fingerprint_sim, confidence, mean_gain, effective_scale, mix_gate)
+        """
+        if self.causal_bank is None:
+            return None, None, None, 0.0, 0.0
+
+        # Get fingerprint similarity and confidence
+        config = self.config
+        target_count = config.causal_similarity_conf_target if config else 8.0
+        fp_sim, fp_conf = self.causal_bank.similarity_matrix(target_count)
+        fp_mean = self.causal_bank.mean_gain()
+
+        # Compute trust gates
+        effective_scale = 0.0
+        mix_gate = 0.0
+        if self.causal_trust is not None and self.causal_predictor is not None:
+            diag = self.causal_trust.compute(
+                self.causal_predictor,
+                effective_internal_trust,
+                recent_agreement,
+                recent_rows,
+            )
+            effective_scale = diag.get("effective_scale", 0.0)
+            mix_gate = diag.get("mix_gate", 0.0)
+
+        return fp_sim, fp_conf, fp_mean, effective_scale, mix_gate
+
+    def set_causal_guidance_on_state(
+        self,
+        task_id: int,
+        effective_internal_trust: float = 0.5,
+        recent_agreement: float = 0.0,
+        recent_rows: int = 0,
+    ) -> None:
+        """
+        Set causal guidance on current support state.
+
+        Args:
+            task_id: Current task ID
+            effective_internal_trust: Trust score from support state
+            recent_agreement: Recent prediction agreement rate
+            recent_rows: Number of recent audit rows
+        """
+        fp_sim, fp_conf, fp_mean, eff_scale, mix_gate = self.get_causal_guidance(
+            task_id, effective_internal_trust, recent_agreement, recent_rows
+        )
+
+        self.current_state.causal_fingerprint_sim = fp_sim
+        self.current_state.causal_confidence = fp_conf
+        self.current_state.causal_fingerprint_mean = fp_mean
+        self.current_state.causal_effective_scale = eff_scale
+        self.current_state.causal_mix_gate = mix_gate
+
+    def add_causal_examples(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        w: np.ndarray,
+        meta: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        """
+        Add examples to causal predictor.
+
+        Args:
+            X: Feature array (N, feature_dim)
+            y: Target array (N,)
+            w: Weight array (N,)
+            meta: Optional metadata list
+        """
+        if self.causal_predictor is not None:
+            self.causal_predictor.add_examples(X, y, w, meta)
 
 
 class ReplayBuffer:

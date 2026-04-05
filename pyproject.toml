@@ -7,7 +7,7 @@ name = "fabricpc"
 version = "0.2.9"
 description = "A flexible, performant predictive coding library using JAX"
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.10,<3.14"
 authors = [
     {name = "FabricPC Authors"}
 ]
@@ -19,12 +19,13 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Private :: Do Not Upload",
 ]
 
 dependencies = [
-    "jax[cuda12]",
+    "jax",
     "optax>=0.1.7",
     "orbax-checkpoint>=0.4.0",
     "flax>=0.7.5",
@@ -50,11 +51,16 @@ tfds = [
 experiments = [
     "scipy>=1.10.0",
 ]
+cuda12 = [
+    "jax[cuda12]",
+]
+cuda13 = [
+    "jax[cuda13]",
+]
 viz = [
     "plotly>=5.0.0",
     "kaleido>=0.2.1",
     "pandas>=2.0.0",
-    "aim>=3.0.0",
 ]
 all = [
     "fabricpc[dev,tfds,experiments,viz]",
@@ -66,7 +72,7 @@ include = ["fabricpc*"]
 
 [tool.black]
 line-length = 88
-target-version = ["py310", "py311", "py312"]
+target-version = ["py310", "py311", "py312", "py313"]
 include = '\.pyi?$'
 extend-exclude = '''
 /(

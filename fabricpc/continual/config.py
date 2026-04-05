@@ -103,6 +103,49 @@ class SupportConfig:
     causal_mix_max: float = 0.30
     causal_fallback_weight: float = 0.20
 
+    # Causal Fingerprint Bank
+    causal_similarity_conf_target: float = 8.0
+    causal_similarity_blend_max: float = 0.75
+    causal_similarity_floor: float = 0.05
+
+    # Causal Contribution Predictor
+    causal_min_examples: int = 36
+    causal_target_examples: int = 90
+    causal_ridge_lambda: float = 0.50
+    causal_max_abs_target: float = 0.75
+    causal_target_scale: float = 0.10
+    causal_feature_dim: int = 21
+
+    # Causal Trust Controller
+    causal_agreement_target: float = 0.35
+    causal_trend_tau: float = 0.16
+    structural_trust_floor: float = 0.10
+    structural_trust_target: float = 0.35
+
+    # SB Distribution Clarity
+    sb_enable: bool = True
+    sb_kurtosis_threshold: float = 0.65
+    sb_multimodal_threshold: float = 0.18
+    sb_alpha_scale: float = 0.35
+    sb_alpha_max: float = 0.25
+    sb_sinkhorn_eps: float = 0.35
+    sb_sinkhorn_iters: int = 8
+    sb_clarity_weight: float = 0.0025
+    sb_trust_cap: float = 0.35
+    sb_gaussian_ref_scale: float = 1.0
+    sb_cost_mode: str = "huber"
+
+    # Routing Bonus
+    route_enable: bool = True
+    route_cert_mix_scale: float = 0.080
+    route_diversity_scale: float = 0.060
+    route_novelty_scale: float = 0.030
+    route_demotion_scale: float = 0.050
+    route_stability_scale: float = 0.040
+    route_near_tie_gain_margin: float = 0.015
+    route_exact_gain_floor: float = 0.004
+    route_trust_cap: float = 0.35
+
     # Similarity/redundancy
     recent_support_penalty: float = 0.10
     similarity_redundancy_scale: float = 0.65
@@ -389,6 +432,11 @@ def make_config(quick_smoke: bool = False) -> ExperimentConfig:
 
         cfg.checkpoint.every_train_forwards = 8
         cfg.checkpoint.min_seconds = 0.0
+
+        # Causal config for smoke tests
+        cfg.support.causal_min_examples = 8
+        cfg.support.causal_target_examples = 24
+        cfg.support.sb_sinkhorn_iters = 4
     else:
         # Full training configuration
         cfg.training.epochs_per_task = 5

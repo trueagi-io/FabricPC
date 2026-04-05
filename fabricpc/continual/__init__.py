@@ -37,6 +37,20 @@ from fabricpc.continual.data import (
 
 from fabricpc.continual.trainer import SequentialTrainer, TaskRunSummary
 
+from fabricpc.continual.causal import (
+    CausalFingerprintBank,
+    CausalContributionPredictor,
+    CausalSelectorTrustController,
+    CausalSupportFeatureBuilder,
+    SBClarityPenaltyResult,
+    RoutingCertificates,
+    RoutingBonusResult,
+    compute_sb_clarity_penalty,
+    compute_routing_bonus,
+    weighted_corr,
+    weighted_mae,
+)
+
 __all__ = [
     # Config
     "ExperimentConfig",
@@ -61,4 +75,16 @@ __all__ = [
     # Training
     "SequentialTrainer",
     "TaskRunSummary",
+    # Causal
+    "CausalFingerprintBank",
+    "CausalContributionPredictor",
+    "CausalSelectorTrustController",
+    "CausalSupportFeatureBuilder",
+    "SBClarityPenaltyResult",
+    "RoutingCertificates",
+    "RoutingBonusResult",
+    "compute_sb_clarity_penalty",
+    "compute_routing_bonus",
+    "weighted_corr",
+    "weighted_mae",
 ]
