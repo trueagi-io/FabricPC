@@ -26,6 +26,7 @@ from fabricpc.continual.config import (
     CheckpointConfig,
     AuditConfig,
     PredictorConfig,
+    PerWeightCausalConfig,
     make_config,
 )
 
@@ -51,6 +52,19 @@ from fabricpc.continual.causal import (
     weighted_mae,
 )
 
+from fabricpc.continual.weight_causal import (
+    PerWeightCausalLearner,
+    WeightGradientTracker,
+    PerWeightNonGaussianityDetector,
+    AdaptiveWeightUpdater,
+    PerWeightNonGaussianityResult,
+    AdaptiveWeightUpdateResult,
+    compute_weight_excess_kurtosis,
+    compute_weight_multimodal_gap,
+    compute_non_gaussianity_score,
+    compute_sinkhorn_weight_correction,
+)
+
 __all__ = [
     # Config
     "ExperimentConfig",
@@ -67,6 +81,7 @@ __all__ = [
     "CheckpointConfig",
     "AuditConfig",
     "PredictorConfig",
+    "PerWeightCausalConfig",
     "make_config",
     # Data
     "SplitMnistLoader",
@@ -75,7 +90,7 @@ __all__ = [
     # Training
     "SequentialTrainer",
     "TaskRunSummary",
-    # Causal
+    # Causal (column-level)
     "CausalFingerprintBank",
     "CausalContributionPredictor",
     "CausalSelectorTrustController",
@@ -87,4 +102,15 @@ __all__ = [
     "compute_routing_bonus",
     "weighted_corr",
     "weighted_mae",
+    # Per-weight causal
+    "PerWeightCausalLearner",
+    "WeightGradientTracker",
+    "PerWeightNonGaussianityDetector",
+    "AdaptiveWeightUpdater",
+    "PerWeightNonGaussianityResult",
+    "AdaptiveWeightUpdateResult",
+    "compute_weight_excess_kurtosis",
+    "compute_weight_multimodal_gap",
+    "compute_non_gaussianity_score",
+    "compute_sinkhorn_weight_correction",
 ]

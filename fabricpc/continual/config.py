@@ -350,6 +350,48 @@ class PredictorConfig:
 
 
 @dataclass
+class PerWeightCausalConfig:
+    """
+    Configuration for per-weight causal coding.
+
+    Enables fine-grained causal control where individual weight updates
+    are modulated based on their gradient distribution characteristics.
+    Standard learning is used for weights with Gaussian-like gradients,
+    while Sinkhorn-based (SB) learning is used for non-Gaussian weights.
+    """
+
+    # Enable per-weight causal coding
+    enable: bool = True
+
+    # Gradient tracking
+    gradient_history_size: int = 32  # Number of recent gradients to track per weight
+    min_history_for_detection: int = 8  # Minimum history before computing kurtosis
+
+    # Non-Gaussianity thresholds
+    kurtosis_threshold: float = 2.0  # Excess kurtosis threshold for non-Gaussianity
+    multimodal_threshold: float = 0.5  # Multimodal gap threshold
+    combined_threshold: float = 1.5  # Combined non-Gaussianity score threshold
+
+    # Sinkhorn parameters for SB update
+    sb_sinkhorn_eps: float = 0.1  # Regularization for Sinkhorn
+    sb_sinkhorn_iters: int = 5  # Sinkhorn iterations
+    sb_correction_strength: float = 0.3  # How much to blend SB correction
+
+    # Adaptive blending
+    blend_mode: str = "soft"  # "hard" (binary) or "soft" (smooth transition)
+    soft_blend_scale: float = 1.0  # Scale for soft sigmoid transition
+
+    # Per-layer control
+    skip_bias_weights: bool = True  # Skip bias terms (typically more Gaussian)
+    skip_small_weights: bool = True  # Skip weights below threshold
+    small_weight_threshold: float = 1e-6  # Threshold for small weights
+
+    # Statistics tracking
+    track_statistics: bool = True  # Track per-weight statistics for debugging
+    stats_update_every: int = 10  # Update summary stats every N steps
+
+
+@dataclass
 class ExperimentConfig:
     """
     Master configuration for Split-MNIST continual learning experiment.
@@ -372,6 +414,9 @@ class ExperimentConfig:
     checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
     audit: AuditConfig = field(default_factory=AuditConfig)
     predictor: PredictorConfig = field(default_factory=PredictorConfig)
+    per_weight_causal: PerWeightCausalConfig = field(
+        default_factory=PerWeightCausalConfig
+    )
 
     # Task configuration
     num_tasks: int = 5
@@ -446,6 +491,13 @@ def make_config(quick_smoke: bool = False) -> ExperimentConfig:
         cfg.support.causal_min_examples = 8
         cfg.support.causal_target_examples = 24
         cfg.support.sb_sinkhorn_iters = 4
+
+        # Per-weight causal config for smoke tests
+        cfg.per_weight_causal.enable = True
+        cfg.per_weight_causal.gradient_history_size = 8
+        cfg.per_weight_causal.min_history_for_detection = 4
+        cfg.per_weight_causal.sb_sinkhorn_iters = 3
+        cfg.per_weight_causal.stats_update_every = 2
     else:
         # Full training configuration
         cfg.training.epochs_per_task = 5
@@ -500,5 +552,15 @@ def make_config(quick_smoke: bool = False) -> ExperimentConfig:
         cfg.support.similarity_redundancy_scale = 0.65
         cfg.support.causal_fallback_weight = 0.20
         cfg.support.causal_mix_max = 0.30
+
+        # Per-weight causal config for full training
+        cfg.per_weight_causal.enable = True
+        cfg.per_weight_causal.gradient_history_size = 32
+        cfg.per_weight_causal.min_history_for_detection = 8
+        cfg.per_weight_causal.kurtosis_threshold = 2.0
+        cfg.per_weight_causal.combined_threshold = 1.5
+        cfg.per_weight_causal.sb_correction_strength = 0.3
+        cfg.per_weight_causal.blend_mode = "soft"
+        cfg.per_weight_causal.track_statistics = True
 
     return cfg

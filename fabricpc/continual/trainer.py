@@ -27,6 +27,10 @@ from fabricpc.continual.causal import (
     CausalSupportFeatureBuilder,
     weighted_corr,
 )
+from fabricpc.continual.weight_causal import (
+    PerWeightCausalLearner,
+    PerWeightCausalConfig,
+)
 
 
 class InterleavedLoader:
@@ -143,6 +147,13 @@ class TaskRunSummary:
     sb_mean_kurtosis: float = 0.0
     sb_mean_transport: float = 0.0
 
+    # Per-weight causal metrics
+    per_weight_standard_fraction: float = 1.0
+    per_weight_sb_fraction: float = 0.0
+    per_weight_mean_kurtosis: float = 0.0
+    per_weight_max_kurtosis: float = 0.0
+    per_weight_fraction_non_gaussian: float = 0.0
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -178,6 +189,14 @@ class TaskRunSummary:
             "fingerprint_coverage_mean": float(self.fingerprint_coverage_mean),
             "sb_mean_kurtosis": float(self.sb_mean_kurtosis),
             "sb_mean_transport": float(self.sb_mean_transport),
+            # Per-weight causal metrics
+            "per_weight_standard_fraction": float(self.per_weight_standard_fraction),
+            "per_weight_sb_fraction": float(self.per_weight_sb_fraction),
+            "per_weight_mean_kurtosis": float(self.per_weight_mean_kurtosis),
+            "per_weight_max_kurtosis": float(self.per_weight_max_kurtosis),
+            "per_weight_fraction_non_gaussian": float(
+                self.per_weight_fraction_non_gaussian
+            ),
         }
 
 
@@ -271,6 +290,29 @@ class SequentialTrainer:
         )
         self.use_replay = config.support.use_replay
         self.replay_ratio = config.support.replay_ratio
+
+        # Per-weight causal learning
+        self.per_weight_causal = PerWeightCausalLearner(
+            config=PerWeightCausalConfig(
+                enable=config.per_weight_causal.enable,
+                gradient_history_size=config.per_weight_causal.gradient_history_size,
+                min_history_for_detection=config.per_weight_causal.min_history_for_detection,
+                kurtosis_threshold=config.per_weight_causal.kurtosis_threshold,
+                multimodal_threshold=config.per_weight_causal.multimodal_threshold,
+                combined_threshold=config.per_weight_causal.combined_threshold,
+                sb_sinkhorn_eps=config.per_weight_causal.sb_sinkhorn_eps,
+                sb_sinkhorn_iters=config.per_weight_causal.sb_sinkhorn_iters,
+                sb_correction_strength=config.per_weight_causal.sb_correction_strength,
+                blend_mode=config.per_weight_causal.blend_mode,
+                soft_blend_scale=config.per_weight_causal.soft_blend_scale,
+                skip_bias_weights=config.per_weight_causal.skip_bias_weights,
+                skip_small_weights=config.per_weight_causal.skip_small_weights,
+                small_weight_threshold=config.per_weight_causal.small_weight_threshold,
+                track_statistics=config.per_weight_causal.track_statistics,
+                stats_update_every=config.per_weight_causal.stats_update_every,
+            )
+        )
+        self._last_per_weight_stats: Dict[str, float] = {}
 
         # Callbacks
         self.epoch_callbacks: List[Callable] = []
@@ -460,6 +502,9 @@ class SequentialTrainer:
             else:
                 causal_diag = self.support_manager.causal_trust.last_diag
 
+        # Get per-weight causal stats
+        per_weight_stats = self.per_weight_causal.get_stats()
+
         # Create summary
         summary = TaskRunSummary(
             task_id=task_id,
@@ -494,6 +539,12 @@ class SequentialTrainer:
             ),
             causal_selector_trend_gate=float(causal_diag.get("trend_gate", 0.0)),
             causal_selector_mix_gate=float(causal_diag.get("mix_gate", 0.0)),
+            # Per-weight causal metrics
+            per_weight_mean_kurtosis=float(per_weight_stats.get("mean_kurtosis", 0.0)),
+            per_weight_max_kurtosis=float(per_weight_stats.get("max_kurtosis", 0.0)),
+            per_weight_fraction_non_gaussian=float(
+                per_weight_stats.get("mean_fraction_non_gaussian", 0.0)
+            ),
         )
 
         # Store samples in replay buffer for future tasks
@@ -533,6 +584,15 @@ class SequentialTrainer:
                     f"  Agreement gate:  {summary.causal_selector_agreement_gate:.4f}"
                 )
                 print(f"  Mix gate:        {summary.causal_selector_mix_gate:.4f}")
+            if self.config.per_weight_causal.enable:
+                print(f"  Per-weight causal:")
+                print(
+                    f"    Mean kurtosis:       {summary.per_weight_mean_kurtosis:.4f}"
+                )
+                print(f"    Max kurtosis:        {summary.per_weight_max_kurtosis:.4f}")
+                print(
+                    f"    Non-Gaussian frac:   {summary.per_weight_fraction_non_gaussian:.4f}"
+                )
 
         return summary
 
@@ -1133,3 +1193,61 @@ class SequentialTrainer:
             return pd.DataFrame([s.to_dict() for s in self.summaries])
         except ImportError:
             return [s.to_dict() for s in self.summaries]
+
+    def process_gradients_causal(
+        self,
+        gradients: Any,
+        is_bias_fn: Optional[Callable[[str], bool]] = None,
+    ) -> Any:
+        """
+        Process gradients through per-weight causal system.
+
+        This method can be used in custom training loops to apply
+        per-weight causal coding (standard vs SB updates based on
+        non-Gaussianity detection).
+
+        Args:
+            gradients: JAX pytree of gradients
+            is_bias_fn: Optional function to determine if param is bias
+
+        Returns:
+            Corrected gradients (same structure as input)
+
+        Example:
+            # In custom training loop:
+            gradients = jax.grad(loss_fn)(params, batch)
+            corrected_grads = trainer.process_gradients_causal(gradients)
+            updates, opt_state = optimizer.update(corrected_grads, opt_state)
+            params = optax.apply_updates(params, updates)
+        """
+        if not self.config.per_weight_causal.enable:
+            return gradients
+
+        corrected, result = self.per_weight_causal.process_jax_gradients(
+            gradients, is_bias_fn
+        )
+        self._last_per_weight_stats = result.diagnostics
+
+        return corrected
+
+    def get_per_weight_causal_stats(self) -> Dict[str, float]:
+        """
+        Get current per-weight causal statistics.
+
+        Returns:
+            Dict with statistics:
+            - mean_kurtosis: Average excess kurtosis across tracked weights
+            - max_kurtosis: Maximum excess kurtosis
+            - mean_fraction_non_gaussian: Average fraction of non-Gaussian weights
+            - num_params_tracked: Number of parameters being tracked
+        """
+        return self.per_weight_causal.get_stats()
+
+    def get_per_weight_causal_history(self) -> List[Dict[str, float]]:
+        """
+        Get history of per-weight causal statistics over time.
+
+        Returns:
+            List of stats dictionaries over training steps
+        """
+        return self.per_weight_causal.updater.get_stats_history()
