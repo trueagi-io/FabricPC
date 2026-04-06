@@ -6,7 +6,7 @@ flattened structure optimized for FabricPC's JAX-based architecture.
 """
 
 from dataclasses import dataclass, field
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Any, Dict
 
 
 @dataclass
@@ -306,6 +306,80 @@ class TransWeaveConfig:
 
 
 @dataclass
+class ComposerTransWeaveConfig:
+    """
+    Configuration for Composer-level TransWeave transfer learning.
+
+    Transfers learned composition patterns (attention, projections) across tasks
+    via Sinkhorn optimal transport. Reference: V20.2b Section 4.6, 7.7.
+    """
+
+    enable: bool = True
+
+    # Transport parameters
+    sinkhorn_eps: float = 0.25
+    sinkhorn_iters: int = 15
+    identity_bonus: float = 0.15
+    transport_diag_mix: float = 0.30
+
+    # Source weighting
+    use_last_k_tasks: int = 3
+    recency_decay: float = 0.7  # Exponential decay for older tasks
+
+    # Transfer blending
+    transfer_strength: float = 0.3  # How much to blend transferred vs original
+    warmup_tasks: int = 1  # Don't apply transfer until this many tasks seen
+
+    # Attention transfer
+    transfer_attention_weights: bool = True
+    transfer_query_keys: bool = True
+    transfer_value_projections: bool = True
+
+    # Regularization
+    orthogonality_weight: float = 0.01  # Encourage diverse attention patterns
+    sparsity_weight: float = 0.005  # Encourage sparse transport
+
+
+@dataclass
+class ShellDemotionTransWeaveConfig:
+    """
+    Configuration for Within-column Shell Demotion TransWeave.
+
+    Implements radial shell semantics from V18/V20 (Section 5.2):
+    - Protected center (shell 0): Most stable, rarely demoted
+    - Stable inner tiers (shell 1): Moderately stable
+    - Disposable outer tiers (shell 2): Task-local, frequently recycled
+
+    Uses Sinkhorn transport to guide neuron transitions between shells.
+    """
+
+    enable: bool = True
+
+    # Transport parameters
+    sinkhorn_eps: float = 0.20
+    sinkhorn_iters: int = 12
+    identity_bonus: float = 0.10
+
+    # Shell structure
+    num_shells: int = 3  # [protected_center, stable_inner, disposable_outer]
+    shell_sizes: Tuple[int, ...] = (8, 16, 8)  # Neurons per shell
+
+    # Demotion thresholds
+    demotion_threshold: float = 0.3  # Transport mass threshold for demotion
+    promotion_threshold: float = 0.7  # Transport mass threshold for promotion
+    stability_bonus: float = 0.2  # Bonus for keeping neurons in place
+
+    # Cross-task patterns
+    use_last_k_tasks: int = 2
+    activity_ema_decay: float = 0.9  # EMA for tracking neuron activity
+
+    # Safety constraints
+    max_demotions_per_step: int = 2  # Max neurons demoted per shell per step
+    min_shell_occupancy: float = 0.25  # Minimum fraction of shell filled
+    protected_center_fraction: float = 0.5  # Fraction of center never demoted
+
+
+@dataclass
 class CheckpointConfig:
     """Checkpointing configuration."""
 
@@ -411,6 +485,12 @@ class ExperimentConfig:
     hierarchy: HierarchyConfig = field(default_factory=HierarchyConfig)
     cloud: CloudConfig = field(default_factory=CloudConfig)
     transweave: TransWeaveConfig = field(default_factory=TransWeaveConfig)
+    composer_transweave: ComposerTransWeaveConfig = field(
+        default_factory=ComposerTransWeaveConfig
+    )
+    shell_demotion_transweave: ShellDemotionTransWeaveConfig = field(
+        default_factory=ShellDemotionTransWeaveConfig
+    )
     checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
     audit: AuditConfig = field(default_factory=AuditConfig)
     predictor: PredictorConfig = field(default_factory=PredictorConfig)
@@ -484,6 +564,20 @@ def make_config(quick_smoke: bool = False) -> ExperimentConfig:
 
         cfg.transweave.sinkhorn_iters = 6
 
+        # Composer TransWeave for smoke tests
+        cfg.composer_transweave.enable = True
+        cfg.composer_transweave.sinkhorn_iters = 5
+        cfg.composer_transweave.use_last_k_tasks = 2
+        cfg.composer_transweave.transfer_strength = 0.2
+        cfg.composer_transweave.warmup_tasks = 1
+
+        # Shell Demotion TransWeave for smoke tests
+        cfg.shell_demotion_transweave.enable = True
+        cfg.shell_demotion_transweave.sinkhorn_iters = 4
+        cfg.shell_demotion_transweave.shell_sizes = (2, 4, 2)
+        cfg.shell_demotion_transweave.max_demotions_per_step = 1
+        cfg.shell_demotion_transweave.use_last_k_tasks = 1
+
         cfg.checkpoint.every_train_forwards = 8
         cfg.checkpoint.min_seconds = 0.0
 
@@ -534,6 +628,29 @@ def make_config(quick_smoke: bool = False) -> ExperimentConfig:
         cfg.transweave.source_local_weight = 0.50
         cfg.transweave.source_block_weight = 0.30
         cfg.transweave.source_global_weight = 0.20
+
+        # Composer TransWeave for full training
+        cfg.composer_transweave.enable = True
+        cfg.composer_transweave.sinkhorn_iters = 15
+        cfg.composer_transweave.sinkhorn_eps = 0.25
+        cfg.composer_transweave.use_last_k_tasks = 3
+        cfg.composer_transweave.transfer_strength = 0.3
+        cfg.composer_transweave.warmup_tasks = 1
+        cfg.composer_transweave.identity_bonus = 0.15
+        cfg.composer_transweave.transport_diag_mix = 0.30
+        cfg.composer_transweave.recency_decay = 0.7
+
+        # Shell Demotion TransWeave for full training
+        cfg.shell_demotion_transweave.enable = True
+        cfg.shell_demotion_transweave.sinkhorn_iters = 12
+        cfg.shell_demotion_transweave.sinkhorn_eps = 0.20
+        cfg.shell_demotion_transweave.shell_sizes = (8, 16, 8)
+        cfg.shell_demotion_transweave.num_shells = 3
+        cfg.shell_demotion_transweave.max_demotions_per_step = 2
+        cfg.shell_demotion_transweave.use_last_k_tasks = 2
+        cfg.shell_demotion_transweave.demotion_threshold = 0.3
+        cfg.shell_demotion_transweave.promotion_threshold = 0.7
+        cfg.shell_demotion_transweave.protected_center_fraction = 0.5
 
         cfg.checkpoint.every_train_forwards = 160
         cfg.checkpoint.min_seconds = 180.0

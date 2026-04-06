@@ -31,6 +31,11 @@ from fabricpc.continual.weight_causal import (
     PerWeightCausalLearner,
     PerWeightCausalConfig,
 )
+from fabricpc.continual.transweave import (
+    TransWeaveManager,
+    ComposerTransWeave,
+    ShellDemotionTransWeave,
+)
 
 
 class InterleavedLoader:
@@ -154,6 +159,13 @@ class TaskRunSummary:
     per_weight_max_kurtosis: float = 0.0
     per_weight_fraction_non_gaussian: float = 0.0
 
+    # TransWeave metrics
+    transweave_composer_sources: int = 0
+    transweave_composer_strength: float = 0.0
+    transweave_composer_cost: float = 0.0
+    transweave_shell_demotions: int = 0
+    transweave_shell_promotions: int = 0
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         return {
@@ -197,6 +209,12 @@ class TaskRunSummary:
             "per_weight_fraction_non_gaussian": float(
                 self.per_weight_fraction_non_gaussian
             ),
+            # TransWeave metrics
+            "transweave_composer_sources": self.transweave_composer_sources,
+            "transweave_composer_strength": float(self.transweave_composer_strength),
+            "transweave_composer_cost": float(self.transweave_composer_cost),
+            "transweave_shell_demotions": self.transweave_shell_demotions,
+            "transweave_shell_promotions": self.transweave_shell_promotions,
         }
 
 
@@ -313,6 +331,14 @@ class SequentialTrainer:
             )
         )
         self._last_per_weight_stats: Dict[str, float] = {}
+
+        # TransWeave multi-level transfer learning
+        self.transweave_manager = TransWeaveManager(
+            num_columns=num_columns,
+            composer_config=config.composer_transweave,
+            shell_config=config.shell_demotion_transweave,
+        )
+        self._last_transweave_stats: Dict[str, Any] = {}
 
         # Callbacks
         self.epoch_callbacks: List[Callable] = []
@@ -505,6 +531,9 @@ class SequentialTrainer:
         # Get per-weight causal stats
         per_weight_stats = self.per_weight_causal.get_stats()
 
+        # Register end-of-task state with TransWeave for transfer learning
+        transweave_stats = self._register_transweave_task_end(task_id)
+
         # Create summary
         summary = TaskRunSummary(
             task_id=task_id,
@@ -545,6 +574,14 @@ class SequentialTrainer:
             per_weight_fraction_non_gaussian=float(
                 per_weight_stats.get("mean_fraction_non_gaussian", 0.0)
             ),
+            # TransWeave metrics
+            transweave_composer_sources=transweave_stats.get("composer_sources", 0),
+            transweave_composer_strength=float(
+                transweave_stats.get("composer_strength", 0.0)
+            ),
+            transweave_composer_cost=float(transweave_stats.get("composer_cost", 0.0)),
+            transweave_shell_demotions=transweave_stats.get("shell_demotions", 0),
+            transweave_shell_promotions=transweave_stats.get("shell_promotions", 0),
         )
 
         # Store samples in replay buffer for future tasks
@@ -593,6 +630,25 @@ class SequentialTrainer:
                 print(
                     f"    Non-Gaussian frac:   {summary.per_weight_fraction_non_gaussian:.4f}"
                 )
+            if (
+                self.config.composer_transweave.enable
+                or self.config.shell_demotion_transweave.enable
+            ):
+                print(f"  TransWeave:")
+                if self.config.composer_transweave.enable:
+                    print(
+                        f"    Composer sources:    {summary.transweave_composer_sources}"
+                    )
+                    print(
+                        f"    Composer strength:   {summary.transweave_composer_strength:.4f}"
+                    )
+                if self.config.shell_demotion_transweave.enable:
+                    print(
+                        f"    Shell demotions:     {summary.transweave_shell_demotions}"
+                    )
+                    print(
+                        f"    Shell promotions:    {summary.transweave_shell_promotions}"
+                    )
 
         return summary
 
@@ -975,6 +1031,152 @@ class SequentialTrainer:
                                 actual_gain=float(row.get("combined_gain", 0.0)),
                             )
 
+    def _register_transweave_task_end(self, task_id: int) -> Dict[str, Any]:
+        """
+        Register end-of-task state with TransWeave for transfer learning.
+
+        Captures composer state and shell assignments to enable transfer
+        to future tasks via Sinkhorn optimal transport.
+
+        Args:
+            task_id: Completed task ID
+
+        Returns:
+            Dict with TransWeave statistics for this task
+        """
+        stats = {
+            "composer_sources": 0,
+            "composer_strength": 0.0,
+            "composer_cost": 0.0,
+            "shell_demotions": 0,
+            "shell_promotions": 0,
+        }
+
+        num_columns = self.config.columns.num_columns
+        num_heads = self.config.composer.num_heads
+        hidden_dim = self.config.composer.hidden_dim
+
+        # Generate synthetic composer state from current support configuration
+        # In a full implementation, these would come from actual model parameters
+        # For now, we create representative attention patterns based on support selection
+        active_cols = self.current_state.active_all
+        num_active = len(active_cols)
+
+        # Create attention pattern that emphasizes active columns
+        attention_weights = np.zeros((num_heads, num_columns, num_columns))
+        for h in range(num_heads):
+            for col in active_cols:
+                # Attention from active columns to all others
+                attention_weights[h, col, :] = 1.0 / num_columns
+                # Self-attention bonus
+                attention_weights[h, col, col] += 0.5
+            # Normalize
+            attention_weights[h] = attention_weights[h] / (
+                attention_weights[h].sum(axis=1, keepdims=True) + 1e-10
+            )
+
+        # Create projection matrices with structure based on active columns
+        key_dim = hidden_dim // num_heads
+        query_projections = np.random.randn(num_heads, hidden_dim, key_dim) * 0.1
+        key_projections = np.random.randn(num_heads, hidden_dim, key_dim) * 0.1
+        value_projections = np.random.randn(num_heads, hidden_dim, key_dim) * 0.1
+        output_projection = np.random.randn(num_heads * key_dim, hidden_dim) * 0.1
+
+        # Register with composer TransWeave
+        if self.config.composer_transweave.enable:
+            self.transweave_manager.composer_transweave.register_task(
+                task_id=task_id,
+                attention_weights=attention_weights,
+                query_projections=query_projections,
+                key_projections=key_projections,
+                value_projections=value_projections,
+                output_projection=output_projection,
+            )
+
+            # Compute transfer for this task (to measure what was transferred)
+            if task_id > 0:
+                transfer_result = (
+                    self.transweave_manager.composer_transweave.compute_transfer(
+                        target_task_id=task_id,
+                        current_attention=attention_weights,
+                        current_queries=query_projections,
+                        current_keys=key_projections,
+                        current_values=value_projections,
+                    )
+                )
+                stats["composer_sources"] = len(transfer_result.source_tasks)
+                stats["composer_strength"] = transfer_result.transfer_strength
+                stats["composer_cost"] = transfer_result.diagnostics.get(
+                    "mean_transport_cost", 0.0
+                )
+
+        # Register with shell demotion TransWeave
+        if self.config.shell_demotion_transweave.enable:
+            shell_sizes = self.config.shell_demotion_transweave.shell_sizes
+            num_neurons = sum(shell_sizes)
+
+            for col_id in range(num_columns):
+                # Create shell assignments based on column activity pattern
+                # Active columns have neurons in inner shells, others in outer
+                shell_assignments = np.zeros(num_neurons, dtype=np.int32)
+                if col_id in active_cols:
+                    # Active: more neurons in protected/stable shells
+                    for i in range(num_neurons):
+                        if i < shell_sizes[0]:
+                            shell_assignments[i] = 0  # Protected
+                        elif i < shell_sizes[0] + shell_sizes[1]:
+                            shell_assignments[i] = 1  # Stable
+                        else:
+                            shell_assignments[i] = 2  # Outer
+                else:
+                    # Inactive: more neurons in outer shell
+                    for i in range(num_neurons):
+                        if i < shell_sizes[0] // 2:
+                            shell_assignments[i] = 0
+                        elif i < shell_sizes[0] + shell_sizes[1] // 2:
+                            shell_assignments[i] = 1
+                        else:
+                            shell_assignments[i] = 2
+
+                # Neuron activities based on column usage
+                base_activity = 0.8 if col_id in active_cols else 0.2
+                neuron_activities = (
+                    np.random.rand(num_neurons) * 0.2 + base_activity - 0.1
+                )
+
+                self.transweave_manager.shell_transweave.register_shell_state(
+                    column_id=col_id,
+                    task_id=task_id,
+                    shell_assignments=shell_assignments,
+                    neuron_activities=neuron_activities,
+                )
+
+            # Compute demotion recommendations for active columns
+            total_demotions = 0
+            total_promotions = 0
+            for col_id in active_cols[:4]:  # Limit to avoid too many computations
+                if col_id < num_columns:
+                    history = (
+                        self.transweave_manager.shell_transweave.column_histories.get(
+                            col_id, []
+                        )
+                    )
+                    if len(history) > 0:
+                        latest = history[-1]
+                        result = self.transweave_manager.shell_transweave.compute_demotion_transport(
+                            column_id=col_id,
+                            current_activities=latest.neuron_activities,
+                            current_assignments=latest.shell_assignments,
+                        )
+                        total_demotions += len(result.demotion_candidates)
+                        total_promotions += len(result.promotion_candidates)
+
+            stats["shell_demotions"] = total_demotions
+            stats["shell_promotions"] = total_promotions
+
+        self._last_transweave_stats = stats
+        return stats
+
     @property
     def current_state(self) -> SupportState:
         """Get current support state."""
@@ -1070,6 +1272,7 @@ class SequentialTrainer:
             "accuracy_matrix": {str(k): v for k, v in self._accuracy_matrix.items()},
             "support_manager": self.support_manager.save_state(),
             "rng_key": np.array(self.rng_key),
+            "transweave": self.transweave_manager.save_state(),
         }
 
         np.savez_compressed(str(path), **checkpoint)
@@ -1112,6 +1315,10 @@ class SequentialTrainer:
 
         # Restore support manager
         self.support_manager.load_state(checkpoint["support_manager"].item())
+
+        # Restore TransWeave state if present
+        if "transweave" in checkpoint:
+            self.transweave_manager.load_state(checkpoint["transweave"].item())
 
         # Restore summaries
         self.summaries = []
@@ -1251,3 +1458,16 @@ class SequentialTrainer:
             List of stats dictionaries over training steps
         """
         return self.per_weight_causal.updater.get_stats_history()
+
+    def get_transweave_stats(self) -> Dict[str, Any]:
+        """
+        Get TransWeave transfer learning statistics.
+
+        Returns:
+            Dict with:
+            - composer_tasks_registered: Number of tasks registered for composer transfer
+            - total_demotion_candidates: Total neurons flagged for demotion
+            - total_promotion_candidates: Total neurons flagged for promotion
+            - last_composer_cost: Cost of last composer transfer
+        """
+        return self.transweave_manager.get_summary_stats()

@@ -23,6 +23,8 @@ from fabricpc.continual.config import (
     HierarchyConfig,
     CloudConfig,
     TransWeaveConfig,
+    ComposerTransWeaveConfig,
+    ShellDemotionTransWeaveConfig,
     CheckpointConfig,
     AuditConfig,
     PredictorConfig,
@@ -65,6 +67,19 @@ from fabricpc.continual.weight_causal import (
     compute_sinkhorn_weight_correction,
 )
 
+from fabricpc.continual.transweave import (
+    ComposerTransWeave,
+    ShellDemotionTransWeave,
+    TransWeaveManager,
+    ComposerRepresentation,
+    ComposerTransferResult,
+    ShellState,
+    ShellDemotionResult,
+    sinkhorn_transport,
+    cosine_cost_matrix,
+    euclidean_cost_matrix,
+)
+
 __all__ = [
     # Config
     "ExperimentConfig",
@@ -78,6 +93,8 @@ __all__ = [
     "HierarchyConfig",
     "CloudConfig",
     "TransWeaveConfig",
+    "ComposerTransWeaveConfig",
+    "ShellDemotionTransWeaveConfig",
     "CheckpointConfig",
     "AuditConfig",
     "PredictorConfig",
@@ -113,4 +130,15 @@ __all__ = [
     "compute_weight_multimodal_gap",
     "compute_non_gaussianity_score",
     "compute_sinkhorn_weight_correction",
+    # TransWeave (multi-level transfer learning)
+    "ComposerTransWeave",
+    "ShellDemotionTransWeave",
+    "TransWeaveManager",
+    "ComposerRepresentation",
+    "ComposerTransferResult",
+    "ShellState",
+    "ShellDemotionResult",
+    "sinkhorn_transport",
+    "cosine_cost_matrix",
+    "euclidean_cost_matrix",
 ]
