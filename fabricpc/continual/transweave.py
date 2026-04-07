@@ -723,19 +723,21 @@ class ShellDemotionTransWeave:
         historical_shell_activities /= len(history[-config.use_last_k_tasks :])
 
         # Compute transport between shell distributions
-        # Cost: difference in activity patterns
+        # Cost: difference in activity patterns, scaled appropriately for Sinkhorn
         cost = np.zeros((num_shells, num_shells))
         for i in range(num_shells):
             for j in range(num_shells):
-                # Cost increases with shell distance
-                shell_distance = abs(i - j)
+                # Shell distance cost - scaled down to work with eps
+                # Adjacent shells should have moderate cost, not prohibitive
+                shell_distance = abs(i - j) * 0.15  # Scale factor
                 activity_diff = abs(
                     historical_shell_activities[i] - current_shell_activities[j]
                 )
-                cost[i, j] = shell_distance + activity_diff
+                cost[i, j] = shell_distance + activity_diff * 0.5
 
-        # Add stability bonus (prefer staying in place)
-        cost -= np.eye(num_shells) * config.stability_bonus
+        # Stability bonus: small preference for staying in place
+        # Should be small relative to shell_distance cost
+        cost -= np.eye(num_shells) * config.stability_bonus * 0.5
 
         # Normalize activities as weights
         hist_weights = historical_shell_activities / (

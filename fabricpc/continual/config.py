@@ -356,18 +356,19 @@ class ShellDemotionTransWeaveConfig:
     enable: bool = True
 
     # Transport parameters
-    sinkhorn_eps: float = 0.20
-    sinkhorn_iters: int = 12
-    identity_bonus: float = 0.10
+    sinkhorn_eps: float = 0.25  # Higher for more diffuse transport
+    sinkhorn_iters: int = 25  # More iterations for convergence
+    identity_bonus: float = 0.02  # Low to allow off-diagonal transport
 
     # Shell structure
     num_shells: int = 3  # [protected_center, stable_inner, disposable_outer]
     shell_sizes: Tuple[int, ...] = (8, 16, 8)  # Neurons per shell
 
     # Demotion thresholds
-    demotion_threshold: float = 0.3  # Transport mass threshold for demotion
-    promotion_threshold: float = 0.7  # Transport mass threshold for promotion
-    stability_bonus: float = 0.2  # Bonus for keeping neurons in place
+    # Lower thresholds to detect transport with larger shell configs
+    demotion_threshold: float = 0.10  # Transport mass threshold for demotion
+    promotion_threshold: float = 0.25  # Transport mass threshold for promotion
+    stability_bonus: float = 0.08  # Bonus for keeping neurons in place
 
     # Cross-task patterns
     use_last_k_tasks: int = 2
@@ -648,8 +649,10 @@ def make_config(quick_smoke: bool = False) -> ExperimentConfig:
         cfg.shell_demotion_transweave.num_shells = 3
         cfg.shell_demotion_transweave.max_demotions_per_step = 2
         cfg.shell_demotion_transweave.use_last_k_tasks = 2
-        cfg.shell_demotion_transweave.demotion_threshold = 0.3
-        cfg.shell_demotion_transweave.promotion_threshold = 0.7
+        # Thresholds tuned for larger shell configs (32 neurons total)
+        # Lower thresholds detect transport with more diffuse distributions
+        cfg.shell_demotion_transweave.demotion_threshold = 0.10
+        cfg.shell_demotion_transweave.promotion_threshold = 0.25
         cfg.shell_demotion_transweave.protected_center_fraction = 0.5
 
         cfg.checkpoint.every_train_forwards = 160

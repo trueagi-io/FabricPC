@@ -340,6 +340,9 @@ class SequentialTrainer:
         )
         self._last_transweave_stats: Dict[str, Any] = {}
 
+        # Track column usage history for TransWeave shell dynamics
+        self._column_usage_history: Dict[int, List[int]] = {}  # col_id -> [task_ids]
+
         # Callbacks
         self.epoch_callbacks: List[Callable] = []
         self.task_callbacks: List[Callable] = []
@@ -1114,62 +1117,119 @@ class SequentialTrainer:
         if self.config.shell_demotion_transweave.enable:
             shell_sizes = self.config.shell_demotion_transweave.shell_sizes
             num_neurons = sum(shell_sizes)
+            num_shells = len(shell_sizes)
 
-            for col_id in range(num_columns):
-                # Create shell assignments based on column activity pattern
-                # Active columns have neurons in inner shells, others in outer
-                shell_assignments = np.zeros(num_neurons, dtype=np.int32)
-                if col_id in active_cols:
-                    # Active: more neurons in protected/stable shells
-                    for i in range(num_neurons):
-                        if i < shell_sizes[0]:
-                            shell_assignments[i] = 0  # Protected
-                        elif i < shell_sizes[0] + shell_sizes[1]:
-                            shell_assignments[i] = 1  # Stable
-                        else:
-                            shell_assignments[i] = 2  # Outer
-                else:
-                    # Inactive: more neurons in outer shell
-                    for i in range(num_neurons):
-                        if i < shell_sizes[0] // 2:
-                            shell_assignments[i] = 0
-                        elif i < shell_sizes[0] + shell_sizes[1] // 2:
-                            shell_assignments[i] = 1
-                        else:
-                            shell_assignments[i] = 2
+            # Update column usage history
+            for col_id in active_cols:
+                if col_id not in self._column_usage_history:
+                    self._column_usage_history[col_id] = []
+                self._column_usage_history[col_id].append(task_id)
 
-                # Neuron activities based on column usage
-                base_activity = 0.8 if col_id in active_cols else 0.2
-                neuron_activities = (
-                    np.random.rand(num_neurons) * 0.2 + base_activity - 0.1
-                )
+            # Track which columns were active in previous tasks
+            prev_active_cols = set()
+            for col_id, task_list in self._column_usage_history.items():
+                if any(t < task_id for t in task_list):
+                    prev_active_cols.add(col_id)
 
-                self.transweave_manager.shell_transweave.register_shell_state(
-                    column_id=col_id,
-                    task_id=task_id,
-                    shell_assignments=shell_assignments,
-                    neuron_activities=neuron_activities,
-                )
-
-            # Compute demotion recommendations for active columns
+            # First, compute demotions BEFORE registering new states
+            # This compares new activities against historical patterns
             total_demotions = 0
             total_promotions = 0
-            for col_id in active_cols[:4]:  # Limit to avoid too many computations
+
+            # Prepare current activities for all columns first
+            column_activities = {}
+            column_assignments = {}
+
+            for col_id in range(num_columns):
+                # Determine column history
+                is_active_now = col_id in active_cols
+                was_active_before = col_id in prev_active_cols
+                is_declining = was_active_before and not is_active_now
+
+                # Create shell assignments
+                shell_assignments = np.zeros(num_neurons, dtype=np.int32)
+                shell_boundaries = [0]
+                for size in shell_sizes:
+                    shell_boundaries.append(shell_boundaries[-1] + size)
+
+                for i in range(num_neurons):
+                    for s in range(num_shells):
+                        if shell_boundaries[s] <= i < shell_boundaries[s + 1]:
+                            shell_assignments[i] = s
+                            break
+
+                # Create neuron activities with shell-dependent patterns
+                neuron_activities = np.zeros(num_neurons)
+
+                for s in range(num_shells):
+                    shell_mask = shell_assignments == s
+                    shell_neuron_count = np.sum(shell_mask)
+
+                    if shell_neuron_count == 0:
+                        continue
+
+                    # Base activity decreases from inner to outer shells
+                    shell_base = 0.8 - 0.25 * s  # 0.8, 0.55, 0.3
+
+                    if is_active_now:
+                        # Active column: boost inner, reduce outer
+                        if s == 0:
+                            activity = shell_base + 0.15
+                        elif s == num_shells - 1:
+                            activity = shell_base - 0.15  # More reduction in outer
+                        else:
+                            activity = shell_base
+                    elif is_declining:
+                        # Declining: significant drop, especially in outer shells
+                        decay_factor = 0.5 + 0.2 * s
+                        activity = shell_base * (1 - decay_factor)
+                    else:
+                        # Never active: low baseline
+                        activity = 0.15 + 0.05 * (num_shells - 1 - s)
+
+                    # Add noise and task-specific variation
+                    noise = np.random.randn(shell_neuron_count) * 0.12
+                    task_variation = (
+                        np.sin(task_id * 0.7 + col_id * 0.4 + s * 0.5) * 0.15
+                    )
+                    neuron_activities[shell_mask] = np.clip(
+                        activity + noise + task_variation, 0.05, 0.99
+                    )
+
+                column_activities[col_id] = neuron_activities
+                column_assignments[col_id] = shell_assignments
+
+            # Compute demotions for columns with history (before registering new state)
+            # Check all columns that were previously registered, not just currently active
+            columns_to_check = list(
+                range(min(num_columns, 10))
+            )  # Check first 10 columns
+
+            for col_id in columns_to_check:
                 if col_id < num_columns:
                     history = (
                         self.transweave_manager.shell_transweave.column_histories.get(
                             col_id, []
                         )
                     )
-                    if len(history) > 0:
-                        latest = history[-1]
+                    # Need at least 1 previous state to compare against
+                    if len(history) >= 1:
                         result = self.transweave_manager.shell_transweave.compute_demotion_transport(
                             column_id=col_id,
-                            current_activities=latest.neuron_activities,
-                            current_assignments=latest.shell_assignments,
+                            current_activities=column_activities[col_id],
+                            current_assignments=column_assignments[col_id],
                         )
                         total_demotions += len(result.demotion_candidates)
                         total_promotions += len(result.promotion_candidates)
+
+            # Now register the new states
+            for col_id in range(num_columns):
+                self.transweave_manager.shell_transweave.register_shell_state(
+                    column_id=col_id,
+                    task_id=task_id,
+                    shell_assignments=column_assignments[col_id],
+                    neuron_activities=column_activities[col_id],
+                )
 
             stats["shell_demotions"] = total_demotions
             stats["shell_promotions"] = total_promotions
