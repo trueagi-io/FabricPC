@@ -346,6 +346,9 @@ All code added to this repository on or after this date is explicitly
 released as fully copylefted free software according to the above 
 license, by Charles King Derr Copyright (c) 2026
 
+Much of the new code (added after April 5th, 2026) is inspired by the
+ideas and a port from a pytorch codebase created by Benjamin Goertzel.
+
 
 MIT License
 
