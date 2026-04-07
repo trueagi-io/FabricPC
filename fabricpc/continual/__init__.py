@@ -75,9 +75,14 @@ from fabricpc.continual.transweave import (
     ComposerTransferResult,
     ShellState,
     ShellDemotionResult,
+)
+
+from fabricpc.continual.optimal_transport import (
     sinkhorn_transport,
+    sinkhorn_1d_correction,
     cosine_cost_matrix,
     euclidean_cost_matrix,
+    erfinv_approx,
 )
 
 __all__ = [
@@ -138,7 +143,10 @@ __all__ = [
     "ComposerTransferResult",
     "ShellState",
     "ShellDemotionResult",
+    # Optimal Transport (shared utilities)
     "sinkhorn_transport",
+    "sinkhorn_1d_correction",
     "cosine_cost_matrix",
     "euclidean_cost_matrix",
+    "erfinv_approx",
 ]

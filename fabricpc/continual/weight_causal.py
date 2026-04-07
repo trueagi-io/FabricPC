@@ -35,6 +35,11 @@ except ImportError:
     HAS_JAX = False
     jnp = np  # Fallback to numpy
 
+# Import optimal transport utilities from shared module
+from fabricpc.continual.optimal_transport import (
+    sinkhorn_1d_correction,
+    erfinv_approx,
+)
 
 # ----------------------------
 # Configuration
@@ -175,88 +180,6 @@ def compute_non_gaussianity_score(
     score = kurt_excess + multi_excess
 
     return score
-
-
-def sinkhorn_1d_correction(
-    gradients: np.ndarray,
-    eps: float = 0.1,
-    iters: int = 5,
-) -> np.ndarray:
-    """
-    Compute Sinkhorn-based correction for 1D gradient distribution.
-
-    Maps gradient distribution towards Gaussian via optimal transport.
-
-    Args:
-        gradients: 1D array of gradient values
-        eps: Regularization parameter
-        iters: Number of Sinkhorn iterations
-
-    Returns:
-        Corrected gradient values
-    """
-    n = len(gradients)
-    if n < 2:
-        return gradients
-
-    # Sort gradients to get empirical CDF
-    sorted_idx = np.argsort(gradients)
-    sorted_grads = gradients[sorted_idx]
-
-    # Generate target Gaussian quantiles (same mean/std as input)
-    mean = np.mean(gradients)
-    std = np.std(gradients)
-    if std < 1e-8:
-        return gradients
-
-    # Gaussian quantiles
-    probs = (np.arange(n) + 0.5) / n
-    target = mean + std * np.sqrt(2) * erfinv_approx(2 * probs - 1)
-
-    # Cost matrix (squared distance)
-    C = (sorted_grads.reshape(-1, 1) - target.reshape(1, -1)) ** 2
-
-    # Sinkhorn algorithm
-    K = np.exp(-C / (eps * std**2 + 1e-8))
-    u = np.ones(n)
-    v = np.ones(n)
-
-    for _ in range(iters):
-        u = 1.0 / (K @ v + 1e-10)
-        v = 1.0 / (K.T @ u + 1e-10)
-
-    # Transport plan
-    P = np.outer(u, v) * K
-    P = P / (P.sum(axis=1, keepdims=True) + 1e-10)
-
-    # Barycentric projection: corrected values
-    corrected_sorted = P @ target
-
-    # Unsort to original order
-    corrected = np.empty_like(gradients)
-    corrected[sorted_idx] = corrected_sorted
-
-    return corrected
-
-
-def erfinv_approx(x: np.ndarray) -> np.ndarray:
-    """
-    Approximate inverse error function.
-
-    Uses rational approximation for |x| < 1.
-    """
-    x = np.clip(x, -0.99999, 0.99999)
-
-    # Approximation coefficients
-    a = 0.147
-    ln_term = np.log(1 - x**2)
-    term1 = 2 / (np.pi * a) + ln_term / 2
-    term2 = ln_term / a
-
-    sign = np.sign(x)
-    result = sign * np.sqrt(np.sqrt(term1**2 - term2) - term1)
-
-    return result
 
 
 # ----------------------------
