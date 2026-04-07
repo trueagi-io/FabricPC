@@ -85,6 +85,17 @@ from fabricpc.continual.optimal_transport import (
     erfinv_approx,
 )
 
+from fabricpc.continual.native_nodes import (
+    CausalLinear,
+    TransWeaveLinear,
+    CausalTransWeaveLinear,
+    CausalGradientRegistry,
+    TransWeaveRegistry,
+    apply_causal_to_gradients,
+    register_task_end_for_nodes,
+    get_transferred_params,
+)
+
 __all__ = [
     # Config
     "ExperimentConfig",
@@ -149,4 +160,13 @@ __all__ = [
     "cosine_cost_matrix",
     "euclidean_cost_matrix",
     "erfinv_approx",
+    # Native FabricPC Nodes (embedded CL)
+    "CausalLinear",
+    "TransWeaveLinear",
+    "CausalTransWeaveLinear",
+    "CausalGradientRegistry",
+    "TransWeaveRegistry",
+    "apply_causal_to_gradients",
+    "register_task_end_for_nodes",
+    "get_transferred_params",
 ]
