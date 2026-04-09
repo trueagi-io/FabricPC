@@ -17,9 +17,11 @@ which replicates the computation across devices and averages gradients.
 
 from typing import Dict, Tuple, Any, cast, Iterable
 import math
+import time
 import jax
 import jax.numpy as jnp
 import optax
+from tqdm.auto import tqdm
 
 from fabricpc.core.types import GraphParams, GraphState, GraphStructure
 from fabricpc.graph.state_initializer import initialize_graph_state
@@ -261,7 +263,14 @@ def train_pcn_multi_gpu(
             device_keys
         )
 
-        for batch_idx, batch_data in enumerate(train_loader):
+        epoch_start = time.time()
+        batch_iter = tqdm(
+            train_loader,
+            desc=f"Epoch {epoch + 1}/{total_epochs}",
+            leave=False,
+            disable=not verbose,
+        )
+        for batch_idx, batch_data in enumerate(batch_iter):
             if batch_idx >= max_batches:
                 break
 
@@ -303,7 +312,10 @@ def train_pcn_multi_gpu(
         )
 
         if verbose:
-            print(f"Epoch {epoch + 1}/{total_epochs}, Energy: {avg_energy:.4f}")
+            epoch_time = time.time() - epoch_start
+            print(
+                f"Epoch {epoch + 1}/{total_epochs}, Energy: {avg_energy:.4f}, Time: {epoch_time:.1f}s"
+            )
 
     # Extract params from first device (all devices have same params due to pmean)
     params = jax.tree_util.tree_map(lambda x: x[0], params)

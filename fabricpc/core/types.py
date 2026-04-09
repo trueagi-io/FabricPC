@@ -4,10 +4,15 @@ Core JAX types for predictive coding networks.
 All types are immutable and registered as JAX pytrees for automatic differentiation.
 """
 
-from typing import Dict, Any, Tuple, NamedTuple
+from __future__ import annotations
+
+from typing import Dict, Any, Tuple, NamedTuple, TYPE_CHECKING
 import jax.numpy as jnp
 from jax import tree_util
 from dataclasses import dataclass
+
+if TYPE_CHECKING:
+    from fabricpc.nodes.base import NodeBase
 
 
 @dataclass(frozen=True)
@@ -37,7 +42,7 @@ class NodeInfo:
     name: str
     shape: Tuple[int, ...]  # Output shape excluding batch dimension
     node_type: str  # "linear", "transformer", etc. (kept for debugging/display)
-    node_class: type  # The node class (Linear, TransformerBlock, etc.)
+    node_class: NodeBase  # The node class (Linear, TransformerBlock, etc.)
     node_config: Dict[str, Any]  # Extra config (use_bias, flatten_input, etc.)
     activation: Any  # ActivationBase instance
     energy: Any  # EnergyFunctional instance

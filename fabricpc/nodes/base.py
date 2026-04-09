@@ -280,7 +280,6 @@ class NodeBase(ABC):
         """
         pass
 
-    # TODO return only the projected value z_mu and compute energy and gradients in a wrapper method.
     @staticmethod
     @abstractmethod
     def forward(
