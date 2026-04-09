@@ -79,7 +79,7 @@ class IdentityNode(NodeBase):
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
         weight_init: Optional[InitializerBase] = None,
-        config: Dict[str, Any] = {},
+        config: Optional[Dict[str, Any]] = None,
     ) -> NodeParams:
         """
         Initialize parameters for identity node (none needed).
@@ -94,6 +94,8 @@ class IdentityNode(NodeBase):
         Returns:
             NodeParams with empty weights and biases
         """
+        if config is None:
+            config = {}
         return NodeParams(weights={}, biases={})
 
     @staticmethod

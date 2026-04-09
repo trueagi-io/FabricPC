@@ -10,7 +10,7 @@ from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
 set_jax_flags_before_importing_jax(jax_platforms="cuda")
 
 import time
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Optional, Tuple
 import jax
 import jax.numpy as jnp
 import optax
@@ -84,7 +84,7 @@ class Conv2DNode(NodeBase):
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
         weight_init=None,
-        config: Dict[str, Any] = {},
+        config: Optional[Dict[str, Any]] = None,
     ) -> NodeParams:
         """
         Initialize convolution kernels and biases.
@@ -92,6 +92,8 @@ class Conv2DNode(NodeBase):
         Kernel shape: (kH, kW, C_in, C_out)
         Bias shape: (1, 1, 1, C_out) for NHWC broadcasting
         """
+        if config is None:
+            config = {}
         kernel_size = config.get("kernel_size")
         out_channels = node_shape[-1]  # Last dim is channels (NHWC)
 

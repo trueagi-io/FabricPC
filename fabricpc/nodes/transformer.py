@@ -8,11 +8,11 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-from fabricpc.nodes.base import NodeBase, NodeParams, SlotSpec
+from fabricpc.nodes.base import NodeBase, SlotSpec
 from fabricpc.core.activations import IdentityActivation, GeluActivation
 from fabricpc.core.energy import GaussianEnergy
 from fabricpc.core.initializers import NormalInitializer, KaimingInitializer, initialize
-from fabricpc.core.types import NodeState, NodeInfo
+from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from typing import Dict, Optional, Tuple, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -179,8 +179,10 @@ class TransformerBlock(NodeBase):
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
         weight_init: Optional[InitializerBase] = None,
-        config: Dict[str, Any] = {},
+        config: Optional[Dict[str, Any]] = None,
     ) -> NodeParams:
+        if config is None:
+            config = {}
 
         num_heads = config.get("num_heads", 8)
         embed_dim = node_shape[-1]

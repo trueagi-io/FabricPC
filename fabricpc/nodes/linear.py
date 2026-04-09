@@ -93,7 +93,7 @@ class Linear(FlattenInputMixin, NodeBase):
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
         weight_init: Optional[InitializerBase] = None,
-        config: Dict[str, Any] = {},
+        config: Optional[Dict[str, Any]] = None,
     ) -> NodeParams:
         """
         Initialize weight matrix and bias vector.
@@ -112,6 +112,8 @@ class Linear(FlattenInputMixin, NodeBase):
         Returns:
             NodeParams with initialized W and b
         """
+        if config is None:
+            config = {}
         from fabricpc.core.initializers import NormalInitializer, initialize
 
         flatten_input = config.get("flatten_input", False)

@@ -30,6 +30,7 @@ from fabricpc.graph.state_initializer import initialize_graph_state
 from fabricpc.nodes.transformer_v2 import create_deep_transformer
 from fabricpc.utils.data import CharDataLoader
 import optax
+import time
 
 # --- Data ---
 
@@ -78,10 +79,12 @@ train_config = {
 }
 optimizer = optax.adam(1e-5)
 
-print(f"Vocab Size: {vocab_size} | Training on local tiny_shakespeare.txt...")
+print(f"Vocab Size: {vocab_size}")
+start = time.time()
 trained_params = train_pcn_multi_gpu(
     params, structure, train_loader, optimizer, train_config, train_key, verbose=True
 )
+print(f"Training completed in {time.time() - start:.1f}s")
 
 # Evaluate
 metrics = evaluate_transformer_multi_gpu(

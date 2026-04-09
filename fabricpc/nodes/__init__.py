@@ -24,6 +24,7 @@ from fabricpc.nodes.transformer_v2 import (
     Mlp2ResidualNode,
     VocabProjectionNode,
 )
+from fabricpc.nodes.storkey_hopfield import StorkeyHopfield
 
 # Convenience aliases matching the target API
 Linear = Linear
@@ -45,4 +46,5 @@ __all__ = [
     "LnMlp1Node",
     "Mlp2ResidualNode",
     "VocabProjectionNode",
+    "StorkeyHopfield",
 ]
