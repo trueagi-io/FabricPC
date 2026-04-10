@@ -360,7 +360,7 @@ def compute_mupc_scalings(
     depth_metric: DepthMetricBase,
     output_nodes: Set[str],       # nodes clamped to targets (from task_map)
 ) -> Dict[str, MuPCScaling]:
-    """Compute per-node MuPCScaling from graph topology."""
+    """Compute per-node MuPCScalingFactors from graph topology."""
 ```
 
 **Scaling formulas per edge** (edge from source → target node):
@@ -420,7 +420,7 @@ Add an optional field to `NodeInfo`:
 @dataclass(frozen=True)
 class NodeInfo:
     # ... existing fields ...
-    scaling_config: Any  # Optional MuPCScaling instance, or None
+    scaling_config: Any  # Optional MuPCScalingFactors instance, or None
 ```
 
 This is part of the static graph structure (not a pytree leaf), so it doesn't affect JAX tracing.
@@ -433,7 +433,7 @@ Modify the `graph()` function to optionally accept a `scaling` parameter:
 def graph(
     nodes, edges, task_map, inference,
     graph_state_initializer=None,
-    scaling=None,          # NEW: Optional MuPCScaling config or DepthMetricBase
+    scaling=None,          # NEW: Optional MuPCScalingFactors config or DepthMetricBase
 ) -> GraphStructure:
 ```
 

@@ -27,14 +27,14 @@ Usage:
 """
 
 import math
-from typing import Dict, Set, Any, Optional
+from typing import Dict, Any, Optional
 from dataclasses import dataclass, field
 
 from fabricpc.core.depth_metric import DepthMetricBase, ShortestPathDepth
 
 
 @dataclass(frozen=True)
-class MuPCScaling:
+class MuPCScalingFactors:
     """
     Per-node scaling factors for muPC parameterization.
 
@@ -79,28 +79,35 @@ class MuPCConfig:
 def compute_mupc_scalings(
     nodes: Dict[str, Any],
     edges: Dict[str, Any],
-    output_nodes: Set[str],
     config: MuPCConfig,
-) -> Dict[str, MuPCScaling]:
+) -> Dict[str, MuPCScalingFactors]:
     """
-    Compute per-node MuPCScaling from graph topology.
+    Compute per-node MuPCScalingFactors from graph topology.
+
+    Output nodes are detected automatically as terminal nodes (out_degree=0),
+    symmetric to depth metrics using in_degree=0 for source nodes. Output nodes
+    receive the stronger 1/fan_in forward scaling instead of 1/sqrt(fan_in*L).
 
     Args:
         nodes: Dictionary mapping node names to finalized NodeBase instances
                (each has .node_info with shape, in_edges, out_edges, etc.)
         edges: Dictionary mapping edge keys to EdgeInfo objects
-        output_nodes: Set of node names that are clamped to targets during
-                      training (typically from task_map["y"]).
         config: MuPCConfig with depth metric and parameters.
 
     Returns:
-        Dictionary mapping node names to MuPCScaling instances.
+        Dictionary mapping node names to MuPCScalingFactors instances.
         Source nodes (in_degree=0) get None (no scaling needed).
     """
     import numpy as np
 
     # Compute effective depth for each node
     depths = config.depth_metric.compute(nodes, edges)
+
+    # Detect output nodes as terminal nodes (out_degree=0), symmetric to
+    # depth metrics using in_degree=0 for source nodes.
+    output_nodes = {
+        name for name, node in nodes.items() if node.node_info.out_degree == 0
+    }
 
     scalings = {}
 
@@ -113,6 +120,8 @@ def compute_mupc_scalings(
             continue
 
         is_output = node_name in output_nodes
+        # fan_out in the Xavier/Kaiming sense: output dimensionality of the
+        # weight matrix (number of node features), not graph out-degree.
         fan_out = int(np.prod(node_info.shape))
         effective_depth = max(depths.get(node_name, 1), config.min_depth)
 
@@ -137,20 +146,31 @@ def compute_mupc_scalings(
             forward_scale[edge_key] = a
 
             # Top-down gradient scaling: c_td
-            # Goal: make W^T * epsilon have O(1) variance per component
-            # Autodiff already includes a_l from input pre-scaling.
-            # The autodiff result has variance ~ a^2 * fan_out.
-            # We want total = c_td * a * sqrt(fan_out) = O(1)
-            # So c_td = 1 / (a * sqrt(fan_out))
-            #         = sqrt(fan_in * L) / sqrt(fan_out)  for hidden
-            #         = fan_in / sqrt(fan_out)             for output
+            # Goal: normalize the gradient sent to presynaptic nodes to O(1).
+            #
+            # Chain rule mechanics:
+            #   1. _apply_forward_scaling multiplies inputs by a before forward().
+            #   2. jax.value_and_grad(forward, argnums=1) differentiates w.r.t.
+            #      the *scaled* inputs, yielding dE/d(a*x).
+            #   3. dE/d(a*x) ~ W^T @ epsilon, which has variance ~fan_out
+            #      (fan_out rows of unit-variance W entries).
+            #   4. The gradient sent to the presynaptic node is c_td * dE/d(a*x).
+            #      The presynaptic latent update accumulates this directly.
+            #   5. The factor a from input pre-scaling is absorbed into the
+            #      differentiated function, so the effective variance contribution
+            #      to the presynaptic update is c_td^2 * a^2 * fan_out.
+            #   6. For O(1): c_td^2 * a^2 * fan_out = 1
+            #      => c_td = 1 / (a * sqrt(fan_out))
             if fan_out > 0:
                 c_td = 1.0 / (a * math.sqrt(fan_out))
             else:
                 c_td = 1.0
+
+            # Scaling in the backward pass to presynaptic nodes is less crucial because of diminishing energy in deeper layers, but we include it for completeness and to maintain O(1) gradients at the presynaptic nodes.
             topdown_grad_scale[edge_key] = c_td
 
-            # Weight gradient scaling: 1.0 (let optimizer handle magnitude)
+            # Weight gradient scaling: 1.0 (let optimizer handle magnitude for now. keep as placeholder for future exploration)
+            # For non-square weight matrices, the variance of dE/dW can depend on both fan_in and fan_out. A more careful scaling could be derived, but for now we keep it at 1.0 and rely on the optimizer's learning rate to manage it.
             weight_grad_scale[edge_key] = 1.0
 
         # Self-gradient scaling: 1.0
@@ -158,7 +178,7 @@ def compute_mupc_scalings(
         # when the forward scaling maintains O(1) activations.
         self_grad_scale = 1.0
 
-        scalings[node_name] = MuPCScaling(
+        scalings[node_name] = MuPCScalingFactors(
             forward_scale=forward_scale,
             self_grad_scale=self_grad_scale,
             topdown_grad_scale=topdown_grad_scale,

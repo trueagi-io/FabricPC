@@ -91,8 +91,8 @@ class TestShapes:
         edge_keys = list(hop_params.weights.keys())
         assert len(edge_keys) == 1
         assert hop_params.weights[edge_keys[0]].shape == (D, D)
-        # Bias
-        assert "b" in hop_params.biases
+        # Bias disabled by default (use_bias=False)
+        assert "b" not in hop_params.biases
         # Learnable hopfield_strength
         assert "hopfield_strength" in hop_params.biases
         assert hop_params.biases["hopfield_strength"].shape == ()

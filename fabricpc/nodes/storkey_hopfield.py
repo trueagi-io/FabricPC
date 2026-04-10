@@ -17,12 +17,17 @@ Energy formulation:
 
 The standard PC energy path (via energy_functional()) is called normally.
 The Hopfield energy is added afterward via accumulate_hopfield_energy_and_grad(),
-which augments state.energy and state.latent_grad. The Hopfield recurrence
-(z_latent @ W) is internal to the node and invisible to the graph topology.
+which augments state.energy and state.latent_grad.
 
-The input from the upstream node serves as a "probe pattern" — it is added
-directly to the pre-activation (no weight multiplication), seeding the
-attractor dynamics. W encodes only the associative memory structure.
+Attractor dynamics arise naturally from the Hopfield energy gradient
+(strength/D)(W^2 - W)z, which is accumulated to latent_grad and applied
+during PC inference (z -= eta * latent_grad). Since PC inference IS gradient
+descent on E_total, no explicit self-feedback recurrence is needed — the
+inference loop itself iterates z toward the attractors encoded in W.
+
+The input from the upstream node serves as a "probe pattern" — it seeds the
+prediction z_mu. The probe is also projected through W (probe @ W) so that
+W participates in the autodiff gradient flow and can learn via dE/dW.
 
 Notation:
     xi^mu = stored Hopfield patterns (absolute states in z-space)
@@ -32,13 +37,10 @@ Notation:
 
 Architecture (internal to forward()):
 
-    probe ------+
-                |
-                v
-              [sum] + [strength * (z_latent @ W)] + bias ----> tanh ----> z_mu
-                                    ^
-                              Hopfield recurrence
-                              (pseudo self-connection)
+    probe ---+--- probe @ W ---+--- bias ----> activation ----> z_mu
+             |                 |
+             +-----------------+
+             (additive)
 """
 
 from __future__ import annotations
@@ -80,9 +82,10 @@ class StorkeyHopfield(NodeBase):
     - E_pc pulls z toward the upstream prediction mu
     - E_hop pulls z toward stored patterns (attractors learned via W)
 
-    The Hopfield recurrence is internal: z_mu = tanh(probe + strength * z @ W + bias).
-    W is a (D, D) weight matrix operating on the last axis of z_latent.
-    The probe (input from upstream) is added directly without W multiplication.
+    The forward pass computes: z_mu = activation(probe + probe @ W + bias).
+    Attractor dynamics come from the Hopfield energy gradient accumulated to
+    latent_grad during forward(), which the PC inference loop applies via
+    z -= eta * latent_grad. W is a (D, D) matrix on the last axis of z_latent.
 
     Args:
         shape: Output shape (excluding batch). Last dim is the Hopfield dimension D.
@@ -233,11 +236,11 @@ class StorkeyHopfield(NodeBase):
         z = state.z_latent  # (batch, ..., D)
         wz = z @ W  # (batch, ..., D)
         D = z.shape[-1]
-        E_h = (0.5 / D) * jnp.sum(wz * (wz - z), axis=-1)  # (1/2N) z^T(W^2-W)z
-        hopfield_grad = (strength / D) * (wz @ W - wz)  # (1/N)(W^2-W)z
+        E_hopfield = (0.5 / D) * jnp.sum(wz * (wz - z), axis=-1)  # (1/2N) z^T(W^2-W)z
+        hopfield_grad = (1.0 / D) * (wz @ W - wz)  # (1/N)(W^2-W)z
         return state._replace(
-            energy=state.energy + strength * E_h,
-            latent_grad=state.latent_grad + hopfield_grad,
+            energy=state.energy + strength * E_hopfield,
+            latent_grad=state.latent_grad + strength * hopfield_grad,
         )
 
     @staticmethod
@@ -248,11 +251,15 @@ class StorkeyHopfield(NodeBase):
         node_info: NodeInfo,
     ) -> Tuple[jax.Array, NodeState]:
         """
-        Forward pass: compute z_mu with Hopfield recurrence, then combined energy.
+        Forward pass: compute z_mu from probe, then combined energy.
 
-        z_mu = activation(probe + strength * (z_latent @ W) + bias)
+        z_mu = activation(probe + probe @ W + bias)
 
         Energy = E_pc(z, z_mu) + hopfield_strength * E_hop(W, z)
+
+        Attractor dynamics are provided by the Hopfield energy gradient
+        (strength/D)(W^2 - W)z accumulated to latent_grad, not by
+        explicit self-feedback in the pre-activation.
         """
         config = node_info.node_config
         batch_size = state.z_latent.shape[0]
@@ -272,12 +279,11 @@ class StorkeyHopfield(NodeBase):
             strength = config.get("hopfield_strength", 1.0)
 
         pre_activation = jnp.zeros((batch_size,) + out_shape)
-        # Probe pattern: added directly to pre-activation to seed the attractor dynamics. Necessary to pass through signal with weights init at zero. The node gradually learns attractors in W.
+        # Probe pattern: added directly so the node passes signal even when W=0.
         pre_activation = pre_activation + input_probe_state
-        # Projection: required to link the weights to the input pattern gradient flow, but alo seeds attractor dynamics.
+        # Projection through W: links W to the autodiff gradient flow so that
+        # dE/dW is non-zero and W can learn associative structure.
         pre_activation = pre_activation + (input_probe_state @ W)
-        # Hopfield recurrence to approach the attractor: strength * (z_latent @ W)  Iterative self-feedback pulls recall to stored patterns in W. This is the core of the Hopfield attractor dynamics.
-        pre_activation = pre_activation + strength * (state.z_latent @ W)
 
         # Add bias
         if "b" in params.biases and params.biases["b"].size > 0:

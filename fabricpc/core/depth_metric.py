@@ -56,6 +56,10 @@ class ShortestPathDepth(DepthMetricBase):
     choice: nodes reachable by a short path get a smaller depth, resulting
     in weaker damping. Suitable when short-circuit paths (skip connections)
     are the dominant signal pathway.
+
+    Cycle handling: BFS handles cycles gracefully. The first visit always
+    gives the shortest path; subsequent visits via cycles are ignored.
+    Nodes unreachable from any source will not appear in the result.
     """
 
     def compute(self, nodes, edges):
@@ -96,6 +100,12 @@ class LongestPathDepth(DepthMetricBase):
     choice: nodes get depth equal to their longest dependency chain, resulting
     in stronger damping. Suitable for deep networks where the longest path
     determines the signal accumulation.
+
+    Cycle handling: Uses Kahn's algorithm for topological sort, which only
+    processes nodes reachable without cycles. Nodes participating in cycles
+    are not visited by Kahn's algorithm and retain the default depth of 0,
+    providing a conservative (minimal damping) fallback. For best results,
+    use this metric with DAG topologies.
     """
 
     def compute(self, nodes, edges):
