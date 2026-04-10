@@ -308,6 +308,28 @@ class NodeBase(ABC):
     # Default implementations - can be overridden for explicit gradients
     # =========================================================================
 
+    @staticmethod
+    def _apply_forward_scaling(
+        inputs: Dict[str, jnp.ndarray],
+        node_info: NodeInfo,
+    ) -> Dict[str, jnp.ndarray]:
+        """
+        Pre-scale inputs by muPC forward scaling factors.
+
+        When scaling_config is present, each input tensor is multiplied by
+        its per-edge forward_scale factor. Since W @ (a*x) = a * (W @ x),
+        this is mathematically equivalent to scaling the node output, but
+        keeps all scaling logic outside the node's forward() method.
+
+        When scaling_config is None, returns inputs unchanged.
+        """
+        if node_info.scaling_config is None:
+            return inputs
+        return {
+            edge_key: x * node_info.scaling_config.forward_scale[edge_key]
+            for edge_key, x in inputs.items()
+        }
+
     # TODO rename to forward_and_latent_gradients() or something to clarify that this is the method used during inference to compute both the forward pass and the gradients w.r.t. inputs for updating latents of in-neighbors.
     @staticmethod
     def forward_inference(
@@ -361,8 +383,10 @@ class NodeBase(ABC):
             # No post-synaptic targets and no clamped data!
             # This happens for output nodes when the model is run in inference/evaluation mode (not training)
             # Compute its projection (z_mu) but no gradient since it doesn't contribute to any error.
+            # Apply muPC forward scaling to inputs
+            scaled_inputs = node_class._apply_forward_scaling(inputs, node_info)
             total_energy, new_state = node_class.forward(
-                params, inputs, state, node_info
+                params, scaled_inputs, state, node_info
             )
             # Update keeping the projection, but zero error.
             new_state = new_state._replace(
@@ -377,10 +401,24 @@ class NodeBase(ABC):
 
         else:
             # Internal node or a clamped output node. Compute the energy and gradients.
-            # Use JAX's value_and_grad to compute gradients w.r.t. inputs
+            # Apply muPC forward scaling to inputs (inside the differentiated function)
+            scaled_inputs = node_class._apply_forward_scaling(inputs, node_info)
+            # Use JAX's value_and_grad to compute gradients w.r.t. scaled inputs
             (total_energy, new_state), input_grads = jax.value_and_grad(
                 node_class.forward, argnums=1, has_aux=True
-            )(params, inputs, state, node_info)
+            )(params, scaled_inputs, state, node_info)
+
+            # Apply muPC top-down gradient scaling per edge
+            # The autodiff result already includes forward_scale from input
+            # pre-scaling. topdown_grad_scale provides the additional correction
+            # to normalize the W^T * epsilon term to O(1) per component.
+            if node_info.scaling_config is not None:
+                input_grads = {
+                    edge_key: grad
+                    * node_info.scaling_config.topdown_grad_scale[edge_key]
+                    for edge_key, grad in input_grads.items()
+                }
+
             # TODO if using preactivation latents, need to wrap the node_class.forward() with method to apply pre-synaptic activation function to the inputs first.
             # TODO Refactor node_class.forward()
             #   - node_class.forward only computes the projection z_mu
@@ -419,10 +457,21 @@ class NodeBase(ABC):
         """
         node_class = node_info.node_class
 
+        # Apply muPC forward scaling to inputs (same as inference)
+        scaled_inputs = node_class._apply_forward_scaling(inputs, node_info)
+
         # Use JAX's value_and_grad to compute gradients w.r.t. params
         (total_energy, new_state), params_grad = jax.value_and_grad(
             node_class.forward, argnums=0, has_aux=True
-        )(params, inputs, state, node_info)
+        )(params, scaled_inputs, state, node_info)
+
+        # Apply muPC weight gradient scaling per edge
+        if node_info.scaling_config is not None:
+            scaled_weights = {
+                edge_key: grad * node_info.scaling_config.weight_grad_scale[edge_key]
+                for edge_key, grad in params_grad.weights.items()
+            }
+            params_grad = NodeParams(weights=scaled_weights, biases=params_grad.biases)
 
         return new_state, params_grad
 
@@ -452,6 +501,10 @@ class NodeBase(ABC):
 
         energy = energy_cls.energy(state.z_latent, state.z_mu, config)
         grad = energy_cls.grad_latent(state.z_latent, state.z_mu, config)
+
+        # Apply muPC self-gradient scaling
+        if node_info.scaling_config is not None:
+            grad = grad * node_info.scaling_config.self_grad_scale
 
         latent_grad = state.latent_grad + grad
         state = state._replace(energy=energy, latent_grad=latent_grad)

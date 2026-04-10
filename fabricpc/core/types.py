@@ -53,6 +53,9 @@ class NodeInfo:
     out_degree: int  # Number of outgoing edges
     in_edges: Tuple[str, ...]  # Tuple of edge keys
     out_edges: Tuple[str, ...]  # Tuple of edge keys
+    scaling_config: Any = (
+        None  # Optional MuPCScaling instance for muPC parameterization
+    )
 
 
 @dataclass(frozen=True)
