@@ -4,7 +4,7 @@ Test suite for muPC (Maximal Update Parameterization for Predictive Coding).
 Covers:
 - Depth metric computation (shortest path, longest path, fixed)
 - MuPCInitializer weight initialization
-- MuPCScaling computation from graph topology
+- MuPCScalingFactors computation from graph topology
 - Graph builder integration with scaling parameter
 - Forward scaling application in forward_inference and forward_learning
 - End-to-end training with muPC scaling
@@ -28,7 +28,7 @@ from fabricpc.core.depth_metric import (
     LongestPathDepth,
     FixedDepth,
 )
-from fabricpc.core.mupc import MuPCConfig, MuPCScaling, compute_mupc_scalings
+from fabricpc.core.mupc import MuPCConfig, MuPCScalingFactors, compute_mupc_scalings
 from fabricpc.graph import initialize_params
 from fabricpc.graph.state_initializer import initialize_graph_state
 from fabricpc.graph.graph_net import (
@@ -209,14 +209,14 @@ class TestMuPCScalingComputation:
         assert x_info.scaling_config is None
 
     def test_hidden_node_has_scaling(self, linear_chain_with_mupc):
-        """Hidden nodes should have MuPCScaling attached."""
+        """Hidden nodes should have MuPCScalingFactors attached."""
         structure = linear_chain_with_mupc
         h_info = structure.nodes["h"].node_info
         assert h_info.scaling_config is not None
-        assert isinstance(h_info.scaling_config, MuPCScaling)
+        assert isinstance(h_info.scaling_config, MuPCScalingFactors)
 
     def test_output_node_has_scaling(self, linear_chain_with_mupc):
-        """Output nodes should have MuPCScaling attached."""
+        """Output nodes should have MuPCScalingFactors attached."""
         structure = linear_chain_with_mupc
         y_info = structure.nodes["y"].node_info
         assert y_info.scaling_config is not None

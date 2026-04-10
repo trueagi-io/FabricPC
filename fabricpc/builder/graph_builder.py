@@ -186,16 +186,7 @@ def graph(
                 f"scaling must be a MuPCConfig instance, got {type(scaling)}"
             )
 
-        # Determine output nodes from task_map
-        if isinstance(task_map, TaskMap):
-            tm_dict = task_map.to_dict()
-        else:
-            tm_dict = task_map
-        output_nodes = {tm_dict[k] for k in tm_dict if k != "x"}
-
-        mupc_scalings = compute_mupc_scalings(
-            finalized_nodes, edge_infos, output_nodes, scaling
-        )
+        mupc_scalings = compute_mupc_scalings(finalized_nodes, edge_infos, scaling)
 
         # Attach scaling_config to each NodeInfo via copy-on-finalize
         updated_nodes = {}

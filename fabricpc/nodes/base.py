@@ -401,17 +401,19 @@ class NodeBase(ABC):
 
         else:
             # Internal node or a clamped output node. Compute the energy and gradients.
-            # Apply muPC forward scaling to inputs (inside the differentiated function)
+            # Apply muPC forward scaling to inputs before differentiation.
+            # Scaling is applied outside the grad closure: autodiff differentiates
+            # w.r.t. scaled_inputs, yielding dE/d(a*x) with variance ~fan_out.
             scaled_inputs = node_class._apply_forward_scaling(inputs, node_info)
             # Use JAX's value_and_grad to compute gradients w.r.t. scaled inputs
             (total_energy, new_state), input_grads = jax.value_and_grad(
                 node_class.forward, argnums=1, has_aux=True
             )(params, scaled_inputs, state, node_info)
 
-            # Apply muPC top-down gradient scaling per edge
-            # The autodiff result already includes forward_scale from input
-            # pre-scaling. topdown_grad_scale provides the additional correction
-            # to normalize the W^T * epsilon term to O(1) per component.
+            # Apply muPC top-down gradient scaling per edge.
+            # topdown_grad_scale = 1/(a * sqrt(fan_out)) normalizes the
+            # autodiff gradient dE/d(a*x) to O(1) for the presynaptic
+            # latent update (see derivation in mupc.py).
             if node_info.scaling_config is not None:
                 input_grads = {
                     edge_key: grad

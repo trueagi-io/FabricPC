@@ -6,13 +6,14 @@ All types are immutable and registered as JAX pytrees for automatic differentiat
 
 from __future__ import annotations
 
-from typing import Dict, Any, Tuple, NamedTuple, TYPE_CHECKING
+from typing import Dict, Any, Optional, Tuple, NamedTuple, TYPE_CHECKING
 import jax.numpy as jnp
 from jax import tree_util
 from dataclasses import dataclass
 
 if TYPE_CHECKING:
     from fabricpc.nodes.base import NodeBase
+    from fabricpc.core.mupc import MuPCScalingFactors
 
 
 @dataclass(frozen=True)
@@ -53,8 +54,8 @@ class NodeInfo:
     out_degree: int  # Number of outgoing edges
     in_edges: Tuple[str, ...]  # Tuple of edge keys
     out_edges: Tuple[str, ...]  # Tuple of edge keys
-    scaling_config: Any = (
-        None  # Optional MuPCScaling instance for muPC parameterization
+    scaling_config: Optional["MuPCScalingFactors"] = (
+        None  # MuPCScalingFactors instance for muPC parameterization, or None
     )
 
 
