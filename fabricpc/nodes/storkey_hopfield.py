@@ -60,6 +60,16 @@ if TYPE_CHECKING:
     from fabricpc.core.initializers import InitializerBase
 
 
+def inverse_softplus(x: jax.Array) -> jax.Array:
+    """Inverse of jax.nn.softplus.
+
+    Computes log(exp(x) - 1) in a numerically stable way using expm1.
+    Useful for initializing a raw parameter `raw` such that
+    `jax.nn.softplus(raw)` equals a desired positive target value.
+    """
+    return jnp.log(jnp.expm1(x))
+
+
 class StorkeyHopfield(NodeBase):
     """
     Hopfield associative memory node with energy-based learning.
@@ -96,7 +106,7 @@ class StorkeyHopfield(NodeBase):
         activation: Optional[ActivationBase] = TanhActivation(),
         energy: Optional[EnergyFunctional] = GaussianEnergy(),
         hopfield_strength: Optional[float] = None,
-        use_bias: bool = True,
+        use_bias: bool = False,
         enforce_symmetry: bool = True,
         zero_diagonal: bool = False,
         latent_init: Optional[InitializerBase] = NormalInitializer(),
@@ -176,10 +186,13 @@ class StorkeyHopfield(NodeBase):
             bias_shape = (1,) * len(node_shape) + (node_shape[-1],)
             biases["b"] = jnp.zeros(bias_shape)
 
-        # Learnable hopfield_strength if not fixed
+        # Learnable hopfield_strength if not fixed.
+        # Stored as an unconstrained raw parameter; jax.nn.softplus is applied
+        # in forward() to guarantee effective strength >= 0. Init raw so that
+        # softplus(raw) = 1.0.
         hopfield_strength = config.get("hopfield_strength", None)
         if hopfield_strength is None:
-            biases["hopfield_strength"] = jnp.array(1.0)
+            biases["hopfield_strength"] = inverse_softplus(jnp.array(1.0))
 
         return NodeParams(weights=weights_dict, biases=biases)
 
@@ -250,16 +263,20 @@ class StorkeyHopfield(NodeBase):
         # Prepare Hopfield W
         W = StorkeyHopfield._prepare_W(params.weights[edge_key], config)
 
-        # Resolve hopfield_strength: learnable or fixed
+        # Resolve hopfield_strength: learnable (softplus-constrained) or fixed.
+        # The learnable raw parameter is unconstrained; softplus ensures the
+        # effective strength is always >= 0.
         if "hopfield_strength" in params.biases:
-            strength = params.biases["hopfield_strength"]
+            strength = jax.nn.softplus(params.biases["hopfield_strength"])
         else:
             strength = config.get("hopfield_strength", 1.0)
 
         pre_activation = jnp.zeros((batch_size,) + out_shape)
-        # Probe pattern: added directly (no W multiplication)
+        # Probe pattern: added directly to pre-activation to seed the attractor dynamics. Necessary to pass through signal with weights init at zero. The node gradually learns attractors in W.
         pre_activation = pre_activation + input_probe_state
-        # Hopfield recurrence: strength * (z_latent @ W)
+        # Projection: required to link the weights to the input pattern gradient flow, but alo seeds attractor dynamics.
+        pre_activation = pre_activation + (input_probe_state @ W)
+        # Hopfield recurrence to approach the attractor: strength * (z_latent @ W)  Iterative self-feedback pulls recall to stored patterns in W. This is the core of the Hopfield attractor dynamics.
         pre_activation = pre_activation + strength * (state.z_latent @ W)
 
         # Add bias

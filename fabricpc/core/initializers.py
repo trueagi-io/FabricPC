@@ -276,6 +276,36 @@ class KaimingInitializer(InitializerBase):
             return std * jax.random.normal(key, shape)
 
 
+class MuPCInitializer(InitializerBase):
+    """
+    muPC weight initialization: W ~ N(0, gain^2).
+
+    Weights are drawn from a standard normal distribution (unit variance)
+    scaled by an optional gain factor. The actual width/depth scaling is
+    NOT baked into the weights -- it is applied during the forward pass
+    via per-edge scaling factors computed by the muPC module.
+
+    This decoupling of initialization from forward-pass scaling is the
+    key innovation of muPC (Yang et al., Innocenti et al.).
+
+    Args:
+        gain: Multiplicative factor applied to the standard normal samples
+              (default: 1.0)
+    """
+
+    def __init__(self, gain=1.0):
+        super().__init__(gain=gain)
+
+    @staticmethod
+    def initialize(
+        key: jax.Array, shape: Tuple[int, ...], config: Dict[str, Any] = None
+    ) -> jnp.ndarray:
+        """Initialize from standard normal: gain * N(0, 1)."""
+        config = config or {}
+        gain = config.get("gain", 1.0)
+        return gain * jax.random.normal(key, shape)
+
+
 # =============================================================================
 # Convenience Functions
 # =============================================================================
