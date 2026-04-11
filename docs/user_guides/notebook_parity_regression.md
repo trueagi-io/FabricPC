@@ -23,6 +23,10 @@ representative profiles that future refactors can re-run:
 python examples/notebook_parity_regression.py
 ```
 
+The same benchmark is enforced in CI by
+[notebook-parity.yml](/home/ni/repos/freeFabricPC/FabricPC/.github/workflows/notebook-parity.yml)
+on `push`, `pull_request`, and `workflow_dispatch`.
+
 Run a single profile:
 
 ```bash
