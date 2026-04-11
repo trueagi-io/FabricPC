@@ -205,6 +205,32 @@ def print_accuracy_matrix(trainer: SequentialTrainer):
         print(row_str)
 
 
+def print_transition_autotune_summary(trainer: SequentialTrainer):
+    """Print task-start transition autotune decisions."""
+    history = getattr(trainer, "_transition_autotune_history", [])
+    if not history:
+        return
+
+    print("\n" + "=" * 60)
+    print("TRANSITION AUTOTUNE SUMMARY")
+    print("=" * 60)
+    print(
+        f"{'Task':<6} {'Demote':<8} {'Promote':<8} {'MaxStep':<8} "
+        f"{'EstDem':<8} {'EstPro':<8} {'Signal':<8}"
+    )
+    print("-" * 60)
+    for row in history:
+        print(
+            f"{row['task_id']:<6} "
+            f"{row['demotion_threshold']:<8.3f} "
+            f"{row['promotion_threshold']:<8.3f} "
+            f"{row['max_demotions_per_step']:<8d} "
+            f"{row['estimated_demotions']:<8d} "
+            f"{row['estimated_promotions']:<8d} "
+            f"{row['rollout_signal']:<8.3f}"
+        )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Split-MNIST Continual Learning with Causal Guidance"
@@ -239,6 +265,11 @@ def main():
         default=0.5,
         help="Max effective scale for causal guidance (0 to disable)",
     )
+    parser.add_argument(
+        "--transition-autotune",
+        action="store_true",
+        help="Enable task-start shell promotion/demotion autotuning",
+    )
     args = parser.parse_args()
 
     print("=" * 60)
@@ -259,6 +290,7 @@ def main():
     # Enable causal guidance
     config.support.causal_max_effective_scale = args.causal_scale
     config.support.causal_min_examples = 4 if args.quick_smoke else 36
+    config.transition_autotune.enable = args.transition_autotune
 
     print(f"\nConfiguration:")
     print(f"  Training mode: {config.training.training_mode}")
@@ -268,6 +300,7 @@ def main():
     print(f"  Task pairs: {config.task_pairs}")
     print(f"  Causal max scale: {config.support.causal_max_effective_scale}")
     print(f"  Causal min examples: {config.support.causal_min_examples}")
+    print(f"  Transition autotune: {config.transition_autotune.enable}")
 
     # Create network structure
     print("\nBuilding network structure...")
@@ -301,6 +334,16 @@ def main():
             f"agree={summary.causal_selector_agreement_gate:.3f}, "
             f"mix={summary.causal_selector_mix_gate:.3f}"
         )
+        autotune_info = getattr(trainer, "_last_transition_autotune", {})
+        if autotune_info:
+            print(
+                "  Transition Autotune: "
+                f"demote={autotune_info['demotion_threshold']:.3f}, "
+                f"promote={autotune_info['promotion_threshold']:.3f}, "
+                f"max_step={autotune_info['max_demotions_per_step']}, "
+                f"est_dem={autotune_info['estimated_demotions']}, "
+                f"est_pro={autotune_info['estimated_promotions']}"
+            )
 
     total_time = time.time() - start_time
 
@@ -324,6 +367,7 @@ def main():
 
     # Print causal system summary
     print_causal_summary(trainer)
+    print_transition_autotune_summary(trainer)
 
     # Summary table
     print("\n" + "=" * 60)

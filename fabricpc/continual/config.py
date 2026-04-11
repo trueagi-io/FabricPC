@@ -606,6 +606,24 @@ def make_config(quick_smoke: bool = False) -> ExperimentConfig:
         cfg.shell_demotion_transweave.max_demotions_per_step = 1
         cfg.shell_demotion_transweave.use_last_k_tasks = 1
 
+        # Task-start transition autotune preset for smoke tests
+        cfg.transition_autotune.enable = False
+        cfg.transition_autotune.rollout_batches = 1
+        cfg.transition_autotune.max_columns_to_check = 4
+        cfg.transition_autotune.demotion_threshold_candidates = (
+            0.05,
+            0.10,
+            0.15,
+        )
+        cfg.transition_autotune.promotion_threshold_candidates = (
+            0.20,
+            0.30,
+            0.40,
+        )
+        cfg.transition_autotune.max_demotions_per_step_candidates = (1,)
+        cfg.transition_autotune.target_demotions_per_column = 0.30
+        cfg.transition_autotune.target_promotions_per_column = 0.15
+
         cfg.checkpoint.every_train_forwards = 8
         cfg.checkpoint.min_seconds = 0.0
 
@@ -681,6 +699,28 @@ def make_config(quick_smoke: bool = False) -> ExperimentConfig:
         cfg.shell_demotion_transweave.demotion_threshold = 0.10
         cfg.shell_demotion_transweave.promotion_threshold = 0.25
         cfg.shell_demotion_transweave.protected_center_fraction = 0.5
+
+        # Task-start transition autotune preset for full training
+        cfg.transition_autotune.enable = False
+        cfg.transition_autotune.rollout_batches = 2
+        cfg.transition_autotune.max_columns_to_check = 10
+        cfg.transition_autotune.demotion_threshold_candidates = (
+            0.05,
+            0.10,
+            0.15,
+            0.20,
+        )
+        cfg.transition_autotune.promotion_threshold_candidates = (
+            0.15,
+            0.25,
+            0.35,
+            0.45,
+        )
+        cfg.transition_autotune.max_demotions_per_step_candidates = (1, 2)
+        cfg.transition_autotune.target_demotions_per_column = 0.35
+        cfg.transition_autotune.target_promotions_per_column = 0.20
+        cfg.transition_autotune.max_demotions_per_column = 0.80
+        cfg.transition_autotune.max_promotions_per_column = 0.60
 
         cfg.checkpoint.every_train_forwards = 160
         cfg.checkpoint.min_seconds = 180.0
