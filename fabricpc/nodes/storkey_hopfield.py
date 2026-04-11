@@ -98,7 +98,7 @@ class StorkeyHopfield(NodeBase):
         use_bias: Whether to include bias (default: True).
         enforce_symmetry: Symmetrize W via 0.5*(W+W.T) in forward (default: True).
         zero_diagonal: Zero W diagonal in forward (default: False).
-        weight_init: Initializer for weights (default: NormalInitializer(0, 0.01)).
+        weight_init: Initializer for weights (default: ZerosInitializer()).
         latent_init: Initializer for latent states (default: NormalInitializer()).
     """
 
@@ -279,8 +279,6 @@ class StorkeyHopfield(NodeBase):
             strength = config.get("hopfield_strength", 1.0)
 
         pre_activation = jnp.zeros((batch_size,) + out_shape)
-        # Probe pattern: added directly so the node passes signal even when W=0.
-        pre_activation = pre_activation + input_probe_state
         # Projection through W: links W to the autodiff gradient flow so that
         # dE/dW is non-zero and W can learn associative structure.
         pre_activation = pre_activation + (input_probe_state @ W)
@@ -303,7 +301,7 @@ class StorkeyHopfield(NodeBase):
         node_class = node_info.node_class
         state = node_class.energy_functional(state, node_info)
 
-        # Add Hopfield attractor energy
+        # Add Hopfield attractor energy scaled by strength
         state = StorkeyHopfield.accumulate_hopfield_energy_and_grad(state, W, strength)
 
         total_energy = jnp.sum(state.energy)

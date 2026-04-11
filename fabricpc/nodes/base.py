@@ -305,6 +305,45 @@ class NodeBase(ABC):
         pass
 
     # =========================================================================
+    # muPC fan_in for scaling — override per node type
+    # =========================================================================
+
+    @staticmethod
+    def get_weight_fan_in(source_shape: Tuple[int, ...], config: Dict[str, Any]) -> int:
+        """
+        Return weight-matrix fan_in for muPC scaling (Kaiming convention).
+
+        This is the number of input units that contribute to each output unit
+        of the weight matrix. Override in subclasses for node-specific logic
+        (e.g., Conv2D uses C_in * kH * kW instead of H * W * C).
+
+        - flatten_input=True (dense): all dims flattened → prod(source_shape)
+        - flatten_input=False (per-position): last-axis features only
+
+        Args:
+            source_shape: Shape of the source (presynaptic) node, excluding batch.
+            config: Node configuration dictionary (e.g., kernel_size, flatten_input).
+
+        Returns:
+            Integer fan_in for the weight matrix connecting source to this node.
+        """
+        import numpy as np
+
+        if config.get("flatten_input", False):
+            return int(np.prod(source_shape))
+        # Typically nodes operate on the last (feature dimension)
+        return source_shape[-1]
+
+    @staticmethod
+    def has_weights() -> bool:
+        """Whether this node type has learnable weight parameters.
+
+        Nodes without weights (e.g. IdentityNode) are excluded from muPC
+        forward scaling since they have no weight matrix to compensate for.
+        """
+        return True
+
+    # =========================================================================
     # Default implementations - can be overridden for explicit gradients
     # =========================================================================
 

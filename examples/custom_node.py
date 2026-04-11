@@ -14,6 +14,7 @@ from typing import Dict, Any, Optional, Tuple
 import jax
 import jax.numpy as jnp
 import optax
+import numpy as np
 from fabricpc.utils.data.dataloader import MnistLoader
 
 from fabricpc.nodes import Linear
@@ -77,6 +78,13 @@ class Conv2DNode(NodeBase):
     def get_slots() -> Dict[str, SlotSpec]:
         """Conv2D has a single multi-input slot."""
         return {"in": SlotSpec(name="in", is_multi_input=True)}
+
+    @staticmethod
+    def get_weight_fan_in(source_shape: Tuple[int, ...], config: Dict[str, Any]) -> int:
+        """Conv2D fan_in = C_in * kH * kW (kernel receptive field)."""
+        kernel_size = config.get("kernel_size", (1, 1))
+        C_in = source_shape[-1]  # NHWC: channels last
+        return C_in * int(np.prod(kernel_size))
 
     @staticmethod
     def initialize_params(

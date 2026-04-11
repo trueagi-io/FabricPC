@@ -130,7 +130,7 @@ class HopfieldRecallLoader:
 # ---------------------------------------------------------------------------
 
 
-def build_recall_graph(D, hopfield_strength=2.0, infer_steps=20, eta_infer=0.05):
+def build_recall_graph(D, hopfield_strength=1.0, infer_steps=20, eta_infer=0.05):
     """Build 3-node recall graph: probe -> hopfield -> output.
 
     The StorkeyHopfield node must be an internal node (not the output node)
@@ -225,7 +225,7 @@ def evaluate_recall(
     num_trials=50,
     infer_steps=100,
     eta_infer=0.05,
-    hopfield_strength=2.0,
+    hopfield_strength=1.0,
     rng_key=None,
 ):
     """Evaluate recall accuracy across noise levels.
@@ -383,7 +383,7 @@ def run_binary_experiment(rng_key):
     """Experiment A: Random binary ±1 patterns."""
     D = 64
     num_patterns = 7
-    hopfield_strength = 2.0
+    hopfield_strength = 1.0
 
     print("\n" + "=" * 70)
     print("  Experiment A: Random Binary Patterns")
@@ -431,7 +431,7 @@ def run_mnist_experiment(rng_key):
     """Experiment B: Binarized MNIST digit prototypes."""
     D = 196
     num_patterns = 10
-    hopfield_strength = 3.0
+    hopfield_strength = 1.0
 
     print("\n" + "=" * 70)
     print("  Experiment B: MNIST Digit Prototypes (14x14)")

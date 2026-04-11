@@ -262,7 +262,7 @@ def get_hopfield_node_name(structure):
 
 def phase1_strength_sweep():
     """Sweep hopfield_strength to find the accuracy tipping point."""
-    STRENGTHS = [0.0, 0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1.0]
+    STRENGTHS = [0.0, 0.1, 0.5, 1, 2, 4, 8, 16, 32]
     train_config = {"num_epochs": 1}
     results = {}
 
@@ -698,6 +698,43 @@ def phase3_W_analysis():
 # ============================================================================
 
 
+class StorkeyHopfieldNoPassthrough(StorkeyHopfield):
+    """Ablation: Remove the direct probe passthrough from pre-activation."""
+
+    @staticmethod
+    def forward(params, inputs, state, node_info):
+        config = node_info.node_config
+        batch_size = state.z_latent.shape[0]
+        out_shape = node_info.shape
+        edge_key, input_probe_state = next(iter(inputs.items()))
+        W = StorkeyHopfield._prepare_W(params.weights[edge_key], config)
+
+        if "hopfield_strength" in params.biases:
+            strength = jax.nn.sigmoid(params.biases["hopfield_strength"])
+        else:
+            strength = config.get("hopfield_strength", 0.5)
+
+        pre_activation = jnp.zeros((batch_size,) + out_shape)
+        # ABLATED: no pre_activation += input_probe_state
+        pre_activation = pre_activation + (input_probe_state @ W)
+
+        if "b" in params.biases and params.biases["b"].size > 0:
+            pre_activation = pre_activation + params.biases["b"]
+
+        activation = node_info.activation
+        z_mu = type(activation).forward(pre_activation, activation.config)
+        error = state.z_latent - z_mu
+        state = state._replace(pre_activation=pre_activation, z_mu=z_mu, error=error)
+        node_class = node_info.node_class
+        state = node_class.energy_functional(state, node_info)
+        state = state._replace(
+            energy=(1 - strength) * state.energy,
+            latent_grad=(1 - strength) * state.latent_grad,
+        )
+        state = StorkeyHopfield.accumulate_hopfield_energy_and_grad(state, W, strength)
+        return jnp.sum(state.energy), state
+
+
 class StorkeyHopfieldNoProbeW(StorkeyHopfield):
     """Ablation: Remove the input_probe_state @ W term from pre-activation."""
 
@@ -717,7 +754,6 @@ class StorkeyHopfieldNoProbeW(StorkeyHopfield):
         pre_activation = jnp.zeros((batch_size,) + out_shape)
         pre_activation = pre_activation + input_probe_state
         # ABLATED: pre_activation += (input_probe_state @ W)
-        pre_activation = pre_activation + strength * (state.z_latent @ W)
 
         if "b" in params.biases and params.biases["b"].size > 0:
             pre_activation = pre_activation + params.biases["b"]
@@ -750,7 +786,42 @@ class StorkeyHopfieldClippedEigs(StorkeyHopfield):
 
 
 class StorkeyHopfieldNoEnergy(StorkeyHopfield):
-    """Ablation: Remove Hopfield energy; keep recurrence in forward pass."""
+    """Ablation: Remove Hopfield energy; keep probe@W in forward pass."""
+
+    @staticmethod
+    def forward(params, inputs, state, node_info):
+        config = node_info.node_config
+        batch_size = state.z_latent.shape[0]
+        out_shape = node_info.shape
+        edge_key, input_probe_state = next(iter(inputs.items()))
+        W = StorkeyHopfield._prepare_W(params.weights[edge_key], config)
+
+        pre_activation = jnp.zeros((batch_size,) + out_shape)
+        pre_activation = pre_activation + input_probe_state
+        pre_activation = pre_activation + (input_probe_state @ W)
+
+        if "b" in params.biases and params.biases["b"].size > 0:
+            pre_activation = pre_activation + params.biases["b"]
+
+        activation = node_info.activation
+        z_mu = type(activation).forward(pre_activation, activation.config)
+        error = state.z_latent - z_mu
+        state = state._replace(pre_activation=pre_activation, z_mu=z_mu, error=error)
+        node_class = node_info.node_class
+        state = node_class.energy_functional(state, node_info)
+        # ABLATED: no convex scaling, no Hopfield energy — pure PC
+        return jnp.sum(state.energy), state
+
+
+class StorkeyHopfieldStopGradEnergy(StorkeyHopfield):
+    """Ablation: stop_gradient on Hopfield energy to block backward flow.
+
+    Wraps strength*E_hop in jax.lax.stop_gradient so autodiff treats it as
+    a constant when computing d(total_energy)/d(inputs). The Hopfield grad
+    to the node's own latent (latent_grad) is unchanged. If dE_hop/d(inputs)
+    is truly zero (as expected), this ablation should produce identical
+    accuracy to the original convex combination.
+    """
 
     @staticmethod
     def forward(params, inputs, state, node_info):
@@ -768,7 +839,6 @@ class StorkeyHopfieldNoEnergy(StorkeyHopfield):
         pre_activation = jnp.zeros((batch_size,) + out_shape)
         pre_activation = pre_activation + input_probe_state
         pre_activation = pre_activation + (input_probe_state @ W)
-        pre_activation = pre_activation + strength * (state.z_latent @ W)
 
         if "b" in params.biases and params.biases["b"].size > 0:
             pre_activation = pre_activation + params.biases["b"]
@@ -783,51 +853,20 @@ class StorkeyHopfieldNoEnergy(StorkeyHopfield):
         return jnp.sum(state.energy), state
 
 
-class StorkeyHopfieldNoRecurrence(StorkeyHopfield):
-    """Ablation: Remove strength * z_latent @ W; keep Hopfield energy."""
-
-    @staticmethod
-    def forward(params, inputs, state, node_info):
-        config = node_info.node_config
-        batch_size = state.z_latent.shape[0]
-        out_shape = node_info.shape
-        edge_key, input_probe_state = next(iter(inputs.items()))
-        W = StorkeyHopfield._prepare_W(params.weights[edge_key], config)
-
-        if "hopfield_strength" in params.biases:
-            strength = jax.nn.softplus(params.biases["hopfield_strength"])
-        else:
-            strength = config.get("hopfield_strength", 1.0)
-
-        pre_activation = jnp.zeros((batch_size,) + out_shape)
-        pre_activation = pre_activation + input_probe_state
-        pre_activation = pre_activation + (input_probe_state @ W)
-        # ABLATED: pre_activation += strength * (state.z_latent @ W)
-
-        if "b" in params.biases and params.biases["b"].size > 0:
-            pre_activation = pre_activation + params.biases["b"]
-
-        activation = node_info.activation
-        z_mu = type(activation).forward(pre_activation, activation.config)
-        error = state.z_latent - z_mu
-        state = state._replace(pre_activation=pre_activation, z_mu=z_mu, error=error)
-        node_class = node_info.node_class
-        state = node_class.energy_functional(state, node_info)
-        state = StorkeyHopfield.accumulate_hopfield_energy_and_grad(state, W, strength)
-        return jnp.sum(state.energy), state
-
-
 def phase4_ablations():
     """Run targeted ablation experiments to isolate the causal factor."""
     train_config = {"num_epochs": 1}
     STRENGTH = 1.0
 
     ablations = {
-        "Original (s=1.0)": lambda key: create_ablation_model(
+        f"Original (s={STRENGTH})": lambda key: create_ablation_model(
             key, StorkeyHopfield, STRENGTH
         ),
         "No probe@W": lambda key: create_ablation_model(
             key, StorkeyHopfieldNoProbeW, STRENGTH
+        ),
+        "No Passthrough": lambda key: create_ablation_model(
+            key, StorkeyHopfieldNoPassthrough, STRENGTH
         ),
         "Clipped eigs [0,1]": lambda key: create_ablation_model(
             key, StorkeyHopfieldClippedEigs, STRENGTH
@@ -835,8 +874,8 @@ def phase4_ablations():
         "No Hopfield energy": lambda key: create_ablation_model(
             key, StorkeyHopfieldNoEnergy, STRENGTH
         ),
-        "No recurrence": lambda key: create_ablation_model(
-            key, StorkeyHopfieldNoRecurrence, STRENGTH
+        "StopGrad Hop energy": lambda key: create_ablation_model(
+            key, StorkeyHopfieldStopGradEnergy, STRENGTH
         ),
         "5 infer steps": lambda key: create_hopfield_model_with_inference(
             key, STRENGTH, InferenceSGD(eta_infer=0.05, infer_steps=5)

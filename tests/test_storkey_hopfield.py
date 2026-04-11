@@ -353,7 +353,7 @@ class TestConfig:
         """Fixed hopfield_strength is not in params.biases."""
         D = 16
         input_node = IdentityNode(shape=(D,), name="input")
-        hopfield = StorkeyHopfield(shape=(D,), name="hopfield", hopfield_strength=2.0)
+        hopfield = StorkeyHopfield(shape=(D,), name="hopfield", hopfield_strength=1.0)
         output = Linear(shape=(5,), activation=SigmoidActivation(), name="output")
 
         structure = graph(

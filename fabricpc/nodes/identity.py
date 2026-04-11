@@ -74,6 +74,11 @@ class IdentityNode(NodeBase):
         return {"in": SlotSpec(name="in", is_multi_input=True)}
 
     @staticmethod
+    def has_weights() -> bool:
+        """IdentityNode has no learnable weights."""
+        return False
+
+    @staticmethod
     def initialize_params(
         key: jax.Array,
         node_shape: Tuple[int, ...],

@@ -8,12 +8,15 @@ width and depth. Based on:
   - Depth-muP (Yang et al.) — width+depth scaling for deep networks
   - muPC (Innocenti et al., arXiv:2505.13124) — adaptation to predictive coding
 
-Extended with a three-way gradient decomposition for arbitrary graph topologies:
+Per-edge scaling for arbitrary graph topologies:
 
   1. Forward scaling (a_l per edge): maintains O(1) activation variance
-  2. Self-gradient scaling (c_self per node): controls dE/dz_self magnitude
-  3. Top-down gradient scaling (c_td per edge): normalizes W^T * epsilon
-  4. Weight gradient scaling (c_w per edge): controls dE/dW magnitude
+  2. Self-gradient scaling (c_self per node): placeholder (1.0), controls dE/dz_self magnitude
+  3. Top-down gradient scaling (c_td per edge): placeholder (1.0), normalizes W^T * epsilon
+  4. Weight gradient scaling (c_w per edge): placeholder (1.0), controls dE/dW magnitude
+
+Forward scaling uses weight-matrix fan_in (Kaiming convention) via each
+node class's get_weight_fan_in() method, not the total source tensor size.
 
 Usage:
     from fabricpc.core.mupc import MuPCConfig
@@ -70,10 +73,16 @@ class MuPCConfig:
         min_depth: Minimum effective depth used in scaling formulas.
             Prevents division by zero and excessive scaling for shallow paths.
             Default: 1.
+        include_output: Whether to include output nodes (out_degree=0) in muPC
+            scaling. When True, output nodes get a = 1/fan_in (matching jpc
+            reference a_L = 1/N). When False (default), output nodes are
+            excluded and should use standard initialization (e.g., Xavier).
+            Use True with MSE/Gaussian energy; use False with softmax+CE.
     """
 
     depth_metric: DepthMetricBase = field(default_factory=ShortestPathDepth)
     min_depth: int = 1
+    include_output: bool = False
 
 
 def compute_mupc_scalings(
@@ -84,9 +93,10 @@ def compute_mupc_scalings(
     """
     Compute per-node MuPCScalingFactors from graph topology.
 
-    Output nodes are detected automatically as terminal nodes (out_degree=0),
-    symmetric to depth metrics using in_degree=0 for source nodes. Output nodes
-    receive the stronger 1/fan_in forward scaling instead of 1/sqrt(fan_in*L).
+    All nodes with in-degree > 0 use forward scaling a = 1/sqrt(fan_in * L) where
+    fan_in is the weight-matrix fan_in (Kaiming convention) computed via
+    each node class's get_weight_fan_in() method, and L is the effective
+    depth from the depth metric.
 
     Args:
         nodes: Dictionary mapping node names to finalized NodeBase instances
@@ -96,15 +106,16 @@ def compute_mupc_scalings(
 
     Returns:
         Dictionary mapping node names to MuPCScalingFactors instances.
-        Source nodes (in_degree=0) get None (no scaling needed).
+        Terminal input nodes (in_degree=0) and weightless nodes get None.
+        Hidden nodes get a = 1/sqrt(fan_in * L).
+        Terminal output nodes (out_degree=0) get a = 1/fan_in when include_output=True, else None.
     """
     import numpy as np
 
     # Compute effective depth for each node
     depths = config.depth_metric.compute(nodes, edges)
 
-    # Detect output nodes as terminal nodes (out_degree=0), symmetric to
-    # depth metrics using in_degree=0 for source nodes.
+    # Detect output nodes (out_degree=0).
     output_nodes = {
         name for name, node in nodes.items() if node.node_info.out_degree == 0
     }
@@ -113,17 +124,35 @@ def compute_mupc_scalings(
 
     for node_name, node in nodes.items():
         node_info = node.node_info
+        node_class = node_info.node_class
 
-        # Source nodes: no incoming edges, no scaling needed
+        # Terminal input nodes (in_degree=0): no scaling needed.
         if node_info.in_degree == 0:
             scalings[node_name] = None
             continue
 
+        # Weightless nodes (e.g. IdentityNode): no scaling needed.
+        # These nodes sum inputs without a weight matrix, so muPC forward
+        # scaling would add unintended damping at skip-connection junctions.
+        if not node_class.has_weights():
+            scalings[node_name] = None
+            continue
+
+        # Output nodes: skip unless include_output is set.
+        # With softmax+CE, excluding output avoids over-compressing logits.
+        # With MSE/Gaussian energy, including output matches jpc reference.
         is_output = node_name in output_nodes
-        # fan_out in the Xavier/Kaiming sense: output dimensionality of the
-        # weight matrix (number of node features), not graph out-degree.
-        fan_out = int(np.prod(node_info.shape))
+        if is_output and not config.include_output:
+            scalings[node_name] = None
+            continue
+
         effective_depth = max(depths.get(node_name, 1), config.min_depth)
+
+        # Retrieve node config for weight-matrix fan_in computation
+        node_config = node_info.node_config
+        fan_out = (
+            0  # TODO define node_class.get_weight_fan_out(source_shape, node_config)
+        )
 
         forward_scale = {}
         topdown_grad_scale = {}
@@ -133,14 +162,20 @@ def compute_mupc_scalings(
             edge_info = edges[edge_key]
             source_node = nodes[edge_info.source]
             source_shape = source_node.node_info.shape
-            fan_in = int(np.prod(source_shape))
 
-            # Forward scaling: a_l
+            # Weight-matrix fan_in (Kaiming convention):
+            #   Linear (flatten): np.prod(source_shape)
+            #   Linear (per-pos): source_shape[-1]
+            #   Conv2D:           C_in * kH * kW
+            fan_in = node_class.get_weight_fan_in(source_shape, node_config)
+
+            # Forward scaling formula depends on node role:
             if is_output:
-                # Output node: stronger 1/fan_in scaling (muPC-specific)
+                # Output: a_L = 1/fan_in (matches jpc reference a_L = 1/N)
                 a = 1.0 / fan_in
             else:
-                # Hidden node: 1/sqrt(fan_in * L)
+                # Hidden: a_l = 1/sqrt(fan_in * L)
+                # Maintains O(1) pre-activation variance at each hidden layer.
                 a = 1.0 / math.sqrt(fan_in * effective_depth)
 
             forward_scale[edge_key] = a

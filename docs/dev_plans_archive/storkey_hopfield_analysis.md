@@ -273,3 +273,110 @@ Test Results Summary (15 paired trials, 1 epoch, MNIST)
                                                                                                                                                                                                                                            
   The script is at examples/storkey_hopfield_recall.py with CLI: --experiment {binary,mnist,all}. 
 
+At low hopfield_strength values ~1 the MNIST accuracy is same as baseline (s=0.0), but as strength increases above 1 task performance degrades. There's no sweet spot where hopfield provides benefit.
+At higher values, hopfield_strength = 50, there is less degradation when the probe passthrough is ablated.
+=============================================
+  Ablation                    Accuracy
+  ----------------------------------------
+  No Hopfield energy            0.9498
+  Baseline (s=0.0)              0.9498
+  No Passthrough                0.9173
+  5 infer steps                 0.9085
+  Original (s=50.0)             0.9074
+  Clipped eigs [0,1]            0.9074
+  No probe@W                    0.9070
+  NormClip 0.1                  0.9047
+  NormClip 1.0                  0.9040
+  50 infer steps                0.8983
+  
+  ## Revise node design to be convex in energy weighting
+  Changes Made                                                                                                                                                                                                                                                                                             
+                                                                                                                                                                                                                                                                                                           
+  Core: fabricpc/nodes/storkey_hopfield.py                                                                                                                                                                                                                                                                 
+                                                                                                                                                                                                                                                                                                           
+  - Energy formulation: E_total = E_pc + s*E_hop → E_total = (1-s)*E_pc + s*E_hop (convex combination)                                                                                                                                                                                                     
+  - inverse_softplus → inverse_sigmoid: log(x/(1-x)) for initializing raw params to a target in (0, 1)                                                                                                                                                                                                     
+  - Learnable init: inverse_softplus(1.0) → inverse_sigmoid(0.5) — starts at equal weight (sigmoid(0) = 0.5)                                                                                                                                                                                               
+  - Constraint: softplus (unbounded) → sigmoid (bounded [0, 1])                                                                                                                                                                                                                                            
+  - Forward: After energy_functional(), scales PC energy/grad by (1-s) before accumulating Hopfield energy scaled by s                                                                                                                                                                                     
+  - Default fixed fallback: 1.0 → 0.5                                                                                                                                                                                                                                                                      
+                                                                                                                                                                                                                                                                                                           
+  Test: tests/test_storkey_hopfield.py                                                                                                                                                                                                                                                                     
+                                                                                                                                                                                                                                                                                                           
+  - Fixed hopfield_strength=2.0 → 0.8 in the fixed-strength config test                                                                                                                                                                                                                                    
+                                                                                                                                                                                                                                                                                                           
+  Examples                                                                                                                                                                                                                                                                                                 
+                                                                                                                                                                                                                                                                                                           
+  - storkey_hopfield_demo.py: Import inverse_sigmoid, default strength 0.5, sweep [0..1], sigmoid in _get_learned_strength                                                                                                                                                                                 
+  - storkey_hopfield_recall.py: Strength values clamped to [0, 1] (binary: 0.8, MNIST: 0.9)                                                                                                                                                                                                                
+  - storkey_hopfield_diagnostic.py:                                                                                                                                                                                                                                                                        
+    - All softplus → sigmoid in ablation subclasses                                                                                                                                                                                                                                                        
+    - Added (1-s) PC scaling to each ablation's forward                                                                                                                                                                                                                                                    
+    - Added new StorkeyHopfieldStopGradEnergy ablation (wraps s*E_hop in stop_gradient)                                                                                                                                                                                                                    
+    - Phase 1 sweep: [0..1] range; Phase 4 STRENGTH=0.8        
+
+# Hopfield Node Improves Accruracy on Noisy Data
+======================================================================
+RESULTS SUMMARY
+======================================================================
+  examples/storkey_hopfield_fewshot.py
+  Hopfield strength: 1.0
+  Trials: 10, Epochs: 5
+  K = examples per class. K controls data scarcity: fewer examples -> more reliance on attractor memory
+  Noise n = standard deviation of Gaussian noise added to input (0.0 = clean, 2.0 = very noisy)
+
+Experiment grid: K (shots per class) x noise_std
+Delta Accuracy Heatmap (Hopfield - MLP) in percentage points:
+
+     K  n=0.0  n=0.5  n=1.0  n=1.5  n=2.0
+-----------------------------------------
+     5  -0.3   -0.1   +0.1   +0.1   +0.0 
+    10  -7.7*  -5.0*  +1.0   +6.7* +10.6*
+    20  -2.8*  -1.7*  +1.2*  +4.9*  +8.1*
+    50  -1.6*  -0.7*  +1.7*  +4.5*  +7.1*
+   100  -0.8*  -0.1   +1.8*  +4.0*  +6.1*
+   500  -0.0   +0.6*  +1.9*  +3.1*  +4.2*
+-----------------------------------------
+  * = significant at p<0.05
+
+Experiment table:
+  Hopfield% = mean accuracy of StorkeyHopfield model
+  MLP% = mean accuracy of MLP baseline
+  Delta% = Hopfield% - MLP%
+  p-value = paired t-test p-value for Hopfield vs MLP
+  Sig * = statistically significant at p<0.05
+  d = Cohen's d effect size for Hopfield vs MLP
+
+     K    Noise    Hopfield%         MLP%     Delta%    p-value   Sig        d
+------------------------------------------------------------------------------
+     5      0.0 10.00+/-0.00 10.29+/-1.28      -0.29     0.8259         -0.072
+     5      0.5 10.00+/-0.00 10.05+/-1.04      -0.05     0.9588         -0.017
+     5      1.0 10.00+/-0.00  9.95+/-0.71      +0.05     0.9420          0.024
+     5      1.5 10.00+/-0.00  9.94+/-0.53      +0.06     0.9157          0.034
+     5      2.0 10.00+/-0.00  9.96+/-0.46      +0.04     0.9306          0.028
+    10      0.0 52.30+/-1.35 60.03+/-1.03      -7.73     0.0000     *   -3.011
+    10      0.5 51.98+/-1.22 56.94+/-0.79      -4.96     0.0004     *   -1.756
+    10      1.0 50.91+/-1.08 49.95+/-0.58      +0.96     0.4220          0.266
+    10      1.5 48.84+/-0.96 42.18+/-0.49      +6.66     0.0002     *    1.864
+    10      2.0 46.27+/-0.81 35.63+/-0.44     +10.64     0.0000     *    3.499
+    20      0.0 67.13+/-0.58 69.98+/-0.29      -2.84     0.0006     *   -1.616
+    20      0.5 66.67+/-0.54 68.36+/-0.31      -1.69     0.0104     *   -1.019
+    20      1.0 64.93+/-0.44 63.69+/-0.30      +1.24     0.0169     *    0.924
+    20      1.5 62.36+/-0.36 57.46+/-0.25      +4.90     0.0000     *    4.244
+    20      2.0 59.04+/-0.29 50.93+/-0.28      +8.12     0.0000     *    6.519
+    50      0.0 74.02+/-0.22 75.60+/-0.32      -1.58     0.0000     *   -3.004
+    50      0.5 73.43+/-0.22 74.17+/-0.31      -0.74     0.0005     *   -1.654
+    50      1.0 71.65+/-0.26 69.99+/-0.26      +1.65     0.0000     *    2.679
+    50      1.5 68.92+/-0.25 64.37+/-0.18      +4.55     0.0000     *    8.132
+    50      2.0 65.28+/-0.28 58.17+/-0.19      +7.12     0.0000     *    9.157
+   100      0.0 77.68+/-0.26 78.51+/-0.26      -0.83     0.0007     *   -1.597
+   100      0.5 76.77+/-0.27 76.85+/-0.22      -0.08     0.6866         -0.132
+   100      1.0 74.37+/-0.24 72.61+/-0.20      +1.76     0.0000     *    2.490
+   100      1.5 70.76+/-0.23 66.76+/-0.22      +4.00     0.0000     *    4.356
+   100      2.0 66.32+/-0.24 60.22+/-0.35      +6.11     0.0000     *    4.859
+   500      0.0 82.45+/-0.15 82.48+/-0.17      -0.03     0.8262         -0.071
+   500      0.5 80.80+/-0.14 80.25+/-0.14      +0.56     0.0002     *    1.888
+   500      1.0 76.54+/-0.15 74.66+/-0.22      +1.89     0.0000     *    3.437
+   500      1.5 70.63+/-0.26 67.57+/-0.32      +3.06     0.0000     *    3.292
+   500      2.0 64.19+/-0.32 59.99+/-0.37      +4.20     0.0000     *    3.931
+------------------------------------------------------------------------------
