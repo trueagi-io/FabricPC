@@ -96,6 +96,23 @@ from fabricpc.continual.native_nodes import (
     get_transferred_params,
 )
 
+from fabricpc.continual.parity import (
+    ParityProfile,
+    ParityMetrics,
+    MetricTolerance,
+    MetricCheck,
+    ParityComparison,
+    PROFILES,
+    DEFAULT_TOLERANCES,
+    make_parity_config,
+    create_parity_network_structure,
+    compute_parity_metrics,
+    run_parity_profile,
+    load_parity_baselines,
+    save_parity_baselines,
+    compare_against_baseline,
+)
+
 __all__ = [
     # Config
     "ExperimentConfig",
@@ -169,4 +186,19 @@ __all__ = [
     "apply_causal_to_gradients",
     "register_task_end_for_nodes",
     "get_transferred_params",
+    # Notebook-parity regression harness
+    "ParityProfile",
+    "ParityMetrics",
+    "MetricTolerance",
+    "MetricCheck",
+    "ParityComparison",
+    "PROFILES",
+    "DEFAULT_TOLERANCES",
+    "make_parity_config",
+    "create_parity_network_structure",
+    "compute_parity_metrics",
+    "run_parity_profile",
+    "load_parity_baselines",
+    "save_parity_baselines",
+    "compare_against_baseline",
 ]
