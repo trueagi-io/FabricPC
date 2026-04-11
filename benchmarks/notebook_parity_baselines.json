@@ -1,0 +1,28 @@
+{
+  "v18_like": {
+    "average_forgetting": 0.9931777819455732,
+    "final_mean_accuracy": 0.9973319103521878,
+    "mean_causal_examples": 16.0,
+    "mean_causal_mix_gate": 0.0,
+    "mean_test_accuracy": 0.9945624914144447,
+    "mean_transweave_sources": 0.0,
+    "num_tasks": 3,
+    "profile": "v18_like",
+    "seed": 42,
+    "support_diversity": 1,
+    "total_training_time_s": 16.939845323562622
+  },
+  "v20_2b_like": {
+    "average_forgetting": 0.058993176392680424,
+    "final_mean_accuracy": 0.9542858079836245,
+    "mean_causal_examples": 16.0,
+    "mean_causal_mix_gate": 0.19916245780509723,
+    "mean_test_accuracy": 0.9936145922454114,
+    "mean_transweave_sources": 1.0,
+    "num_tasks": 3,
+    "profile": "v20_2b_like",
+    "seed": 42,
+    "support_diversity": 1,
+    "total_training_time_s": 20.002281665802002
+  }
+}
