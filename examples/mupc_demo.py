@@ -44,7 +44,7 @@ from fabricpc.core.activations import (
 )
 from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.core.inference import InferenceSGD
-from fabricpc.core.initializers import MuPCInitializer
+from fabricpc.core.initializers import MuPCInitializer, XavierInitializer
 from fabricpc.core.mupc import MuPCConfig
 from fabricpc.core.depth_metric import ShortestPathDepth
 from fabricpc.training import train_pcn, evaluate_pcn
@@ -128,12 +128,15 @@ def create_mupc_convnet():
         name="conv3",
     )
 
+    # Output uses Xavier init (not MuPC): muPC forward scaling is excluded
+    # from output nodes, so standard initialization maintains proper logit
+    # scale for softmax.
     output = Linear(
         shape=(100,),
         activation=SoftmaxActivation(),
         energy=CrossEntropyEnergy(),
         flatten_input=True,
-        weight_init=mupc_init,
+        weight_init=XavierInitializer(),
         name="output",
     )
 
@@ -146,7 +149,7 @@ def create_mupc_convnet():
             Edge(source=conv3, target=output.slot("in")),
         ],
         task_map=TaskMap(x=input_node, y=output),
-        inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
+        inference=InferenceSGD(eta_infer=0.1, infer_steps=20),
         scaling=MuPCConfig(depth_metric=ShortestPathDepth()),
     )
 
@@ -220,7 +223,6 @@ def main():
         trained_params, structure, test_loader, train_config, eval_key
     )
     print(f"Test Accuracy: {metrics['accuracy'] * 100:.2f}%")
-    print(f"Test Energy:   {metrics['energy']:.4f}")
 
 
 if __name__ == "__main__":

@@ -185,17 +185,22 @@ def _make_resnet_block(block_in, channels, spatial, name_prefix, weight_init, st
     return nodes, edges, sum_node
 
 
-def _build_resnet18(weight_init, scaling=None):
+def _build_resnet18(weight_init, scaling=None, output_weight_init=None):
     """
     Build a CIFAR-100 ResNet-18 predictive coding graph.
 
     Args:
         weight_init: InitializerBase for all Conv/Linear weights.
         scaling: Optional MuPCConfig for muPC parameterization.
+        output_weight_init: Optional InitializerBase for output layer.
+            Defaults to weight_init. For muPC, use XavierInitializer
+            since the output layer is excluded from forward scaling.
 
     Returns:
         GraphStructure ready for initialize_params().
     """
+    if output_weight_init is None:
+        output_weight_init = weight_init
     all_nodes = []
     all_edges = []
 
@@ -249,7 +254,7 @@ def _build_resnet18(weight_init, scaling=None):
         activation=SoftmaxActivation(),
         energy=CrossEntropyEnergy(),
         flatten_input=True,
-        weight_init=weight_init,
+        weight_init=output_weight_init,
         name="output",
     )
     all_nodes.append(output)
@@ -260,7 +265,7 @@ def _build_resnet18(weight_init, scaling=None):
         nodes=all_nodes,
         edges=all_edges,
         task_map=TaskMap(x=input_node, y=output),
-        inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
+        inference=InferenceSGD(eta_infer=0.1, infer_steps=50),
         scaling=scaling,
     )
 
@@ -277,6 +282,7 @@ def create_mupc_resnet18(rng_key):
     structure = _build_resnet18(
         weight_init=MuPCInitializer(),
         scaling=MuPCConfig(depth_metric=ShortestPathDepth()),
+        output_weight_init=XavierInitializer(),
     )
     params = initialize_params(structure, rng_key)
     return params, structure

@@ -215,11 +215,11 @@ class TestMuPCScalingComputation:
         assert h_info.scaling_config is not None
         assert isinstance(h_info.scaling_config, MuPCScalingFactors)
 
-    def test_output_node_has_scaling(self, linear_chain_with_mupc):
-        """Output nodes should have MuPCScalingFactors attached."""
+    def test_output_node_has_no_scaling(self, linear_chain_with_mupc):
+        """Output nodes (out_degree=0) use standard init, no muPC forward scaling."""
         structure = linear_chain_with_mupc
         y_info = structure.nodes["y"].node_info
-        assert y_info.scaling_config is not None
+        assert y_info.scaling_config is None
 
     def test_hidden_forward_scale_formula(self, linear_chain_with_mupc):
         """Hidden node forward scale = 1/sqrt(fan_in * depth)."""
@@ -236,35 +236,14 @@ class TestMuPCScalingComputation:
         actual_a = scaling.forward_scale[edge_key]
         assert abs(actual_a - expected_a) < 1e-10
 
-    def test_output_forward_scale_formula(self, linear_chain_with_mupc):
-        """Output node forward scale = 1/fan_in (stronger muPC scaling)."""
-        structure = linear_chain_with_mupc
-        y_info = structure.nodes["y"].node_info
-        scaling = y_info.scaling_config
-
-        # y has one input from h (shape=(20,))
-        fan_in = 20
-        expected_a = 1.0 / fan_in  # muPC output scaling
-
-        edge_key = y_info.in_edges[0]
-        actual_a = scaling.forward_scale[edge_key]
-        assert abs(actual_a - expected_a) < 1e-10
-
-    def test_topdown_grad_scale_formula(self, linear_chain_with_mupc):
-        """Top-down gradient scale = 1 / (a * sqrt(fan_out))."""
+    def test_topdown_grad_scale_disabled(self, linear_chain_with_mupc):
+        """Top-down gradient scale is 1.0 (disabled, matches jpc reference)."""
         structure = linear_chain_with_mupc
         h_info = structure.nodes["h"].node_info
         scaling = h_info.scaling_config
 
-        fan_in = 10  # x.shape
-        fan_out = 20  # h.shape
-        depth = 1
-        a = 1.0 / math.sqrt(fan_in * depth)
-        expected_c_td = 1.0 / (a * math.sqrt(fan_out))
-
         edge_key = h_info.in_edges[0]
-        actual_c_td = scaling.topdown_grad_scale[edge_key]
-        assert abs(actual_c_td - expected_c_td) < 1e-10
+        assert scaling.topdown_grad_scale[edge_key] == 1.0
 
     def test_self_grad_scale_default(self, linear_chain_with_mupc):
         """Self-gradient scale defaults to 1.0."""
@@ -311,11 +290,11 @@ class TestGraphBuilderIntegration:
         assert structure.nodes["h"].node_info.scaling_config is None
 
     def test_scaling_attached_with_mupc_config(self, linear_chain_with_mupc):
-        """With MuPCConfig, non-source nodes should have scaling attached."""
+        """With MuPCConfig, hidden nodes should have scaling; source/output should not."""
         structure = linear_chain_with_mupc
-        assert structure.nodes["x"].node_info.scaling_config is None
-        assert structure.nodes["h"].node_info.scaling_config is not None
-        assert structure.nodes["y"].node_info.scaling_config is not None
+        assert structure.nodes["x"].node_info.scaling_config is None  # source
+        assert structure.nodes["h"].node_info.scaling_config is not None  # hidden
+        assert structure.nodes["y"].node_info.scaling_config is None  # output
 
     def test_invalid_scaling_type_raises(self):
         """Passing non-MuPCConfig should raise TypeError."""
@@ -547,3 +526,151 @@ class TestEndToEndTraining:
         assert (
             energy_f < energy_0
         ), f"Energy did not decrease: {energy_0:.6f} -> {energy_f:.6f}"
+
+
+# ============================================================================
+# IdentityNode Exclusion and include_output Tests
+# ============================================================================
+
+
+class TestIdentityNodeExclusion:
+    """Test that weightless nodes (IdentityNode) are excluded from muPC scaling."""
+
+    def test_identity_node_has_weights_false(self):
+        """IdentityNode.has_weights() should return False."""
+        assert IdentityNode.has_weights() is False
+
+    def test_linear_has_weights_true(self):
+        """Linear.has_weights() should return True."""
+        assert Linear.has_weights() is True
+
+    def test_identity_junction_gets_no_scaling(self):
+        """IdentityNode used as a sum junction should have scaling_config=None."""
+        x = IdentityNode(shape=(10,), name="x")
+        h1 = Linear(shape=(20,), name="h1", weight_init=MuPCInitializer())
+        h2 = Linear(shape=(20,), name="h2", weight_init=MuPCInitializer())
+        sum_node = IdentityNode(shape=(20,), name="sum")
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, h1, h2, sum_node, y],
+            edges=[
+                Edge(source=x, target=h1.slot("in")),
+                Edge(source=h1, target=h2.slot("in")),
+                Edge(source=h2, target=sum_node.slot("in")),
+                Edge(source=h1, target=sum_node.slot("in")),  # skip
+                Edge(source=sum_node, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(eta_infer=0.1, infer_steps=5),
+            scaling=MuPCConfig(depth_metric=ShortestPathDepth()),
+        )
+        # IdentityNode sum junction: has in_degree>0 but no weights -> no scaling
+        assert structure.nodes["sum"].node_info.scaling_config is None
+        # Linear nodes should still have scaling
+        assert structure.nodes["h1"].node_info.scaling_config is not None
+        assert structure.nodes["h2"].node_info.scaling_config is not None
+
+
+class TestIncludeOutput:
+    """Test the include_output flag on MuPCConfig."""
+
+    def test_include_output_false_by_default(self):
+        """Default include_output=False excludes output from scaling."""
+        x = IdentityNode(shape=(10,), name="x")
+        h = Linear(shape=(20,), name="h", weight_init=MuPCInitializer())
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, h, y],
+            edges=[
+                Edge(source=x, target=h.slot("in")),
+                Edge(source=h, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(),
+        )
+        assert structure.nodes["y"].node_info.scaling_config is None
+
+    def test_include_output_true(self):
+        """With include_output=True, output node gets scaling."""
+        x = IdentityNode(shape=(10,), name="x")
+        h = Linear(shape=(20,), name="h", weight_init=MuPCInitializer())
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, h, y],
+            edges=[
+                Edge(source=x, target=h.slot("in")),
+                Edge(source=h, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(include_output=True),
+        )
+        scaling = structure.nodes["y"].node_info.scaling_config
+        assert scaling is not None
+        assert isinstance(scaling, MuPCScalingFactors)
+
+    def test_output_forward_scale_formula(self):
+        """Output forward scale = 1/fan_in (matches jpc a_L = 1/N)."""
+        x = IdentityNode(shape=(10,), name="x")
+        h = Linear(shape=(20,), name="h", weight_init=MuPCInitializer())
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, h, y],
+            edges=[
+                Edge(source=x, target=h.slot("in")),
+                Edge(source=h, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(include_output=True),
+        )
+        scaling = structure.nodes["y"].node_info.scaling_config
+        # y has input from h (shape=(20,)), so fan_in=20
+        # Output formula: a = 1/fan_in = 1/20 = 0.05
+        edge_key = structure.nodes["y"].node_info.in_edges[0]
+        expected_a = 1.0 / 20
+        actual_a = scaling.forward_scale[edge_key]
+        assert (
+            abs(actual_a - expected_a) < 1e-10
+        ), f"Output forward_scale: expected {expected_a}, got {actual_a}"
+
+    def test_hidden_scaling_unchanged_with_include_output(self):
+        """Hidden node scaling should be the same regardless of include_output."""
+        x = IdentityNode(shape=(10,), name="x")
+        h = Linear(shape=(20,), name="h", weight_init=MuPCInitializer())
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+
+        structure_incl = graph(
+            nodes=[x, h, y],
+            edges=[
+                Edge(source=x, target=h.slot("in")),
+                Edge(source=h, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(include_output=True),
+        )
+        x2 = IdentityNode(shape=(10,), name="x")
+        h2 = Linear(shape=(20,), name="h", weight_init=MuPCInitializer())
+        y2 = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure_excl = graph(
+            nodes=[x2, h2, y2],
+            edges=[
+                Edge(source=x2, target=h2.slot("in")),
+                Edge(source=h2, target=y2.slot("in")),
+            ],
+            task_map=TaskMap(x=x2, y=y2),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(include_output=False),
+        )
+
+        edge_incl = structure_incl.nodes["h"].node_info.in_edges[0]
+        edge_excl = structure_excl.nodes["h"].node_info.in_edges[0]
+        a_incl = structure_incl.nodes["h"].node_info.scaling_config.forward_scale[
+            edge_incl
+        ]
+        a_excl = structure_excl.nodes["h"].node_info.scaling_config.forward_scale[
+            edge_excl
+        ]
+        assert abs(a_incl - a_excl) < 1e-10

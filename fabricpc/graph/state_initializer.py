@@ -269,8 +269,13 @@ class FeedforwardStateInit(StateInitBase):
                 node_class = node_info.node_class
                 edge_inputs = gather_inputs(node_info, structure, state)
 
+                # Apply muPC forward scaling (if any) before forward pass,
+                # matching what forward_inference() does during training.
+                scaled_inputs = node_class._apply_forward_scaling(
+                    edge_inputs, node_info
+                )
                 _, projected = node_class.forward(
-                    node_params, edge_inputs, node_state, node_info
+                    node_params, scaled_inputs, node_state, node_info
                 )
                 # node forward modifies z_mu, pre_activation, error, and energy
 
