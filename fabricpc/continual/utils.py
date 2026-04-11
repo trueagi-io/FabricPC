@@ -8,9 +8,66 @@ continual learning experiments.
 from typing import Dict, List, Tuple, Optional, Any, Sequence
 from pathlib import Path
 import json
+import os
 import numpy as np
 
 from fabricpc.continual.trainer import TaskRunSummary
+
+
+def _save_plotly_figure(fig, save_path: Optional[str]) -> None:
+    """
+    Save a Plotly figure with a graceful fallback when static image export fails.
+
+    Plotly's static export path may require Kaleido plus a Chrome installation.
+    When that is unavailable, save an interactive HTML file instead of failing.
+    """
+    if not save_path:
+        return
+
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    _configure_plotly_browser()
+
+    try:
+        fig.write_image(save_path)
+    except Exception as exc:
+        html_path = save_path.with_suffix(".html")
+        fig.write_html(html_path, include_plotlyjs="cdn")
+        print(
+            f"Static plot export failed for {save_path.name}: {exc}. "
+            f"Saved interactive HTML to {html_path.name} instead."
+        )
+
+
+def _configure_plotly_browser() -> None:
+    """
+    Help Kaleido discover Chrome/Chromium in common non-standard install locations.
+
+    In particular, Ubuntu systems often have Chrome at `/opt/google/chrome/chrome`
+    without a matching executable on PATH.
+    """
+    browser_candidates = [
+        Path("/opt/google/chrome/chrome"),
+        Path("/usr/bin/google-chrome"),
+        Path("/usr/bin/google-chrome-stable"),
+        Path("/usr/bin/chromium"),
+        Path("/usr/bin/chromium-browser"),
+    ]
+
+    if os.environ.get("BROWSER_PATH"):
+        return
+
+    for candidate in browser_candidates:
+        if candidate.exists():
+            os.environ["BROWSER_PATH"] = str(candidate)
+            os.environ.setdefault("CHROME_PATH", str(candidate))
+            browser_dir = str(candidate.parent)
+            path_entries = os.environ.get("PATH", "").split(os.pathsep)
+            if browser_dir not in path_entries:
+                os.environ["PATH"] = (
+                    browser_dir + os.pathsep + os.environ.get("PATH", "")
+                )
+            return
 
 
 def summaries_to_dataframe(summaries: Sequence[TaskRunSummary]):
@@ -248,8 +305,7 @@ def plot_accuracy_curves(
 
     fig.update_layout(height=500, width=1200, showlegend=True)
 
-    if save_path:
-        fig.write_image(save_path)
+    _save_plotly_figure(fig, save_path)
 
     if show:
         fig.show()
@@ -303,8 +359,7 @@ def plot_accuracy_matrix(
         width=800,
     )
 
-    if save_path:
-        fig.write_image(save_path)
+    _save_plotly_figure(fig, save_path)
 
     if show:
         fig.show()
@@ -384,8 +439,7 @@ def plot_forgetting_analysis(
 
     fig.update_layout(height=500, width=1200, showlegend=True)
 
-    if save_path:
-        fig.write_image(save_path)
+    _save_plotly_figure(fig, save_path)
 
     if show:
         fig.show()
@@ -439,8 +493,7 @@ def plot_support_selection(
         width=1000,
     )
 
-    if save_path:
-        fig.write_image(save_path)
+    _save_plotly_figure(fig, save_path)
 
     if show:
         fig.show()
