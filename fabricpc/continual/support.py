@@ -682,72 +682,61 @@ class SupportManager:
         base_z = np.zeros(self.num_columns)
 
         # Predict scores for unchosen columns
-        candidate_scores = []
-        for col in unchosen:
-            feat = self.causal_feature_builder.build_feature(
-                idx=col,
-                role="challenger",
-                chosen=initial_selected,
-                base_z=base_z,
-                cert_general=cert_general,
-                cert_specific=cert_specific,
-                cert_demotion=cert_demotion,
-                cert_saturation=cert_saturation,
-                novelty=novelty,
-                saturation=saturation,
-                recent_penalty=recent_penalty,
-                reserve_bonus=reserve_bonus,
-                fingerprint_mean=fp_mean,
-                fingerprint_confidence=fp_conf,
-                struct_similarity_fn=struct_sim,
-                causal_similarity_fn=causal_sim,
-                current_task_id=task_id,
-            )
-            pred = self.causal_predictor.predict(feat.reshape(1, -1))[0]
-            candidate_scores.append((col, float(pred)))
-
-        # Sort by predicted score (higher = better)
-        candidate_scores.sort(key=lambda x: x[1], reverse=True)
+        candidate_features = self.causal_feature_builder.build_features_batch(
+            indices=unchosen,
+            roles="challenger",
+            chosen_sets=[tuple(initial_selected)] * len(unchosen),
+            base_z=base_z,
+            cert_general=cert_general,
+            cert_specific=cert_specific,
+            cert_demotion=cert_demotion,
+            cert_saturation=cert_saturation,
+            novelty=novelty,
+            saturation=saturation,
+            recent_penalty=recent_penalty,
+            reserve_bonus=reserve_bonus,
+            fingerprint_mean=fp_mean,
+            fingerprint_confidence=fp_conf,
+            current_task_id=task_id,
+        )
+        candidate_pred = self.causal_predictor.predict(candidate_features)
+        candidate_order = np.argsort(candidate_pred)[::-1]
 
         # Consider swapping in top candidates if they score well
         # Use mix_gate to control how aggressive we are
         selected = list(initial_selected)
         swap_threshold = 0.01 * mix_gate  # Higher mix_gate = lower threshold
 
-        for cand_col, cand_score in candidate_scores[:2]:  # Consider top 2 candidates
-            if cand_score > swap_threshold:
-                # Find the lowest-scoring column in current selection to replace
-                chosen_scores = []
-                for i, col in enumerate(selected):
-                    feat = self.causal_feature_builder.build_feature(
-                        idx=col,
-                        role="reuse",
-                        chosen=[c for c in selected if c != col],
-                        base_z=base_z,
-                        cert_general=cert_general,
-                        cert_specific=cert_specific,
-                        cert_demotion=cert_demotion,
-                        cert_saturation=cert_saturation,
-                        novelty=novelty,
-                        saturation=saturation,
-                        recent_penalty=recent_penalty,
-                        reserve_bonus=reserve_bonus,
-                        fingerprint_mean=fp_mean,
-                        fingerprint_confidence=fp_conf,
-                        struct_similarity_fn=struct_sim,
-                        causal_similarity_fn=causal_sim,
-                        current_task_id=task_id,
-                    )
-                    pred = self.causal_predictor.predict(feat.reshape(1, -1))[0]
-                    chosen_scores.append((i, col, float(pred)))
+        chosen_contexts = [tuple(c for c in selected if c != col) for col in selected]
+        chosen_features = self.causal_feature_builder.build_features_batch(
+            indices=selected,
+            roles="reuse",
+            chosen_sets=chosen_contexts,
+            base_z=base_z,
+            cert_general=cert_general,
+            cert_specific=cert_specific,
+            cert_demotion=cert_demotion,
+            cert_saturation=cert_saturation,
+            novelty=novelty,
+            saturation=saturation,
+            recent_penalty=recent_penalty,
+            reserve_bonus=reserve_bonus,
+            fingerprint_mean=fp_mean,
+            fingerprint_confidence=fp_conf,
+            current_task_id=task_id,
+        )
+        chosen_pred = self.causal_predictor.predict(chosen_features)
+        worst_idx = int(np.argmin(chosen_pred))
+        worst_score = float(chosen_pred[worst_idx])
 
-                if chosen_scores:
-                    chosen_scores.sort(key=lambda x: x[2])
-                    worst_idx, worst_col, worst_score = chosen_scores[0]
-                    # Swap if candidate is significantly better
-                    if cand_score - worst_score > swap_threshold:
-                        selected[worst_idx] = cand_col
-                        break  # Only one swap per selection
+        for order_idx in candidate_order[:2]:  # Consider top 2 candidates
+            cand_col = unchosen[int(order_idx)]
+            cand_score = float(candidate_pred[int(order_idx)])
+            if cand_score > swap_threshold:
+                # Swap if candidate is significantly better
+                if cand_score - worst_score > swap_threshold:
+                    selected[worst_idx] = cand_col
+                    break  # Only one swap per selection
 
         return tuple(selected)
 

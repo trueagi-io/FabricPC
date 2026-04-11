@@ -19,6 +19,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
+import jax.numpy as jnp
 import numpy as np
 
 from .config import SupportConfig
@@ -1117,3 +1118,174 @@ class CausalSupportFeatureBuilder:
             task_pos,
         ]
         return np.array(vals, dtype=np.float64)
+
+    def build_features_batch(
+        self,
+        indices: Sequence[int],
+        roles: Sequence[str] | str,
+        chosen_sets: Sequence[Sequence[int]],
+        base_z: np.ndarray,
+        cert_general: np.ndarray,
+        cert_specific: np.ndarray,
+        cert_demotion: np.ndarray,
+        cert_saturation: np.ndarray,
+        novelty: np.ndarray,
+        saturation: np.ndarray,
+        recent_penalty: np.ndarray,
+        reserve_bonus: np.ndarray,
+        fingerprint_mean: Optional[np.ndarray],
+        fingerprint_confidence: Optional[np.ndarray],
+        current_task_id: int,
+    ) -> np.ndarray:
+        """
+        Build a batch of 21-dimensional feature vectors.
+
+        This is a vectorized replacement for repeated `build_feature()` calls in
+        support selection and audit processing. It uses batched JAX array ops for
+        the feature construction hot path and returns a NumPy array for the
+        downstream predictor.
+        """
+        jax_dtype = jnp.float32
+        idx_arr = np.asarray(indices, dtype=np.int32).ravel()
+        n = idx_arr.shape[0]
+        if n == 0:
+            return np.zeros((0, 21), dtype=np.float64)
+
+        if isinstance(roles, str):
+            role_list = [roles] * n
+        else:
+            role_list = list(roles)
+        if len(role_list) != n:
+            raise ValueError(
+                f"roles length {len(role_list)} does not match indices length {n}"
+            )
+
+        chosen_list = [tuple(chosen) for chosen in chosen_sets]
+        if len(chosen_list) != n:
+            raise ValueError(
+                f"chosen_sets length {len(chosen_list)} does not match indices length {n}"
+            )
+
+        max_chosen = max((len(chosen) for chosen in chosen_list), default=0)
+        chosen_padded = np.zeros((n, max_chosen), dtype=np.int32)
+        chosen_mask = np.zeros((n, max_chosen), dtype=bool)
+        chosen_lengths = np.zeros((n,), dtype=np.int32)
+        for i, chosen in enumerate(chosen_list):
+            chosen_lengths[i] = len(chosen)
+            if chosen:
+                chosen_padded[i, : len(chosen)] = chosen
+                chosen_mask[i, : len(chosen)] = True
+
+        num_columns = len(base_z)
+        valid_idx = (idx_arr >= 0) & (idx_arr < num_columns)
+        idx_clipped = np.clip(idx_arr, 0, max(0, num_columns - 1))
+
+        idx_j = jnp.asarray(idx_clipped, dtype=jnp.int32)
+        valid_idx_j = jnp.asarray(valid_idx)
+        chosen_padded_j = jnp.asarray(chosen_padded, dtype=jnp.int32)
+        chosen_mask_j = jnp.asarray(chosen_mask)
+        chosen_lengths_j = jnp.asarray(chosen_lengths, dtype=jax_dtype)
+
+        def gather_feature(values: np.ndarray) -> jnp.ndarray:
+            arr = jnp.asarray(values, dtype=jax_dtype)
+            gathered = arr[idx_j]
+            return jnp.where(valid_idx_j, gathered, 0.0)
+
+        reserve_flag = np.isin(
+            idx_arr, np.asarray(self.reserve_indices, dtype=np.int32)
+        )
+        reserve_flag_j = jnp.asarray(reserve_flag, dtype=jax_dtype)
+
+        fp_cur = jnp.zeros((n,), dtype=jax_dtype)
+        fp_old = jnp.zeros((n,), dtype=jax_dtype)
+        fp_abs = jnp.zeros((n,), dtype=jax_dtype)
+        fp_conf = jnp.zeros((n,), dtype=jax_dtype)
+        causal_max = jnp.zeros((n,), dtype=jax_dtype)
+
+        if fingerprint_mean is not None and np.size(fingerprint_mean) > 0:
+            fp_mean = jnp.asarray(fingerprint_mean, dtype=jax_dtype)
+            fp_rows = fp_mean.shape[0]
+            fp_valid_idx = valid_idx_j & (idx_j < fp_rows)
+            fp_idx = jnp.clip(idx_j, 0, max(0, fp_rows - 1))
+            gathered_fp = fp_mean[fp_idx]
+            if current_task_id < fp_mean.shape[1]:
+                fp_cur = jnp.where(fp_valid_idx, gathered_fp[:, current_task_id], 0.0)
+            if current_task_id > 0:
+                fp_old_means = jnp.mean(fp_mean[:, :current_task_id], axis=1)
+                fp_old = jnp.where(fp_valid_idx, fp_old_means[fp_idx], 0.0)
+            fp_abs_means = jnp.mean(jnp.abs(fp_mean), axis=1)
+            fp_abs = jnp.where(fp_valid_idx, fp_abs_means[fp_idx], 0.0)
+            if fingerprint_confidence is not None:
+                fp_conf_arr = jnp.asarray(fingerprint_confidence, dtype=jax_dtype)
+                fp_conf = jnp.where(fp_valid_idx, fp_conf_arr[fp_idx], 0.0)
+
+            if max_chosen > 0:
+                chosen_valid = (
+                    chosen_mask_j & (chosen_padded_j >= 0) & (chosen_padded_j < fp_rows)
+                )
+                chosen_idx = jnp.clip(chosen_padded_j, 0, max(0, fp_rows - 1))
+                normalized = fp_mean / jnp.clip(
+                    jnp.linalg.norm(fp_mean, axis=1, keepdims=True), 1e-6, None
+                )
+                current_vectors = normalized[fp_idx]
+                chosen_vectors = normalized[chosen_idx]
+                sims = jnp.sum(current_vectors[:, None, :] * chosen_vectors, axis=-1)
+                sims = jnp.where(chosen_valid, sims, -jnp.inf)
+                causal_max = jnp.where(
+                    chosen_lengths_j > 0,
+                    jnp.max(sims, axis=1),
+                    0.0,
+                )
+                causal_max = jnp.where(jnp.isfinite(causal_max), causal_max, 0.0)
+
+        struct_max = jnp.zeros((n,), dtype=jax_dtype)
+        if max_chosen > 0:
+            struct_max = jnp.any(
+                chosen_mask_j & (chosen_padded_j == idx_j[:, None]), axis=1
+            ).astype(jax_dtype)
+
+        role_map = {
+            "reuse": np.array([1.0, 0.0, 0.0], dtype=np.float64),
+            "diverse": np.array([0.0, 1.0, 0.0], dtype=np.float64),
+            "challenger": np.array([0.0, 0.0, 1.0], dtype=np.float64),
+        }
+        role_one_hot = np.stack(
+            [role_map.get(role, np.zeros(3, dtype=np.float64)) for role in role_list],
+            axis=0,
+        )
+        role_one_hot_j = jnp.asarray(role_one_hot, dtype=jax_dtype)
+
+        context_denom = max(1.0, float(self.topk_nonshared - 1))
+        context_size = chosen_lengths_j / context_denom
+        task_pos = jnp.full(
+            (n,),
+            float(current_task_id) / max(1.0, float(self.num_tasks - 1)),
+            dtype=jax_dtype,
+        )
+
+        features = jnp.column_stack(
+            [
+                gather_feature(base_z),
+                gather_feature(cert_general),
+                gather_feature(cert_specific),
+                gather_feature(cert_demotion),
+                gather_feature(cert_saturation),
+                gather_feature(novelty),
+                gather_feature(saturation),
+                gather_feature(recent_penalty),
+                gather_feature(reserve_bonus),
+                reserve_flag_j,
+                fp_cur,
+                fp_old,
+                fp_abs,
+                fp_conf,
+                struct_max,
+                causal_max,
+                role_one_hot_j[:, 0],
+                role_one_hot_j[:, 1],
+                role_one_hot_j[:, 2],
+                context_size,
+                task_pos,
+            ]
+        )
+        return np.asarray(features, dtype=np.float64)

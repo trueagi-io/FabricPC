@@ -930,56 +930,17 @@ class SequentialTrainer:
         reserve_bonus = np.zeros(num_columns)
         base_z = np.zeros(num_columns)
 
-        # Simple similarity functions
-        def struct_sim(i: int, j: int) -> float:
-            return 1.0 if i == j else 0.0
-
-        def causal_sim(i: int, j: int) -> float:
-            if fp_mean is None:
-                return 0.0
-            if i >= fp_mean.shape[0] or j >= fp_mean.shape[0]:
-                return 0.0
-            # Cosine similarity of gain vectors
-            vi = fp_mean[i]
-            vj = fp_mean[j]
-            ni = np.linalg.norm(vi)
-            nj = np.linalg.norm(vj)
-            if ni < 1e-6 or nj < 1e-6:
-                return 0.0
-            return float(np.dot(vi, vj) / (ni * nj))
-
         X_list = []
         y_list = []
         w_list = []
         meta_list = []
+        chosen_sets = []
+        valid_rows = []
 
         for row in audit_rows:
             swap_in = row.get("swap_in", -1)
             if swap_in < 0 or swap_in >= num_columns:
                 continue
-
-            chosen = row.get("chosen_support", ())
-
-            # Build feature vector for swap_in column
-            feat = feature_builder.build_feature(
-                idx=swap_in,
-                role="challenger",  # Audit swaps are challengers
-                chosen=chosen,
-                base_z=base_z,
-                cert_general=cert_general,
-                cert_specific=cert_specific,
-                cert_demotion=cert_demotion,
-                cert_saturation=cert_saturation,
-                novelty=novelty,
-                saturation=saturation,
-                recent_penalty=recent_penalty,
-                reserve_bonus=reserve_bonus,
-                fingerprint_mean=fp_mean,
-                fingerprint_confidence=fp_conf,
-                struct_similarity_fn=struct_sim,
-                causal_similarity_fn=causal_sim,
-                current_task_id=current_task_id,
-            )
 
             # Target is the combined gain (positive = swap_in is better)
             target = row.get("combined_gain", 0.0)
@@ -992,9 +953,11 @@ class SequentialTrainer:
             # Weight based on magnitude of current loss
             weight = 1.0 + abs(row.get("chosen_current_loss", 0.0))
 
-            X_list.append(feat)
+            X_list.append(swap_in)
             y_list.append(target)
             w_list.append(weight)
+            chosen_sets.append(tuple(row.get("chosen_support", ())))
+            valid_rows.append(row)
             meta_list.append(
                 {
                     "swap_in": swap_in,
@@ -1004,7 +967,23 @@ class SequentialTrainer:
             )
 
         if X_list:
-            X = np.stack(X_list, axis=0)
+            X = feature_builder.build_features_batch(
+                indices=X_list,
+                roles="challenger",
+                chosen_sets=chosen_sets,
+                base_z=base_z,
+                cert_general=cert_general,
+                cert_specific=cert_specific,
+                cert_demotion=cert_demotion,
+                cert_saturation=cert_saturation,
+                novelty=novelty,
+                saturation=saturation,
+                recent_penalty=recent_penalty,
+                reserve_bonus=reserve_bonus,
+                fingerprint_mean=fp_mean,
+                fingerprint_confidence=fp_conf,
+                current_task_id=current_task_id,
+            )
             y = np.array(y_list)
             w = np.array(w_list)
             self.support_manager.add_causal_examples(X, y, w, meta_list)
@@ -1017,7 +996,7 @@ class SequentialTrainer:
                 predictions = self.support_manager.causal_predictor.predict(X)
                 trust_ctrl = self.support_manager.causal_trust
                 if trust_ctrl is not None:
-                    for i, row in enumerate(audit_rows):
+                    for i, row in enumerate(valid_rows):
                         swap_in = row.get("swap_in", -1)
                         if swap_in >= 0:
                             # Record prediction
