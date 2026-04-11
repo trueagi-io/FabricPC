@@ -752,8 +752,6 @@ class SequentialTrainer:
 
         # Get current support columns
         chosen = list(self.current_state.active_nonshared)
-        shared = list(range(self.config.columns.shared_columns))
-
         # Get unchosen columns (non-shared, not in chosen)
         all_nonshared = list(
             range(self.config.columns.shared_columns, self.config.columns.num_columns)
@@ -783,33 +781,39 @@ class SequentialTrainer:
 
         eval_config = {"loss_type": "cross_entropy"}
 
+        def coalesce_batches(batches):
+            """Collapse sampled audit batches into a single larger batch."""
+            if not batches:
+                return []
+            if len(batches) == 1:
+                return list(batches)
+            images = np.concatenate([images for images, _ in batches], axis=0)
+            labels = np.concatenate([labels for _, labels in batches], axis=0)
+            return [(images, labels)]
+
         def eval_loss_on_batches(batches):
             """Evaluate loss on a list of batches."""
             if not batches:
                 return 0.0
-            total_loss = 0.0
-            count = 0
-            for images, labels in batches:
-                eval_key, _ = jax.random.split(self.rng_key)
-                if self.training_mode == "backprop":
-                    metrics = evaluate_backprop(
-                        self.params,
-                        self.structure,
-                        [(images, labels)],
-                        eval_config,
-                        eval_key,
-                    )
-                else:
-                    metrics = evaluate_pcn(
-                        self.params,
-                        self.structure,
-                        [(images, labels)],
-                        eval_config,
-                        eval_key,
-                    )
-                total_loss += float(metrics.get("loss", 0.0))
-                count += 1
-            return total_loss / max(1, count)
+            eval_loader = coalesce_batches(batches)
+            eval_key, _ = jax.random.split(self.rng_key)
+            if self.training_mode == "backprop":
+                metrics = evaluate_backprop(
+                    self.params,
+                    self.structure,
+                    eval_loader,
+                    eval_config,
+                    eval_key,
+                )
+            else:
+                metrics = evaluate_pcn(
+                    self.params,
+                    self.structure,
+                    eval_loader,
+                    eval_config,
+                    eval_key,
+                )
+            return float(metrics.get("loss", 0.0))
 
         # Baseline loss with current support
         baseline_current_loss = eval_loss_on_batches(current_batches)
@@ -820,67 +824,62 @@ class SequentialTrainer:
                 f"  Audit baseline: current_loss={baseline_current_loss:.4f}, old_loss={baseline_old_loss:.4f}"
             )
 
-        # Generate swap pairs
-        swap_pairs = []
-        for c_idx, swap_out in enumerate(chosen):
-            for swap_in in unchosen:
-                swap_pairs.append((swap_out, swap_in, c_idx))
-                if len(swap_pairs) >= max_swaps:
-                    break
-            if len(swap_pairs) >= max_swaps:
-                break
+        chosen_arr = np.asarray(chosen, dtype=np.int32)
+        unchosen_arr = np.asarray(unchosen, dtype=np.int32)
+        chosen_idx_grid, swap_in_grid = np.meshgrid(
+            np.arange(chosen_arr.size, dtype=np.int32),
+            unchosen_arr,
+            indexing="ij",
+        )
+        swap_out_grid = chosen_arr[chosen_idx_grid]
 
-        # Evaluate each swap
-        # Use column statistics from support bank to estimate contribution
-        col_stats = self.support_manager.support_bank.get_column_statistics()
+        flat_swap_out = swap_out_grid.reshape(-1)[:max_swaps]
+        flat_swap_in = swap_in_grid.reshape(-1)[:max_swaps]
+        if flat_swap_out.size == 0:
+            return []
 
-        for swap_out, swap_in, c_idx in swap_pairs:
-            # Create swapped support set
-            swapped_chosen = chosen.copy()
-            swapped_chosen[c_idx] = swap_in
-            swapped_all = tuple(shared + swapped_chosen)
+        # Use dense column statistics to estimate contribution for all swaps at once.
+        # This remains an approximation, but the ranking path is now vectorized.
+        col_mean_acc = self.support_manager.support_bank.get_mean_accuracy_by_column(
+            self.config.columns.num_columns
+        )
+        default_acc = np.full_like(col_mean_acc, 0.5, dtype=np.float64)
+        has_history = col_mean_acc > 0
+        effective_acc = np.where(has_history, col_mean_acc, default_acc)
 
-            # Estimate contribution difference based on historical performance
-            # This is an approximation - full implementation would run actual inference
-            # with different column masks
-            swap_out_score = col_stats.get(swap_out, {}).get("mean_accuracy", 0.5)
-            swap_in_score = col_stats.get(swap_in, {}).get("mean_accuracy", 0.5)
+        swap_out_score = effective_acc[flat_swap_out]
+        swap_in_score = effective_acc[flat_swap_in]
+        noise = np.random.normal(0.0, 0.01, size=flat_swap_out.shape[0])
+        estimated_gain = (swap_in_score - swap_out_score) * 0.1 + noise
 
-            # Add small noise to prevent degenerate case
-            noise = np.random.normal(0, 0.01)
+        alt_current_loss = baseline_current_loss - estimated_gain
+        alt_old_loss = baseline_old_loss - estimated_gain * 0.5
 
-            # Estimate loss difference (lower loss = better)
-            # If swap_in has higher historical accuracy, it should reduce loss
-            estimated_gain = (swap_in_score - swap_out_score) * 0.1 + noise
+        current_gain = baseline_current_loss - alt_current_loss
+        old_gain = baseline_old_loss - alt_old_loss
 
-            alt_current_loss = baseline_current_loss - estimated_gain
-            alt_old_loss = (
-                baseline_old_loss - estimated_gain * 0.5
-            )  # Less impact on old task
+        current_weight = self.config.audit.support_audit_current_weight
+        old_weight = self.config.audit.support_audit_old_weight
+        combined_gain = current_weight * current_gain + old_weight * old_gain
 
-            # Compute gain (positive = swap_in is better than swap_out)
-            current_gain = baseline_current_loss - alt_current_loss
-            old_gain = baseline_old_loss - alt_old_loss
+        old_task_id = old_task_data.task_id if old_task_data else None
+        chosen_tuple = tuple(chosen)
 
-            # Combined gain with weights
-            current_weight = self.config.audit.support_audit_current_weight
-            old_weight = self.config.audit.support_audit_old_weight
-            combined_gain = current_weight * current_gain + old_weight * old_gain
-
+        for i in range(flat_swap_out.shape[0]):
             audit_rows.append(
                 {
-                    "swap_in": swap_in,
-                    "swap_out": swap_out,
-                    "chosen_current_loss": baseline_current_loss,
-                    "alt_current_loss": alt_current_loss,
-                    "chosen_old_loss": baseline_old_loss,
-                    "alt_old_loss": alt_old_loss,
-                    "current_gain": current_gain,
-                    "old_gain": old_gain,
-                    "combined_gain": combined_gain,
+                    "swap_in": int(flat_swap_in[i]),
+                    "swap_out": int(flat_swap_out[i]),
+                    "chosen_current_loss": float(baseline_current_loss),
+                    "alt_current_loss": float(alt_current_loss[i]),
+                    "chosen_old_loss": float(baseline_old_loss),
+                    "alt_old_loss": float(alt_old_loss[i]),
+                    "current_gain": float(current_gain[i]),
+                    "old_gain": float(old_gain[i]),
+                    "combined_gain": float(combined_gain[i]),
                     "current_task_id": current_task_id,
-                    "old_task_id": old_task_data.task_id if old_task_data else None,
-                    "chosen_support": tuple(chosen),
+                    "old_task_id": old_task_id,
+                    "chosen_support": chosen_tuple,
                 }
             )
 

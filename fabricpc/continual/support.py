@@ -224,6 +224,40 @@ class SupportBank:
             }
         return result
 
+    def get_mean_accuracy_by_column(self, num_columns: int) -> np.ndarray:
+        """
+        Compute mean accuracy per column as a dense vector.
+
+        This provides a batched form for support ranking logic.
+        Columns with no history receive 0.
+        """
+        if num_columns <= 0:
+            return np.zeros((0,), dtype=np.float64)
+        if not self.rows:
+            return np.zeros((num_columns,), dtype=np.float64)
+
+        flat_cols = []
+        flat_accs = []
+        for row in self.rows:
+            if not row.support_cols:
+                continue
+            cols = np.asarray(row.support_cols, dtype=np.int32)
+            valid = (cols >= 0) & (cols < num_columns)
+            cols = cols[valid]
+            if cols.size == 0:
+                continue
+            flat_cols.append(cols)
+            flat_accs.append(np.full(cols.shape, row.accuracy, dtype=np.float64))
+
+        if not flat_cols:
+            return np.zeros((num_columns,), dtype=np.float64)
+
+        all_cols = np.concatenate(flat_cols)
+        all_accs = np.concatenate(flat_accs)
+        acc_sum = np.bincount(all_cols, weights=all_accs, minlength=num_columns)
+        count = np.bincount(all_cols, minlength=num_columns)
+        return acc_sum / np.clip(count, 1, None)
+
     def __len__(self) -> int:
         return len(self.rows)
 
@@ -334,47 +368,54 @@ class HybridSelectorPolicy:
         Returns:
             Tuple of selected non-shared column indices
         """
-        nonshared_pool = list(range(self.num_shared, self.num_columns))
+        nonshared_pool = np.arange(self.num_shared, self.num_columns, dtype=np.int32)
 
         # Remove demoted columns
         if demotion_bank is not None:
-            demoted = set(demotion_bank.get_demoted_columns(task_id))
-            nonshared_pool = [c for c in nonshared_pool if c not in demoted]
+            demoted = np.asarray(
+                demotion_bank.get_demoted_columns(task_id), dtype=np.int32
+            )
+            if demoted.size > 0:
+                nonshared_pool = nonshared_pool[~np.isin(nonshared_pool, demoted)]
 
-        if len(nonshared_pool) < self.topk_nonshared:
+        if nonshared_pool.size < self.topk_nonshared:
             # Not enough columns, use all available
-            return tuple(nonshared_pool)
+            return tuple(int(c) for c in nonshared_pool.tolist())
 
         # Compute selection scores
-        scores = np.zeros(len(nonshared_pool))
-
-        # 1. Prior from column history
-        for i, col in enumerate(nonshared_pool):
-            scores[i] += self.column_scores[col]
+        scores = self.column_scores[nonshared_pool].astype(np.float64, copy=True)
 
         # 2. Task-specific preferences
         if task_id in self.task_preferences:
-            for i, col in enumerate(nonshared_pool):
-                scores[i] += self.task_preferences[task_id][col]
+            scores += self.task_preferences[task_id][nonshared_pool]
 
         # 3. Support bank similarity (if available)
         if support_bank is not None and len(support_bank) > 0:
-            bank_stats = support_bank.get_column_statistics()
-            for i, col in enumerate(nonshared_pool):
-                if col in bank_stats:
-                    scores[i] += 0.5 * bank_stats[col]["mean_accuracy"]
+            scores += (
+                0.5
+                * support_bank.get_mean_accuracy_by_column(self.num_columns)[
+                    nonshared_pool
+                ]
+            )
 
         # 4. Random exploration
         if np.random.random() < exploration_rate:
             # Select randomly
             selected_indices = np.random.choice(
-                len(nonshared_pool), size=self.topk_nonshared, replace=False
+                nonshared_pool.size, size=self.topk_nonshared, replace=False
             )
         else:
             # Select top-k by score
-            selected_indices = np.argsort(scores)[-self.topk_nonshared :]
+            selected_indices = np.argpartition(scores, -self.topk_nonshared)[
+                -self.topk_nonshared :
+            ]
+            selected_indices = selected_indices[
+                np.argsort(scores[selected_indices])[::-1]
+            ]
 
-        selected_cols = tuple(nonshared_pool[i] for i in selected_indices)
+        selected_cols = tuple(
+            int(col) for col in nonshared_pool[selected_indices].tolist()
+        )
         return selected_cols
 
     def update_from_outcome(
