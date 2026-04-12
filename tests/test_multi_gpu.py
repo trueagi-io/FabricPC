@@ -247,7 +247,7 @@ class TestMultiGPUTraining:
         for node_name in simple_structure.nodes:
             if (
                 simple_structure.nodes[node_name].node_info.in_degree > 0
-            ):  # Skip source nodes
+            ):  # Skip terminal input nodes (zero in_degree)
                 single_node = trained_single.nodes[node_name]
                 multi_node = trained_multi.nodes[node_name]
 

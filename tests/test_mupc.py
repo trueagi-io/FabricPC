@@ -73,7 +73,7 @@ def linear_chain_with_mupc(linear_chain_structure):
         ],
         task_map=TaskMap(x=x, y=y),
         inference=InferenceSGD(eta_infer=0.1, infer_steps=5),
-        scaling=MuPCConfig(depth_metric=ShortestPathDepth()),
+        scaling=MuPCConfig(),
     )
     return structure
 
@@ -95,7 +95,7 @@ def skip_connection_structure():
         ],
         task_map=TaskMap(x=x, y=y),
         inference=InferenceSGD(eta_infer=0.1, infer_steps=5),
-        scaling=MuPCConfig(depth_metric=ShortestPathDepth()),
+        scaling=MuPCConfig(),
     )
     return structure
 
@@ -147,7 +147,7 @@ class TestDepthMetrics:
         assert depths["y"] == 3
 
     def test_fixed_depth(self, linear_chain_with_mupc):
-        """Fixed depth assigns same depth to all non-source nodes."""
+        """Fixed depth assigns same depth to all nodes with in_degree > 0."""
         structure = linear_chain_with_mupc
         metric = FixedDepth(depth=5)
         depths = metric.compute(structure.nodes, structure.edges)
@@ -222,15 +222,15 @@ class TestMuPCScalingComputation:
         assert y_info.scaling_config is None
 
     def test_hidden_forward_scale_formula(self, linear_chain_with_mupc):
-        """Hidden node forward scale = 1/sqrt(fan_in * depth)."""
+        """Hidden node forward scale = 1/sqrt(fan_in * K) where K=in_degree."""
         structure = linear_chain_with_mupc
         h_info = structure.nodes["h"].node_info
         scaling = h_info.scaling_config
 
-        # h has one input from x (shape=(10,)), depth=1
-        fan_in = 10  # prod of x.shape
-        depth = 1
-        expected_a = 1.0 / math.sqrt(fan_in * depth)
+        # h has one input from x (shape=(10,)), K=1 (in_degree)
+        fan_in = 10  # x.shape[-1]
+        K = 1
+        expected_a = 1.0 / math.sqrt(fan_in * K)
 
         edge_key = h_info.in_edges[0]
         actual_a = scaling.forward_scale[edge_key]
@@ -529,23 +529,21 @@ class TestEndToEndTraining:
 
 
 # ============================================================================
-# IdentityNode Exclusion and include_output Tests
+# IdentityNode Scaling and include_output Tests
 # ============================================================================
 
 
-class TestIdentityNodeExclusion:
-    """Test that weightless nodes (IdentityNode) are excluded from muPC scaling."""
+class TestIdentityNodeScaling:
+    """Test that IdentityNode gets muPC scaling based on in-degree."""
 
-    def test_identity_node_has_weights_false(self):
-        """IdentityNode.has_weights() should return False."""
-        assert IdentityNode.has_weights() is False
+    def test_identity_node_fan_in_is_one(self):
+        """IdentityNode.get_weight_fan_in() should return 1 (no weight matrix)."""
+        assert IdentityNode.get_weight_fan_in((10,), {}) == 1
+        assert IdentityNode.get_weight_fan_in((784,), {}) == 1
+        assert IdentityNode.get_weight_fan_in((3, 32, 32), {}) == 1
 
-    def test_linear_has_weights_true(self):
-        """Linear.has_weights() should return True."""
-        assert Linear.has_weights() is True
-
-    def test_identity_junction_gets_no_scaling(self):
-        """IdentityNode used as a sum junction should have scaling_config=None."""
+    def test_identity_junction_gets_scaling(self):
+        """IdentityNode used as a sum junction should get scaling a=1/sqrt(K)."""
         x = IdentityNode(shape=(10,), name="x")
         h1 = Linear(shape=(20,), name="h1", weight_init=MuPCInitializer())
         h2 = Linear(shape=(20,), name="h2", weight_init=MuPCInitializer())
@@ -562,10 +560,16 @@ class TestIdentityNodeExclusion:
             ],
             task_map=TaskMap(x=x, y=y),
             inference=InferenceSGD(eta_infer=0.1, infer_steps=5),
-            scaling=MuPCConfig(depth_metric=ShortestPathDepth()),
+            scaling=MuPCConfig(),
         )
-        # IdentityNode sum junction: has in_degree>0 but no weights -> no scaling
-        assert structure.nodes["sum"].node_info.scaling_config is None
+        # IdentityNode sum junction: fan_in=1, K=2 -> a=1/sqrt(2) per edge
+        scaling = structure.nodes["sum"].node_info.scaling_config
+        assert scaling is not None
+        expected_a = 1.0 / math.sqrt(2)  # 1/sqrt(fan_in * K) = 1/sqrt(1 * 2)
+        for edge_key, a in scaling.forward_scale.items():
+            assert (
+                abs(a - expected_a) < 1e-10
+            ), f"Expected a={expected_a:.6f}, got {a:.6f} for edge {edge_key}"
         # Linear nodes should still have scaling
         assert structure.nodes["h1"].node_info.scaling_config is not None
         assert structure.nodes["h2"].node_info.scaling_config is not None
@@ -611,7 +615,7 @@ class TestIncludeOutput:
         assert isinstance(scaling, MuPCScalingFactors)
 
     def test_output_forward_scale_formula(self):
-        """Output forward scale = 1/fan_in (matches jpc a_L = 1/N)."""
+        """Output forward scale = 1/(fan_in * sqrt(K)) for K=1: 1/fan_in."""
         x = IdentityNode(shape=(10,), name="x")
         h = Linear(shape=(20,), name="h", weight_init=MuPCInitializer())
         y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
@@ -626,8 +630,8 @@ class TestIncludeOutput:
             scaling=MuPCConfig(include_output=True),
         )
         scaling = structure.nodes["y"].node_info.scaling_config
-        # y has input from h (shape=(20,)), so fan_in=20
-        # Output formula: a = 1/fan_in = 1/20 = 0.05
+        # y has input from h (shape=(20,)), so fan_in=20, K=1
+        # Output formula: a = 1/(fan_in * sqrt(K)) = 1/(20 * 1) = 0.05
         edge_key = structure.nodes["y"].node_info.in_edges[0]
         expected_a = 1.0 / 20
         actual_a = scaling.forward_scale[edge_key]
@@ -674,3 +678,221 @@ class TestIncludeOutput:
             edge_excl
         ]
         assert abs(a_incl - a_excl) < 1e-10
+
+
+# ============================================================================
+# Variance Propagation Tests (unified a=1/sqrt(fan_in*K) formula)
+# ============================================================================
+
+
+class TestVariancePropagation:
+    """Test the unified muPC scaling formula a=1/sqrt(fan_in*K)."""
+
+    def test_plain_chain_no_depth_factor(self):
+        """Plain chain: all hidden nodes get a=1/sqrt(fan_in), independent of depth."""
+        x = IdentityNode(shape=(10,), name="x")
+        h1 = Linear(shape=(20,), name="h1", weight_init=MuPCInitializer())
+        h2 = Linear(shape=(20,), name="h2", weight_init=MuPCInitializer())
+        h3 = Linear(shape=(20,), name="h3", weight_init=MuPCInitializer())
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, h1, h2, h3, y],
+            edges=[
+                Edge(source=x, target=h1.slot("in")),
+                Edge(source=h1, target=h2.slot("in")),
+                Edge(source=h2, target=h3.slot("in")),
+                Edge(source=h3, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(),
+        )
+        # h1: fan_in=10 (from x), K=1 -> a=1/sqrt(10)
+        h1_edge = structure.nodes["h1"].node_info.in_edges[0]
+        assert (
+            abs(
+                structure.nodes["h1"].node_info.scaling_config.forward_scale[h1_edge]
+                - 1.0 / math.sqrt(10)
+            )
+            < 1e-10
+        )
+
+        # h2: fan_in=20 (from h1), K=1 -> a=1/sqrt(20)
+        h2_edge = structure.nodes["h2"].node_info.in_edges[0]
+        assert (
+            abs(
+                structure.nodes["h2"].node_info.scaling_config.forward_scale[h2_edge]
+                - 1.0 / math.sqrt(20)
+            )
+            < 1e-10
+        )
+
+        # h3: fan_in=20 (from h2), K=1 -> a=1/sqrt(20)
+        h3_edge = structure.nodes["h3"].node_info.in_edges[0]
+        assert (
+            abs(
+                structure.nodes["h3"].node_info.scaling_config.forward_scale[h3_edge]
+                - 1.0 / math.sqrt(20)
+            )
+            < 1e-10
+        )
+
+        # h2 and h3 should have identical scaling (no depth dependency)
+        a_h2 = structure.nodes["h2"].node_info.scaling_config.forward_scale[h2_edge]
+        a_h3 = structure.nodes["h3"].node_info.scaling_config.forward_scale[h3_edge]
+        assert abs(a_h2 - a_h3) < 1e-10
+
+    def test_identity_node_gets_scaling_k2(self):
+        """IdentityNode with K=2 in-edges gets a=1/sqrt(2) per edge."""
+        x = IdentityNode(shape=(10,), name="x")
+        h1 = Linear(shape=(20,), name="h1", weight_init=MuPCInitializer())
+        h2 = Linear(shape=(20,), name="h2", weight_init=MuPCInitializer())
+        junction = IdentityNode(shape=(20,), name="junction")
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, h1, h2, junction, y],
+            edges=[
+                Edge(source=x, target=h1.slot("in")),
+                Edge(source=h1, target=h2.slot("in")),
+                Edge(source=h1, target=junction.slot("in")),
+                Edge(source=h2, target=junction.slot("in")),
+                Edge(source=junction, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(),
+        )
+        scaling = structure.nodes["junction"].node_info.scaling_config
+        assert scaling is not None
+        expected_a = 1.0 / math.sqrt(2)  # fan_in=1, K=2
+        for a in scaling.forward_scale.values():
+            assert abs(a - expected_a) < 1e-10
+
+    def test_multi_edge_linear(self):
+        """Linear with K=2 edges: a_k=1/sqrt(fan_in*2) per edge."""
+        x = IdentityNode(shape=(10,), name="x")
+        h1 = Linear(shape=(20,), name="h1", weight_init=MuPCInitializer())
+        h2 = Linear(shape=(20,), name="h2", weight_init=MuPCInitializer())
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, h1, h2, y],
+            edges=[
+                Edge(source=x, target=h1.slot("in")),
+                Edge(source=h1, target=h2.slot("in")),
+                Edge(source=x, target=h2.slot("in")),  # skip -> h2 has K=2
+                Edge(source=h2, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(),
+        )
+        h2_scaling = structure.nodes["h2"].node_info.scaling_config
+        # h2 has 2 inputs: from h1 (shape=20) and from x (shape=10)
+        # K=2, fan_in varies by edge
+        for edge_key, a in h2_scaling.forward_scale.items():
+            if "h1->" in edge_key:
+                expected = 1.0 / math.sqrt(20 * 2)  # fan_in=20, K=2
+            else:
+                expected = 1.0 / math.sqrt(10 * 2)  # fan_in=10, K=2
+            assert (
+                abs(a - expected) < 1e-10
+            ), f"Edge {edge_key}: expected {expected:.6f}, got {a:.6f}"
+
+    def test_deep_chain_uniform_scaling(self):
+        """20-layer chain: all same-width hidden nodes get same a=1/sqrt(fan_in)."""
+        width = 32
+        x = IdentityNode(shape=(width,), name="x")
+        layers = [
+            Linear(shape=(width,), name=f"h{i}", weight_init=MuPCInitializer())
+            for i in range(20)
+        ]
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+
+        all_nodes = [x] + layers + [y]
+        all_edges = []
+        prev = x
+        for h in layers:
+            all_edges.append(Edge(source=prev, target=h.slot("in")))
+            prev = h
+        all_edges.append(Edge(source=prev, target=y.slot("in")))
+
+        structure = graph(
+            nodes=all_nodes,
+            edges=all_edges,
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(),
+        )
+
+        # All hidden nodes have K=1, fan_in=width -> a=1/sqrt(width)
+        expected_a = 1.0 / math.sqrt(width)
+        for i in range(20):
+            node_name = f"h{i}"
+            scaling = structure.nodes[node_name].node_info.scaling_config
+            assert scaling is not None, f"{node_name} should have scaling"
+            edge_key = structure.nodes[node_name].node_info.in_edges[0]
+            actual_a = scaling.forward_scale[edge_key]
+            assert (
+                abs(actual_a - expected_a) < 1e-10
+            ), f"{node_name}: expected {expected_a:.6f}, got {actual_a:.6f}"
+
+    def test_output_with_include_output_k1(self):
+        """Output node with K=1: a = 1/(fan_in * sqrt(1)) = 1/fan_in."""
+        x = IdentityNode(shape=(10,), name="x")
+        h = Linear(shape=(20,), name="h", weight_init=MuPCInitializer())
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, h, y],
+            edges=[
+                Edge(source=x, target=h.slot("in")),
+                Edge(source=h, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(include_output=True),
+        )
+        y_scaling = structure.nodes["y"].node_info.scaling_config
+        edge_key = structure.nodes["y"].node_info.in_edges[0]
+        expected_a = 1.0 / 20  # 1/(fan_in * sqrt(K)) = 1/(20 * 1)
+        assert abs(y_scaling.forward_scale[edge_key] - expected_a) < 1e-10
+
+
+# ============================================================================
+# Backward Compatibility Tests
+# ============================================================================
+
+
+class TestBackwardCompatibility:
+    """Test deprecated MuPCConfig parameters."""
+
+    def test_depth_metric_emits_deprecation_warning(self):
+        """MuPCConfig(depth_metric=...) should emit DeprecationWarning."""
+        with pytest.warns(DeprecationWarning, match="depth_metric.*deprecated"):
+            MuPCConfig(depth_metric=ShortestPathDepth())
+
+    def test_min_depth_emits_deprecation_warning(self):
+        """MuPCConfig(min_depth=...) should emit DeprecationWarning."""
+        with pytest.warns(DeprecationWarning, match="min_depth.*deprecated"):
+            MuPCConfig(min_depth=3)
+
+    def test_deprecated_config_still_works(self):
+        """Graph should build correctly even with deprecated parameters."""
+        x = IdentityNode(shape=(10,), name="x")
+        h = Linear(shape=(20,), name="h", weight_init=MuPCInitializer())
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            structure = graph(
+                nodes=[x, h, y],
+                edges=[
+                    Edge(source=x, target=h.slot("in")),
+                    Edge(source=h, target=y.slot("in")),
+                ],
+                task_map=TaskMap(x=x, y=y),
+                inference=InferenceSGD(),
+                scaling=MuPCConfig(depth_metric=ShortestPathDepth()),
+            )
+        # Should still compute scaling correctly
+        assert structure.nodes["h"].node_info.scaling_config is not None

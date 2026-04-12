@@ -185,7 +185,7 @@ def train_step_autoregressive(
     # Run inference
     final_state = run_inference(params, init_state, clamps, structure)
 
-    # Compute total energy (sum over non-source nodes)
+    # Compute total energy (sum over nodes with in_degree>0)
     energy = jnp.array(0.0)
     for node_name, node in structure.nodes.items():
         if node.node_info.in_degree > 0:

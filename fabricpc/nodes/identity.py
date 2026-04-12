@@ -74,9 +74,15 @@ class IdentityNode(NodeBase):
         return {"in": SlotSpec(name="in", is_multi_input=True)}
 
     @staticmethod
-    def has_weights() -> bool:
-        """IdentityNode has no learnable weights."""
-        return False
+    def get_weight_fan_in(source_shape: Tuple[int, ...], config: Dict[str, Any]) -> int:
+        """Return fan_in for muPC scaling.
+
+        IdentityNode has no weight matrix — inputs are summed directly.
+        Returning fan_in=1 means the unified scaling formula a=1/sqrt(fan_in*K)
+        reduces to a=1/sqrt(K), which compensates only for multi-edge
+        summation variance amplification.
+        """
+        return 1
 
     @staticmethod
     def initialize_params(
@@ -113,7 +119,7 @@ class IdentityNode(NodeBase):
         """
         Identity forward pass: sum inputs and pass through.
 
-        For source nodes (no inputs), z_mu equals z_latent.
+        For terminal input nodes (in_degree=0), z_mu equals z_latent.
         For nodes with inputs, z_mu is the sum of all inputs.
 
         Args:

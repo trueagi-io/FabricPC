@@ -288,34 +288,9 @@ At higher values, hopfield_strength = 50, there is less degradation when the pro
   NormClip 0.1                  0.9047
   NormClip 1.0                  0.9040
   50 infer steps                0.8983
-  
-  ## Revise node design to be convex in energy weighting
-  Changes Made                                                                                                                                                                                                                                                                                             
-                                                                                                                                                                                                                                                                                                           
-  Core: fabricpc/nodes/storkey_hopfield.py                                                                                                                                                                                                                                                                 
-                                                                                                                                                                                                                                                                                                           
-  - Energy formulation: E_total = E_pc + s*E_hop → E_total = (1-s)*E_pc + s*E_hop (convex combination)                                                                                                                                                                                                     
-  - inverse_softplus → inverse_sigmoid: log(x/(1-x)) for initializing raw params to a target in (0, 1)                                                                                                                                                                                                     
-  - Learnable init: inverse_softplus(1.0) → inverse_sigmoid(0.5) — starts at equal weight (sigmoid(0) = 0.5)                                                                                                                                                                                               
-  - Constraint: softplus (unbounded) → sigmoid (bounded [0, 1])                                                                                                                                                                                                                                            
-  - Forward: After energy_functional(), scales PC energy/grad by (1-s) before accumulating Hopfield energy scaled by s                                                                                                                                                                                     
-  - Default fixed fallback: 1.0 → 0.5                                                                                                                                                                                                                                                                      
-                                                                                                                                                                                                                                                                                                           
-  Test: tests/test_storkey_hopfield.py                                                                                                                                                                                                                                                                     
-                                                                                                                                                                                                                                                                                                           
-  - Fixed hopfield_strength=2.0 → 0.8 in the fixed-strength config test                                                                                                                                                                                                                                    
-                                                                                                                                                                                                                                                                                                           
-  Examples                                                                                                                                                                                                                                                                                                 
-                                                                                                                                                                                                                                                                                                           
-  - storkey_hopfield_demo.py: Import inverse_sigmoid, default strength 0.5, sweep [0..1], sigmoid in _get_learned_strength                                                                                                                                                                                 
-  - storkey_hopfield_recall.py: Strength values clamped to [0, 1] (binary: 0.8, MNIST: 0.9)                                                                                                                                                                                                                
-  - storkey_hopfield_diagnostic.py:                                                                                                                                                                                                                                                                        
-    - All softplus → sigmoid in ablation subclasses                                                                                                                                                                                                                                                        
-    - Added (1-s) PC scaling to each ablation's forward                                                                                                                                                                                                                                                    
-    - Added new StorkeyHopfieldStopGradEnergy ablation (wraps s*E_hop in stop_gradient)                                                                                                                                                                                                                    
-    - Phase 1 sweep: [0..1] range; Phase 4 STRENGTH=0.8        
 
-# Hopfield Node Improves Accruracy on Noisy Data
+
+# Hopfield Node Improves Accuracy on Noisy Data
 ======================================================================
 RESULTS SUMMARY
 ======================================================================
@@ -380,3 +355,23 @@ Experiment table:
    500      1.5 70.63+/-0.26 67.57+/-0.32      +3.06     0.0000     *    3.292
    500      2.0 64.19+/-0.32 59.99+/-0.37      +4.20     0.0000     *    3.931
 ------------------------------------------------------------------------------
+
+Holding the data scarcity and noise fixed, sweeping hopfield strength:
+=====================================================================================
+STRENGTH SWEEP SUMMARY
+=====================================================================================
+  K=50, noise_std=2.0, Trials: 10, Epochs: 5
+
+Strength        Hopfield%         MLP%     Delta%    p-value   Sig        d    Learned
+──────────────────────────────────────────────────────────────────────────────────────
+0.0          65.27+/-0.32 58.17+/-0.19      +7.11     0.0000     *    8.695           
+0.1          65.25+/-0.31 58.17+/-0.19      +7.09     0.0000     *    8.712           
+0.5          65.30+/-0.29 58.17+/-0.19      +7.13     0.0000     *    9.268           
+1.0          65.28+/-0.28 58.17+/-0.19      +7.12     0.0000     *    9.157           
+2.0          65.33+/-0.25 58.17+/-0.19      +7.17     0.0000     *   10.530           
+4.0          65.32+/-0.24 58.17+/-0.19      +7.15     0.0000     *    9.991           
+8.0          65.20+/-0.22 58.17+/-0.19      +7.04     0.0000     *   11.105           
+32.0         63.58+/-0.31 58.17+/-0.19      +5.42     0.0000     *    5.303           
+learnable    65.28+/-0.28 58.17+/-0.19      +7.12     0.0000     *    9.175      0.977
+──────────────────────────────────────────────────────────────────────────────────────
+It's suspiciously flat response to strength.

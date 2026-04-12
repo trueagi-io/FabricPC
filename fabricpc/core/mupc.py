@@ -3,37 +3,39 @@ muPC (Maximal Update Parameterization for Predictive Coding) scaling computation
 
 This module computes per-node scaling factors that maintain O(1) variance of
 activations, prediction errors, and gradients across networks of arbitrary
-width and depth. Based on:
+width and topology. Based on:
 
   - Depth-muP (Yang et al.) — width+depth scaling for deep networks
   - muPC (Innocenti et al., arXiv:2505.13124) — adaptation to predictive coding
 
-Per-edge scaling for arbitrary graph topologies:
+Forward scaling uses a unified per-edge formula:
 
-  1. Forward scaling (a_l per edge): maintains O(1) activation variance
-  2. Self-gradient scaling (c_self per node): placeholder (1.0), controls dE/dz_self magnitude
-  3. Top-down gradient scaling (c_td per edge): placeholder (1.0), normalizes W^T * epsilon
-  4. Weight gradient scaling (c_w per edge): placeholder (1.0), controls dE/dW magnitude
+    a_k = 1 / sqrt(fan_in_k * K)
 
-Forward scaling uses weight-matrix fan_in (Kaiming convention) via each
-node class's get_weight_fan_in() method, not the total source tensor size.
+where fan_in_k is the weight-matrix fan_in (from get_weight_fan_in()) and
+K is the node's in-degree. Weightless nodes (e.g. IdentityNode) return
+fan_in=1, so the formula reduces to a=1/sqrt(K) — compensating only for
+multi-edge summation variance amplification.
+
+Additional scaling placeholders (all 1.0 for now):
+  - Self-gradient scaling (c_self per node): controls dE/dz_self magnitude
+  - Top-down gradient scaling (c_td per edge): normalizes W^T * epsilon
+  - Weight gradient scaling (c_w per edge): controls dE/dW magnitude
 
 Usage:
     from fabricpc.core.mupc import MuPCConfig
-    from fabricpc.core.depth_metric import ShortestPathDepth
 
     structure = graph(
         nodes=[...], edges=[...], task_map=...,
         inference=InferenceSGD(...),
-        scaling=MuPCConfig(depth_metric=ShortestPathDepth()),
+        scaling=MuPCConfig(include_output=True),
     )
 """
 
 import math
-from typing import Dict, Any, Optional
-from dataclasses import dataclass, field
-
-from fabricpc.core.depth_metric import DepthMetricBase, ShortestPathDepth
+import warnings
+from typing import Dict, Any, Optional, List
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -68,73 +70,94 @@ class MuPCConfig:
     Pass this as the `scaling` argument to the graph() builder.
 
     Args:
-        depth_metric: DepthMetricBase instance for computing effective depth.
-            Default: ShortestPathDepth().
-        min_depth: Minimum effective depth used in scaling formulas.
-            Prevents division by zero and excessive scaling for shallow paths.
-            Default: 1.
         include_output: Whether to include output nodes (out_degree=0) in muPC
-            scaling. When True, output nodes get a = 1/fan_in (matching jpc
-            reference a_L = 1/N). When False (default), output nodes are
-            excluded and should use standard initialization (e.g., Xavier).
-            Use True with MSE/Gaussian energy; use False with softmax+CE.
+            scaling. When True, output nodes get a = 1/(fan_in * sqrt(K))
+            (matching jpc reference a_L = 1/N for K=1). When False (default),
+            output nodes are excluded and should use standard initialization
+            (e.g., Xavier). Use True with MSE/Gaussian energy; False with
+            softmax+CE.
+        terminal_input_variance: Assumed variance of terminal input node
+            outputs. Default 1.0. Not currently used in the simplified formula
+            (all scaled nodes produce O(1) output), but reserved for future
+            extensions with non-unit input variance.
     """
 
-    depth_metric: DepthMetricBase = field(default_factory=ShortestPathDepth)
-    min_depth: int = 1
     include_output: bool = False
+    terminal_input_variance: float = 1.0
+    # Deprecated: kept for backward compatibility
+    depth_metric: Optional[Any] = None
+    min_depth: Optional[int] = None
+
+    def __post_init__(self):
+        if self.depth_metric is not None:
+            warnings.warn(
+                "MuPCConfig.depth_metric is deprecated and ignored. "
+                "muPC scaling now uses a=1/sqrt(fan_in*K) based on graph "
+                "topology (in-degree K) instead of depth metrics.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        if self.min_depth is not None:
+            warnings.warn(
+                "MuPCConfig.min_depth is deprecated and ignored. "
+                "muPC scaling now uses a=1/sqrt(fan_in*K) based on graph "
+                "topology (in-degree K) instead of depth metrics.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
 
 
 def compute_mupc_scalings(
     nodes: Dict[str, Any],
     edges: Dict[str, Any],
     config: MuPCConfig,
+    node_order: Optional[List[str]] = None,
 ) -> Dict[str, MuPCScalingFactors]:
     """
     Compute per-node MuPCScalingFactors from graph topology.
 
-    All nodes with in-degree > 0 use forward scaling a = 1/sqrt(fan_in * L) where
-    fan_in is the weight-matrix fan_in (Kaiming convention) computed via
-    each node class's get_weight_fan_in() method, and L is the effective
-    depth from the depth metric.
+    Uses a unified forward scaling formula for all non-source nodes:
+
+        a_k = 1 / sqrt(fan_in_k * K)
+
+    where fan_in_k comes from each node class's get_weight_fan_in() method
+    (which returns 1 for weightless nodes like IdentityNode) and K is the
+    node's in-degree (number of input edges).
+
+    For output nodes (include_output=True):
+
+        a_k = 1 / (fan_in_k * sqrt(K))
 
     Args:
         nodes: Dictionary mapping node names to finalized NodeBase instances
                (each has .node_info with shape, in_edges, out_edges, etc.)
         edges: Dictionary mapping edge keys to EdgeInfo objects
-        config: MuPCConfig with depth metric and parameters.
+        config: MuPCConfig with scaling parameters.
+        node_order: Optional topological ordering of node names. If provided,
+                    nodes are processed in this order for determinism.
 
     Returns:
         Dictionary mapping node names to MuPCScalingFactors instances.
-        Terminal input nodes (in_degree=0) and weightless nodes get None.
-        Hidden nodes get a = 1/sqrt(fan_in * L).
-        Terminal output nodes (out_degree=0) get a = 1/fan_in when include_output=True, else None.
+        Terminal input nodes (in_degree=0) get None.
+        Terminal output nodes (out_degree=0) get None unless include_output=True.
     """
-    import numpy as np
-
-    # Compute effective depth for each node
-    depths = config.depth_metric.compute(nodes, edges)
-
     # Detect output nodes (out_degree=0).
     output_nodes = {
         name for name, node in nodes.items() if node.node_info.out_degree == 0
     }
 
+    # Use topological order if provided, otherwise iterate dict order
+    iteration_order = node_order if node_order is not None else nodes.keys()
+
     scalings = {}
 
-    for node_name, node in nodes.items():
+    for node_name in iteration_order:
+        node = nodes[node_name]
         node_info = node.node_info
         node_class = node_info.node_class
 
         # Terminal input nodes (in_degree=0): no scaling needed.
         if node_info.in_degree == 0:
-            scalings[node_name] = None
-            continue
-
-        # Weightless nodes (e.g. IdentityNode): no scaling needed.
-        # These nodes sum inputs without a weight matrix, so muPC forward
-        # scaling would add unintended damping at skip-connection junctions.
-        if not node_class.has_weights():
             scalings[node_name] = None
             continue
 
@@ -146,13 +169,8 @@ def compute_mupc_scalings(
             scalings[node_name] = None
             continue
 
-        effective_depth = max(depths.get(node_name, 1), config.min_depth)
-
-        # Retrieve node config for weight-matrix fan_in computation
+        K = node_info.in_degree
         node_config = node_info.node_config
-        fan_out = (
-            0  # TODO define node_class.get_weight_fan_out(source_shape, node_config)
-        )
 
         forward_scale = {}
         topdown_grad_scale = {}
@@ -163,23 +181,23 @@ def compute_mupc_scalings(
             source_node = nodes[edge_info.source]
             source_shape = source_node.node_info.shape
 
-            # Weight-matrix fan_in (Kaiming convention):
-            #   Linear (flatten): np.prod(source_shape)
-            #   Linear (per-pos): source_shape[-1]
-            #   Conv2D:           C_in * kH * kW
+            # Unified fan_in from node class. Weighted nodes return their
+            # weight-matrix fan_in (Kaiming convention); weightless nodes
+            # (e.g. IdentityNode) return 1.
             fan_in = node_class.get_weight_fan_in(source_shape, node_config)
 
-            # Forward scaling formula depends on node role:
+            # Forward scaling formula:
+            #   Hidden: a = 1/sqrt(fan_in * K)  — maintains O(1) pre-activation variance
+            #   Output: a = 1/(fan_in * sqrt(K)) — matches muPC O(1/N) convention
             if is_output:
-                # Output: a_L = 1/fan_in (matches jpc reference a_L = 1/N)
-                a = 1.0 / fan_in
+                a = 1.0 / (fan_in * math.sqrt(K))
             else:
-                # Hidden: a_l = 1/sqrt(fan_in * L)
-                # Maintains O(1) pre-activation variance at each hidden layer.
-                a = 1.0 / math.sqrt(fan_in * effective_depth)
+                a = 1.0 / math.sqrt(fan_in * K)
 
             forward_scale[edge_key] = a
 
+            # Keep this code as placeholder for future scaling of gradients
+            fan_out = 0  # TODO define node_class.get_weight_fan_out()
             # Top-down gradient scaling: c_td
             # Goal: normalize the gradient sent to presynaptic nodes to O(1).
             #

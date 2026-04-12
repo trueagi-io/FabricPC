@@ -186,7 +186,9 @@ def graph(
                 f"scaling must be a MuPCConfig instance, got {type(scaling)}"
             )
 
-        mupc_scalings = compute_mupc_scalings(finalized_nodes, edge_infos, scaling)
+        mupc_scalings = compute_mupc_scalings(
+            finalized_nodes, edge_infos, scaling, node_order
+        )
 
         # Attach scaling_config to each NodeInfo via copy-on-finalize
         updated_nodes = {}

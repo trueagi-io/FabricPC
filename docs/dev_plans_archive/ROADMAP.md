@@ -619,7 +619,7 @@ def ipc_inference_step(
 
         node_info = structure.nodes[node_name]
         if node_info.in_degree == 0:
-            continue  # Skip source nodes
+            continue  # Skip terminal input nodes
 
         # Get node class and gather inputs
         node_class = get_node_class(node_info.node_type)
@@ -789,7 +789,7 @@ def scheduled_inference_step(
     for node_name in structure.nodes:
         node_info = structure.nodes[node_name]
         if node_info.in_degree == 0:
-            continue  # Skip source nodes
+            continue  # Skip terminal input nodes
 
         node_class = get_node_class(node_info.node_type)
         in_edges_data = gather_inputs(node_info, structure, state)

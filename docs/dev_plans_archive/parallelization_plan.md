@@ -32,7 +32,7 @@ This creates a scaling bottleneck.
          latent_grad = state.nodes[source_name].latent_grad
          latent_grad = latent_grad + grad  # Accumulation dependency
      ```
-   - Gradients flow backward locally to direct source nodes, requiring careful handling
+   - Gradients flow backward locally to direct pre-synaptic nodes, requiring careful handling
 
 ---
 
@@ -186,7 +186,7 @@ Rationale: Maintains existing `jax.lax.fori_loop` structure, easier to debug, an
 all_node_states, all_inedge_grads = vmap(node_forward)(...)
 # all_inedge_grads: (num_nodes, ...) - one gradient dict per node
 
-# After vmap: accumulate gradients per source node
+# After vmap: accumulate gradients per pre-synaptic node
 accumulated_grads = {}
 for node_idx, node_name in enumerate(group.node_names):
     for edge_key, grad in all_inedge_grads[node_idx].items():
@@ -433,7 +433,7 @@ def compute_local_weight_gradients_parallel(
     gradients = {}
 
     for group in structure.node_groups:
-        # Skip source nodes (no weights)
+        # Skip terminal input nodes (no weights)
         if structure.nodes[group.node_names[0]].in_degree == 0:
             for node_name in group.node_names:
                 gradients[node_name] = NodeParams(weights={}, biases={})

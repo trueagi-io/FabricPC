@@ -334,15 +334,6 @@ class NodeBase(ABC):
         # Typically nodes operate on the last (feature dimension)
         return source_shape[-1]
 
-    @staticmethod
-    def has_weights() -> bool:
-        """Whether this node type has learnable weight parameters.
-
-        Nodes without weights (e.g. IdentityNode) are excluded from muPC
-        forward scaling since they have no weight matrix to compensate for.
-        """
-        return True
-
     # =========================================================================
     # Default implementations - can be overridden for explicit gradients
     # =========================================================================
