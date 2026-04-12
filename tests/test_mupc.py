@@ -236,14 +236,14 @@ class TestMuPCScalingComputation:
         actual_a = scaling.forward_scale[edge_key]
         assert abs(actual_a - expected_a) < 1e-10
 
-    def test_topdown_grad_scale_disabled(self, linear_chain_with_mupc):
-        """Top-down gradient scale is 1.0 (disabled, matches jpc reference)."""
+    def test_topdown_grad_scale_equals_forward_scale(self, linear_chain_with_mupc):
+        """Top-down gradient scale equals forward scale (chain rule correction)."""
         structure = linear_chain_with_mupc
         h_info = structure.nodes["h"].node_info
         scaling = h_info.scaling_config
 
         edge_key = h_info.in_edges[0]
-        assert scaling.topdown_grad_scale[edge_key] == 1.0
+        assert scaling.topdown_grad_scale[edge_key] == scaling.forward_scale[edge_key]
 
     def test_self_grad_scale_default(self, linear_chain_with_mupc):
         """Self-gradient scale defaults to 1.0."""

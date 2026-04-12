@@ -281,3 +281,28 @@ Core formula change: a = 1/sqrt(fan_in * K)
                                                                                                                                                                                                                                                                                                            
   The scaling fix eliminated factorial variance collapse. The 20-layer network now has non-zero energy (107.4 decreasing to 22.9 over 5 epochs) and non-zero gradients at all layers. However, accuracy remains at chance — deep PCN training has additional challenges beyond forward scaling (inference convergence, ReLU dying neurons through many layers). This is a separate research problem from the scaling bug.
   
+# Bug fixes and revisions
+
+  Root cause and fix                                                                                                                                                                                                                                                                                       
+                                                                                                                                                                                                                                                                                                           
+  The top-down gradient in forward_inference() was missing the forward scaling factor a due to applying scaling outside the value_and_grad closure. The autodiff computed dE/d(a*x) but the presynaptic node needs dE/dx = a * dE/d(a*x). Setting topdown_grad_scale = a (instead of the placeholder 1.0) restores the chain rule factor.
+                                                                                                                                                                                                                                                                                                           
+  Results                                                                                                                                                                                                                                                                                                  
+                                                                                                                                                                                                                                                                                                           
+  | Config              | Before fix    | After fix |                                                                                                                                                                                                                                                      
+  |---------------------|---------------|-----------|                                                                                                                                                                                                                                                      
+  | 2 hidden, 10 epochs | 91.6%         | 94.1%     |                                                                                                                                                                                                                                                      
+  | 20 hidden, 5 epochs | ~10% (chance) | 48.7%     |                                                                                                                                                                                                                                                      
+
+  The 20-layer plain chain still doesn't reach 93% because ReLU halves variance at each layer (Var(ReLU(z)) = 0.5 * Var(z)), causing activations to decay exponentially through depth. 
+  ReLU variance problem that would require either a gain factor in the scaling (He-style a = sqrt(2)/sqrt(fan_in))
+  
+  Changed demo from relu to tanh activation --> allowing greater depth
+
+  | Config               | Accuracy |                                                                                                                                                                                                                                                      
+  |----------------------|----------|                                                                                                                                                                                                                                                      
+  | 8 hidden, 4 epochs   | 91.6%    |
+  | 32 hidden, 4 epochs  | 56.4%    |
+  | 64 hidden, 4 epochs  | 21.0%    |
+
+  

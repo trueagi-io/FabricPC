@@ -26,6 +26,7 @@ Usage:
     python examples/mupc_mnist_demo.py --num_hidden 20 --hidden_dim 64
 """
 
+from fabricpc.core import TanhActivation, SoftmaxActivation, CrossEntropyEnergy
 from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
 
 set_jax_flags_before_importing_jax(jax_platforms="cuda")
@@ -38,7 +39,13 @@ import optax
 from fabricpc.nodes import Linear, IdentityNode
 from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.graph import initialize_params
-from fabricpc.core.activations import IdentityActivation, ReLUActivation
+from fabricpc.core.activations import (
+    IdentityActivation,
+    ReLUActivation,
+    SoftmaxActivation,
+    TanhActivation,
+)
+from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.core.inference import InferenceSGD
 from fabricpc.core.initializers import MuPCInitializer
 from fabricpc.core.mupc import MuPCConfig
@@ -53,32 +60,32 @@ def parse_args():
     parser.add_argument(
         "--num_epochs",
         type=int,
-        default=1,
+        default=4,
         help="Training epochs (default: 1)",
     )
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=64,
+        default=256,
         help="Batch size (default: 64, matches jpc reference)",
     )
     parser.add_argument(
         "--hidden_dim",
         type=int,
-        default=128,
+        default=64,
         help="Hidden layer width (default: 128, matches jpc reference)",
     )
     parser.add_argument(
         "--num_hidden",
         type=int,
-        default=20,
+        default=10,
         help="Number of hidden layers (default: 20)",
     )
     parser.add_argument(
         "--infer_steps",
         type=int,
         default=None,
-        help="Inference steps per sample (default: max(20, 3*(num_hidden+2)))",
+        help="Inference steps per sample (default: 4*(num_hidden+2))",
     )
     parser.add_argument(
         "--eta_infer",
@@ -116,7 +123,7 @@ def build_mupc_network(hidden_dim=128, num_hidden=2, infer_steps=None, eta_infer
         GraphStructure with muPC scaling.
     """
     if infer_steps is None:
-        infer_steps = max(20, 3 * (num_hidden + 2))
+        infer_steps = 4 * (num_hidden + 2)
     weight_init = MuPCInitializer()
 
     # Input
@@ -127,7 +134,7 @@ def build_mupc_network(hidden_dim=128, num_hidden=2, infer_steps=None, eta_infer
     for i in range(num_hidden):
         h = Linear(
             shape=(hidden_dim,),
-            activation=ReLUActivation(),
+            activation=TanhActivation(),
             weight_init=weight_init,
             flatten_input=(i == 0),  # First hidden flattens input
             name=f"h{i + 1}",
@@ -138,7 +145,8 @@ def build_mupc_network(hidden_dim=128, num_hidden=2, infer_steps=None, eta_infer
     # MuPCInitializer + include_output=True gives a_L = 1/fan_in.
     output = Linear(
         shape=(10,),
-        activation=IdentityActivation(),
+        activation=SoftmaxActivation(),
+        energy=CrossEntropyEnergy(),
         weight_init=weight_init,
         flatten_input=True,
         name="output",
@@ -159,7 +167,7 @@ def build_mupc_network(hidden_dim=128, num_hidden=2, infer_steps=None, eta_infer
         edges=all_edges,
         task_map=TaskMap(x=input_node, y=output),
         inference=InferenceSGD(eta_infer=eta_infer, infer_steps=infer_steps),
-        scaling=MuPCConfig(include_output=True),
+        scaling=MuPCConfig(include_output=False),
     )
 
     return structure

@@ -1,6 +1,7 @@
 """
 Storkey Hopfield associative memory node for predictive coding networks.
-Acts a filter selective for stored patterns in the latent space, with energy-based learning of attractors.
+Acts as a filter selective for stored patterns in the latent space, with
+energy-based learning of attractors.
 
 Implements a Hopfield memory layer that combines standard PC prediction-error
 energy with a Hopfield attractor energy term. The Hopfield energy pulls the
@@ -12,9 +13,9 @@ Energy formulation:
     E_total = E_pc + hopfield_strength * E_hop
 
     E_pc = 0.5 ||z - mu||^2              (Gaussian, or user-specified)
-    E_hop = (1/2N) z^T (W^2 - W) z       (Hopfield attractor energy)
+    E_hop = (1/2D) z^T (W^2 - W) z       (Hopfield attractor energy)
 
-    where N = dimension of z (last axis) for scale-invariance.
+    where D = dimension of z (last axis) for scale-invariance.
 
 The standard PC energy path (via energy_functional()) is called normally.
 The Hopfield energy is added afterward via accumulate_hopfield_energy_and_grad(),
@@ -23,12 +24,28 @@ which augments state.energy and state.latent_grad.
 Attractor dynamics arise naturally from the Hopfield energy gradient
 (strength/D)(W^2 - W)z, which is accumulated to latent_grad and applied
 during PC inference (z -= eta * latent_grad). Since PC inference IS gradient
-descent on E_total, no explicit self-feedback recurrence is needed — the
-inference loop itself iterates z toward the attractors encoded in W.
+descent on E_total, the inference loop itself iterates z toward the
+attractors encoded in W.
 
-The input from the upstream node serves as a "probe pattern" — it seeds the
-prediction z_mu. The probe is also projected through W (probe @ W) so that
-W participates in the autodiff gradient flow and can learn via dE/dW.
+The input from the upstream node serves as a "probe pattern". The prediction
+z_mu is a strength-weighted blend of the probe (residual) and its projection
+through W:
+
+    z_mu = activation(probe / (1+s) + (probe @ W) * s / (1+s) + bias)
+
+where s = hopfield_strength. This ensures:
+    - At s=0: z_mu = activation(probe) — identity pass-through, W is unused.
+    - At s→large: z_mu = activation(probe @ W) — learned projection dominates.
+    - At moderate s: smooth interpolation; the residual provides the
+      information pathway while W specializes in attractor corrections.
+
+The residual is critical: without it, W must simultaneously serve as the sole
+information pathway (prediction) AND define the attractor landscape, and the
+prediction role dominates. The residual decouples these roles, allowing W to
+develop attractor structure that provides a denoising benefit at moderate
+strength (inverted-U response to strength).
+
+Use moderate values for hopfield_strength (s) because it scales the hopfield energy term without normalization.
 
 Notation:
     xi^mu = stored Hopfield patterns (absolute states in z-space)
@@ -38,13 +55,15 @@ Notation:
 
 Architecture (internal to forward()):
 
-    probe ----> probe @ W ---- bias ----> activation ----> z_mu
+    probe --+--> probe / (1+s) ------+--> + bias --> activation --> z_mu
+            |                        |
+            +--> (probe @ W) * s/(1+s)
 
-    error = z - z_mu ----> PC energy (E_pc) ---->  z_latent ----> Hopfield energy (E_hop)
-                                                       ^              |
-                                                       |______________|
+    error = z - z_mu --> PC energy (E_pc) -->  z_latent --> Hopfield energy (E_hop)
+                                                   ^              |
+                                                   |______________|
 
-Recurrency comes from the Hopfield energy gradient during inference steps, not from explicit self-feedback in the pre-activation.
+Recurrency comes from the Hopfield energy gradient during inference steps.
 """
 
 from __future__ import annotations
@@ -90,10 +109,13 @@ class StorkeyHopfield(NodeBase):
     - E_pc pulls z toward the upstream prediction mu
     - E_hop pulls z toward stored patterns (attractors learned via W)
 
-    The forward pass computes: z_mu = activation(probe @ W + bias).
-    Attractor dynamics come from the Hopfield energy gradient accumulated to
-    latent_grad during forward(), which the PC inference loop applies via
-    z -= eta * latent_grad. W is a (D, D) matrix on the last axis of z_latent.
+    The forward pass computes z_mu as a strength-weighted blend:
+        z_mu = activation(probe/(1+s) + (probe @ W)*s/(1+s) + bias)
+    where s = hopfield_strength. At s=0 this is a pure pass-through; at
+    large s the learned projection probe @ W dominates. Attractor dynamics
+    come from the Hopfield energy gradient accumulated to latent_grad during
+    forward(), which the PC inference loop applies via z -= eta * latent_grad.
+    W is a (D, D) matrix on the last axis of z_latent.
 
     Args:
         shape: Output shape (excluding batch). Last dim is the Hopfield dimension D.
@@ -226,7 +248,7 @@ class StorkeyHopfield(NodeBase):
         W: jnp.ndarray,
         strength: jax.Array,
     ) -> NodeState:
-        """Add Hopfield attractor energy E = (1/2N) z^T (W^2 - W) z to state.
+        """Add Hopfield attractor energy E = (1/2D) z^T (W^2 - W) z to state.
 
         The Hopfield energy pulls z toward stored patterns (attractors in
         z-space). Combined with the PC energy (which pulls z toward the
@@ -244,8 +266,8 @@ class StorkeyHopfield(NodeBase):
         z = state.z_latent  # (batch, ..., D)
         wz = z @ W  # (batch, ..., D)
         D = z.shape[-1]
-        E_hopfield = (0.5 / D) * jnp.sum(wz * (wz - z), axis=-1)  # (1/2N) z^T(W^2-W)z
-        hopfield_grad = (1.0 / D) * (wz @ W - wz)  # (1/N)(W^2-W)z
+        E_hopfield = (0.5 / D) * jnp.sum(wz * (wz - z), axis=-1)  # (1/2D) z^T(W^2-W)z
+        hopfield_grad = (1.0 / D) * (wz @ W - wz)  # (1/D)(W^2-W)z
         return state._replace(
             energy=state.energy + strength * E_hopfield,
             latent_grad=state.latent_grad + strength * hopfield_grad,
@@ -261,13 +283,15 @@ class StorkeyHopfield(NodeBase):
         """
         Forward pass: compute z_mu from probe, then combined energy.
 
-        z_mu = activation(probe @ W + bias)
+        z_mu = activation(probe/(1+s) + (probe @ W)*s/(1+s) + bias)
 
-        Energy = E_pc(z, z_mu) + hopfield_strength * E_hop(W, z)
+        where s = hopfield_strength. At s=0 z_mu = activation(probe)
+        (identity pass-through); at large s z_mu ≈ activation(probe @ W).
+
+        Energy = E_pc(z, z_mu) + s * E_hop(W, z)
 
         Attractor dynamics are provided by the Hopfield energy gradient
-        (strength/D)(W^2 - W)z accumulated to latent_grad, not by
-        explicit self-feedback in the pre-activation.
+        (s/D)(W^2 - W)z accumulated to latent_grad.
         """
         config = node_info.node_config
         batch_size = state.z_latent.shape[0]
@@ -286,10 +310,13 @@ class StorkeyHopfield(NodeBase):
         else:
             strength = config.get("hopfield_strength", 1.0)
 
-        pre_activation = jnp.zeros((batch_size,) + out_shape)
-        # Projection through W: links W to the autodiff gradient flow so that
-        # dE/dW is non-zero and W can learn associative structure.
-        pre_activation = pre_activation + (input_probe_state @ W)
+        # Strength-weighted blend: probe/(1+s) + (probe @ W)*s/(1+s).
+        # Residual (probe) provides the information pathway; W specializes
+        # in attractor corrections. At strength=0 this is pure pass-through.
+        blend = 1.0 / (1.0 + strength)
+        pre_activation = input_probe_state * blend + (input_probe_state @ W) * (
+            1.0 - blend
+        )
 
         # Add bias
         if "b" in params.biases and params.biases["b"].size > 0:

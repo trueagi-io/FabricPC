@@ -441,9 +441,10 @@ class NodeBase(ABC):
             )(params, scaled_inputs, state, node_info)
 
             # Apply muPC top-down gradient scaling per edge.
-            # topdown_grad_scale = 1/(a * sqrt(fan_out)) normalizes the
-            # autodiff gradient dE/d(a*x) to O(1) for the presynaptic
-            # latent update (see derivation in mupc.py).
+            # topdown_grad_scale = a (the forward scaling factor) restores
+            # the chain rule factor: dE/dx = a * dE/d(a*x). Without this,
+            # each hop drops the gradient by a, causing exponential vanishing
+            # in deep networks (see derivation in mupc.py).
             if node_info.scaling_config is not None:
                 input_grads = {
                     edge_key: grad
