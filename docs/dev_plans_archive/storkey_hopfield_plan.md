@@ -6,16 +6,6 @@ A Hopfield associative memory node (`StorkeyHopfield`) for FabricPC's predictive
 
 ## Architecture
 
-```
-    probe ------+
-                |
-                v
-              [sum] + [strength * (z_latent @ W)] + bias ----> tanh ----> z_mu
-                                    ^
-                              Hopfield recurrence
-                              (pseudo self-connection)
-```
-
 - **Single input edge** (`is_multi_input=False`) — the input is a probe pattern
 - **One W matrix** (D, D) — used only for the Hopfield recurrence, stored under the edge key in `params.weights`
 - **`input_dim == D` required** — probe must match Hopfield dimension (direct addition, no projection)
@@ -119,7 +109,7 @@ W is stored as `params.weights[edge_key]` (not as a separate `_hopfield_W` key).
 
 **Inference** (`forward_inference`, argnums=1 → inputs):
 - `d(total_energy)/d(probe)` flows through the identity addition `pre_act = probe + ...` → nonzero gradient
-- This gradient is accumulated to the source node's `latent_grad` in `forward_value_and_grad()`
+- This gradient is accumulated to the pre-synaptic node's `latent_grad` in `forward_value_and_grad()`
 - Source node's z_latent updates during inference
 
 **Learning** (`forward_learning`, argnums=0 → params):
@@ -178,3 +168,47 @@ Uses `ABExperiment` with `ExperimentArm` for each model, `MnistLoader` with `ten
 | `tests/test_storkey_hopfield.py` — 15 tests | Done |
 | `examples/storkey_hopfield_demo.py` — A/B MNIST demo | Done |
 | Full test suite — 96/96 passing | Done |
+
+
+# Revisions to plan based on integration test experience
+                                                                                                                                                                                                                                                                                                           
+  Changes made
+  - Removed the probe passthrough addition to pre-activation
+  - Removed the redundant recurrency of z_latent in the pre-activation.
+
+New architecture:
+    probe ----> probe @ W ---- bias ----> activation ----> z_mu
+
+    error = z - z_mu ----> PC energy (E_pc) ---->  z_latent ----> Hopfield energy (E_hop)
+                                                       ^              |
+                                                       |______________|
+
+  Recurrency comes from the Hopfield energy gradient during inference steps, not from explicit self-feedback in the pre-activation.
+                                                                                                                                                                                                                                                                                                           
+  examples/storkey_hopfield_demo.py — Replaced entirely with the fewshot grid sweep content. This is now the primary showcase: a K x noise_std sweep on Fashion-MNIST comparing Hopfield vs MLP, producing a delta heatmap with significance markers and win counts. Updated docstring to frame it as the main demo.
+                                                                                                                                                                                                                                                                                                           
+  examples/storkey_hopfield_diagnostic.py — Rewritten (1158 → 1004 lines):                                                                                                                                                                                                                                 
+  - Removed: Phase 4 (all 5 ablation subclasses + runner), create_ablation_model, create_hopfield_model_with_inference, InferenceSGDNormClip import                                                                                                                                                        
+  - Added: make_hopfield_factory, make_data_factory, _make_train_loader, _make_test_loader, _get_learned_strength helpers; ABExperiment imports                                                                                                                                                            
+  - Phase 1 rewritten: Now a proper ABExperiment-based strength sweep under K=50, noise=2.0 with paired t-tests, Cohen's d, and significance markers. Default phase.                                                                                                                                       
+  - Phases 2, 3, 5: Switched from MnistLoader to Fashion-MNIST FewShotLoader + NoisyTestLoader at K=50/noise=2.0                                                                                                                                                                                           
+  - custom_train_loop / custom_train_loop_with_snapshots: Fixed to loop over the loader multiple times (K=50 only yields ~7 batches per epoch, but phases need 50 batches)                                                                                                                                 
+  - Phase 3: snapshot_every reduced from 25 to 5, max_batches set to 50 explicitly                                                                                                                                                                                                                         
+  - CLI: --phase default changed to "1", removed "4" choice, added --n_trials and --num_epochs                                                                                                                                                                                                             
+                                                                                                                                                                                                                                                                                                           
+  examples/storkey_hopfield_fewshot.py — Deleted (absorbed into demo)                                                                                                                                                                                                                                      
+                                                                                                                                                                                                                                                                                                           
+  examples/storkey_hopfield_recall.py — No changes 
+  
+
+  fabricpc/nodes/storkey_hopfield.py — 4 edits:                                                                                                                                                                                                                                                            
+                                                                                                                                                                                                                                                                                                           
+  1. Line 61: Added XavierInitializer to imports                                                                                                                                                                                                                                                           
+  2. Line 89: Fixed class docstring: activation(probe + probe @ W + bias) → activation(probe @ W + bias)                                                                                                                                                                                                   
+  3. Line 105: Updated weight_init docstring to reference XavierInitializer()                                                                                                                                                                                                                              
+  4. Line 120: Changed default from ZerosInitializer() → XavierInitializer()                                                                                                                                                                                                                               
+  5. Line 260: Fixed forward() docstring: same stale probe reference removed                                                                                                                                                                                                                               
+                                                                                                                                                                                                                                                                                                           
+  Results:                                                                                                                                                                                                                                                                                                 
+  - All 15 tests in test_storkey_hopfield.py pass (including the previously failing test_full_inference_and_training_step)                                                                                                                                                                                 
+  - Diagnostic Phase 1 now shows a clear strength-dependent response: best performance at low strength (0.0–1.0), degrading at high strength (8.0+, with 32.0 at -12.5%), and the learnable parameter converging to ~1.0  

@@ -43,7 +43,7 @@ fabricpc/utils/dashboarding/
 ### 2.2 Metric Extractors (`extractors.py`)
 Pure functions for JAX-compatible metric extraction:
 - `extract_node_energies(state)` - Per-node energy arrays
-- `extract_total_energy(state, structure)` - Sum of non-source node energies
+- `extract_total_energy(state, structure)` - Sum of node energies where node in_degree>0
 - `extract_latent_statistics(state, nodes)` - mean, std, min, max per node
 - `extract_weight_statistics(params, nodes)` - Weight matrix stats per edge
 - `extract_error_statistics(state)` - Prediction error stats

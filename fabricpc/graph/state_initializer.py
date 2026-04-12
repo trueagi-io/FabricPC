@@ -204,7 +204,7 @@ class FeedforwardStateInit(StateInitBase):
     """
     Initialize states via feedforward propagation through the network.
 
-    1. Initialize source nodes and recurrency nodes with fallback to node's configured initializer
+    1. Initialize terminal input nodes (in_degree=0) and recurrency nodes with fallback to node's configured initializer
     2. Process nodes in topological order
     3. For each node, compute z_mu via forward pass and set z_latent = z_mu
     4. Clamps override computed values

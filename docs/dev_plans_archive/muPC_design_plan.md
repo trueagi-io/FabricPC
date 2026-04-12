@@ -329,17 +329,17 @@ class DepthMetricBase(ABC):
         """Returns {node_name: effective_depth}."""
 
 class ShortestPathDepth(DepthMetricBase):
-    """Effective depth = shortest path from any source node (BFS)."""
+    """Effective depth = shortest path from any terminal input node (BFS)."""
 
 class LongestPathDepth(DepthMetricBase):
-    """Effective depth = longest path from any source node (DAG DP)."""
+    """Effective depth = longest path from any terminal input node (DAG DP)."""
 
 class FixedDepth(DepthMetricBase):
     """User-specified fixed depth for all nodes."""
     def __init__(self, depth: int): ...
 ```
 
-Implementation: BFS from all source nodes (in_degree=0), tracking min/max distance. The graph builder already does topological sort, so this integrates naturally.
+Implementation: BFS from all terminal input nodes (in_degree=0), tracking min/max distance. The graph builder already does topological sort, so this integrates naturally.
 
 ### Step 2: MuPC Scaling Computation — `fabricpc/core/mupc.py`
 
@@ -611,9 +611,9 @@ Implementation Summary
                                                                                                                                                                                                                              
   - fabricpc/core/depth_metric.py — Extensible depth computation for arbitrary graphs                                                                                                                                        
     - DepthMetricBase (abstract): base class for custom depth metrics                                                                                                                                                        
-    - ShortestPathDepth: BFS-based minimum distance from source nodes                                                                                                                                                        
-    - LongestPathDepth: DAG DP-based maximum distance from source nodes                                                                                                                                                      
-    - FixedDepth: user-specified constant depth for all non-source nodes                                                                                                                                                     
+    - ShortestPathDepth: BFS-based minimum distance from terminal input nodes                                                                                                                                                        
+    - LongestPathDepth: DAG DP-based maximum distance from terminal input nodes                                                                                                                                                      
+    - FixedDepth: user-specified constant depth for all nodes with in_degree>0                                                                                                                                                     
   - fabricpc/core/mupc.py — Core muPC scaling computation                                                                                                                                                                    
     - MuPCScaling: frozen dataclass holding per-node scaling factors (forward_scale, self_grad_scale, topdown_grad_scale, weight_grad_scale — all per-edge except self_grad)                                                 
     - MuPCConfig: configuration passed to graph() builder                                                                                                                                                                    
@@ -777,4 +777,20 @@ Comparison of our mupc_demo.py against the jpc reference implementation (https:/
                                                                                                                                                                                                                                                                                                            
   - Before: Energy flat, 1.0% accuracy (chance), all weight gradients = 0.0                                                                                                                                                                                                                                
   - After: Energy decreasing (73 → 2.9 → 2.2 → 0.5 → 0.35), 4.31% accuracy (4x above chance after just 5 epochs)                                                                                                                                                                                           
-  - All 120 tests pass                                                                                         
+  - All 120 tests pass 
+
+# Revisions to plan
+Based on new insights from debugging several demos, the muPC is a brittle heuristic tied to resnet-like architectures. Instead, we should have variance scaling responsive to arbitrary graph topology.
+
+## Principled muPC Forward Scaling via Variance Propagation                                                                                                                                                                                                                                                  
+                                                                                                                                                                                                                                                                                                           
+ Problem                                                                                                                                                                                                                                                                                                   
+                                                                                                                                                                                                                                                                                                           
+ mupc_mnist_demo.py --num_hidden=20 produces 9.8% (chance) accuracy. With --num_hidden=2 it achieves 91.6%. The root cause: the current depth-based scaling formula a = 1/sqrt(fan_in * L) uses a heuristic depth metric that doesn't properly model why variance grows in different graph topologies.     
+                                                                                                                                                                                                                                                                                                           
+ Root Cause: Depth is a proxy for summation amplification                                                                                                                                                                                                                                                  
+                                                                                                                                                                                                                                                                                                           
+ The jpc reference's 1/sqrt(L) factor compensates for variance amplification from skip-connection summation in ResNets (z = a*W*phi(z) + z_skip). In a chain without skip connections, there's no summation amplification — the depth factor adds unnecessary damping that cascades, causing Var ∝ 1/L!    
+ (factorial collapse).                                                                                                                                                                                                                                                                                     
+                                                                                                                                                                                                                                                                                                           
+ The principled fix: replace the heuristic depth metric with variance propagation through the graph.   

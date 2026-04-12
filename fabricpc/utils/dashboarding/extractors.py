@@ -31,7 +31,7 @@ def extract_total_energy(
     state: GraphState,
     structure: GraphStructure,
 ) -> float:
-    """Extract total energy (sum over non-source nodes).
+    """Extract total energy (sum over nodes with in_degree>0).
 
     Args:
         state: GraphState after inference.

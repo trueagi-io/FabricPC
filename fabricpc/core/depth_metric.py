@@ -22,7 +22,7 @@ class DepthMetricBase(ABC):
     """
     Abstract base class for computing effective depth of each node in a graph.
 
-    Effective depth is defined relative to source nodes (nodes with in_degree=0).
+    Effective depth is defined relative to terminal input (nodes with in_degree=0).
     Subclasses implement different strategies for measuring depth in arbitrary
     graph topologies.
     """
@@ -50,9 +50,9 @@ class DepthMetricBase(ABC):
 
 class ShortestPathDepth(DepthMetricBase):
     """
-    Effective depth = shortest path from any source node.
+    Effective depth = shortest path from any terminal input node.
 
-    Uses BFS from all source nodes simultaneously. This is the conservative
+    Uses BFS from all terminal input nodes simultaneously. This is the conservative
     choice: nodes reachable by a short path get a smaller depth, resulting
     in weaker damping. Suitable when short-circuit paths (skip connections)
     are the dominant signal pathway.
@@ -63,7 +63,7 @@ class ShortestPathDepth(DepthMetricBase):
     """
 
     def compute(self, nodes, edges):
-        # Find source nodes (in_degree=0)
+        # Find terminal input nodes (in_degree=0)
         sources = [
             name for name, node in nodes.items() if node.node_info.in_degree == 0
         ]
@@ -94,7 +94,7 @@ class ShortestPathDepth(DepthMetricBase):
 
 class LongestPathDepth(DepthMetricBase):
     """
-    Effective depth = longest path from any source node.
+    Effective depth = longest path from any terminal input node.
 
     Uses dynamic programming on the topological order. This is the aggressive
     choice: nodes get depth equal to their longest dependency chain, resulting
@@ -142,7 +142,7 @@ class FixedDepth(DepthMetricBase):
     depth factor in the scaling computation.
 
     Args:
-        depth: Fixed depth value applied to all non-source nodes.
+        depth: Fixed depth value applied to all nodes with in_degree > 0.
                Source nodes (in_degree=0) always get depth 0.
     """
 

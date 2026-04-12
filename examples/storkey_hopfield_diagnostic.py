@@ -1,20 +1,20 @@
 """
-StorkeyHopfield Diagnostic Script
-==================================
-Systematic debugging of Hopfield attractor dynamics in PC classification.
+StorkeyHopfield Diagnostic Tool
+================================
+Diagnostic investigation of Hopfield attractor dynamics in PC classification
+under few-shot + noise conditions (Fashion-MNIST, K=50, noise_std=2.0).
 
-Investigates why hopfield_strength=1.0 drops MNIST accuracy to ~14%
-while hopfield_strength=0.0 achieves ~93%.
-
-Five diagnostic phases:
-  Phase 1: Strength sweep — find the tipping point
+Four diagnostic phases:
+  Phase 1: Strength sweep — ABExperiment-based sweep of hopfield_strength
+           vs MLP control under K=50, noise=2.0 (default)
   Phase 2: Per-step inference dynamics — decompose gradient signals
   Phase 3: W matrix analysis — eigenvalue spectrum and evolution
-  Phase 4: Ablation experiments — isolate causal factors
   Phase 5: Latent distribution comparison — detect representation collapse
 
 Usage:
-    python examples/storkey_hopfield_diagnostic.py --phase 1
+    python examples/storkey_hopfield_diagnostic.py
+    python examples/storkey_hopfield_diagnostic.py --phase 1 --n_trials 5
+    python examples/storkey_hopfield_diagnostic.py --phase 2
     python examples/storkey_hopfield_diagnostic.py --phase all
 """
 
@@ -33,17 +33,19 @@ from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.graph import initialize_params
 from fabricpc.core.activations import SoftmaxActivation, TanhActivation
 from fabricpc.core.energy import CrossEntropyEnergy, GaussianEnergy
-from fabricpc.core.inference import (
-    InferenceSGD,
-    InferenceSGDNormClip,
-    gather_inputs,
-)
+from fabricpc.core.inference import InferenceSGD, gather_inputs, run_inference
 from fabricpc.core.initializers import XavierInitializer
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.training.train import train_step
 from fabricpc.graph.state_initializer import initialize_graph_state
 from fabricpc.utils.helpers import update_node_in_state
-from fabricpc.utils.data.dataloader import MnistLoader
+from fabricpc.utils.data.dataloader import (
+    FashionMnistLoader,
+    FewShotLoader,
+    NoisyTestLoader,
+)
+from fabricpc.experiments import ExperimentArm, ABExperiment
+from fabricpc.experiments.statistics import paired_ttest, cohens_d
 
 jax.config.update("jax_default_prng_impl", "threefry2x32")
 
@@ -52,116 +54,59 @@ jax.config.update("jax_default_prng_impl", "threefry2x32")
 # ============================================================================
 
 OPTIMIZER = optax.adamw(0.001, weight_decay=0.1)
-BATCH_SIZE = 200
+BATCH_SIZE = 64
+
+# Default few-shot conditions (where Hopfield advantage is strongest)
+DEFAULT_K = 50
+DEFAULT_NOISE = 2.0
+
+
+def make_hopfield_factory(hopfield_strength=None):
+    """Return a model factory closure with the given hopfield_strength."""
+
+    def create_hopfield_model(rng_key):
+        pixels = IdentityNode(shape=(784,), name="pixels")
+        hidden = Linear(
+            shape=(128,),
+            activation=TanhActivation(),
+            name="hidden",
+            weight_init=XavierInitializer(),
+        )
+        hopfield = StorkeyHopfield(
+            shape=(128,),
+            name="hopfield",
+            hopfield_strength=hopfield_strength,
+        )
+        output = Linear(
+            shape=(10,),
+            activation=SoftmaxActivation(),
+            energy=CrossEntropyEnergy(),
+            name="class",
+            weight_init=XavierInitializer(),
+        )
+        structure = graph(
+            nodes=[pixels, hidden, hopfield, output],
+            edges=[
+                Edge(source=pixels, target=hidden.slot("in")),
+                Edge(source=hidden, target=hopfield.slot("in")),
+                Edge(source=hopfield, target=output.slot("in")),
+            ],
+            task_map=TaskMap(x=pixels, y=output),
+            inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
+        )
+        params = initialize_params(structure, rng_key)
+        return params, structure
+
+    return create_hopfield_model
 
 
 def create_hopfield_model_with_strength(rng_key, strength_value):
     """Create PC model with StorkeyHopfield at a given fixed strength."""
-    pixels = IdentityNode(shape=(784,), name="pixels")
-    hidden = Linear(
-        shape=(128,),
-        activation=TanhActivation(),
-        name="hidden",
-        weight_init=XavierInitializer(),
-    )
-    hopfield = StorkeyHopfield(
-        shape=(128,),
-        name="hopfield",
-        hopfield_strength=strength_value,
-    )
-    output = Linear(
-        shape=(10,),
-        activation=SoftmaxActivation(),
-        energy=CrossEntropyEnergy(),
-        name="class",
-        weight_init=XavierInitializer(),
-    )
-    structure = graph(
-        nodes=[pixels, hidden, hopfield, output],
-        edges=[
-            Edge(source=pixels, target=hidden.slot("in")),
-            Edge(source=hidden, target=hopfield.slot("in")),
-            Edge(source=hopfield, target=output.slot("in")),
-        ],
-        task_map=TaskMap(x=pixels, y=output),
-        inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
-    )
-    params = initialize_params(structure, rng_key)
-    return params, structure
-
-
-def create_hopfield_model_with_inference(rng_key, strength_value, inference_obj):
-    """Create PC model with StorkeyHopfield and a custom inference object."""
-    pixels = IdentityNode(shape=(784,), name="pixels")
-    hidden = Linear(
-        shape=(128,),
-        activation=TanhActivation(),
-        name="hidden",
-        weight_init=XavierInitializer(),
-    )
-    hopfield = StorkeyHopfield(
-        shape=(128,),
-        name="hopfield",
-        hopfield_strength=strength_value,
-    )
-    output = Linear(
-        shape=(10,),
-        activation=SoftmaxActivation(),
-        energy=CrossEntropyEnergy(),
-        name="class",
-        weight_init=XavierInitializer(),
-    )
-    structure = graph(
-        nodes=[pixels, hidden, hopfield, output],
-        edges=[
-            Edge(source=pixels, target=hidden.slot("in")),
-            Edge(source=hidden, target=hopfield.slot("in")),
-            Edge(source=hopfield, target=output.slot("in")),
-        ],
-        task_map=TaskMap(x=pixels, y=output),
-        inference=inference_obj,
-    )
-    params = initialize_params(structure, rng_key)
-    return params, structure
-
-
-def create_ablation_model(rng_key, node_class, strength_value):
-    """Create model with a substituted StorkeyHopfield subclass."""
-    pixels = IdentityNode(shape=(784,), name="pixels")
-    hidden = Linear(
-        shape=(128,),
-        activation=TanhActivation(),
-        name="hidden",
-        weight_init=XavierInitializer(),
-    )
-    hopfield = node_class(
-        shape=(128,),
-        name="hopfield",
-        hopfield_strength=strength_value,
-    )
-    output = Linear(
-        shape=(10,),
-        activation=SoftmaxActivation(),
-        energy=CrossEntropyEnergy(),
-        name="class",
-        weight_init=XavierInitializer(),
-    )
-    structure = graph(
-        nodes=[pixels, hidden, hopfield, output],
-        edges=[
-            Edge(source=pixels, target=hidden.slot("in")),
-            Edge(source=hidden, target=hopfield.slot("in")),
-            Edge(source=hopfield, target=output.slot("in")),
-        ],
-        task_map=TaskMap(x=pixels, y=output),
-        inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
-    )
-    params = initialize_params(structure, rng_key)
-    return params, structure
+    return make_hopfield_factory(strength_value)(rng_key)
 
 
 def create_mlp_model(rng_key):
-    """Create standard MLP baseline (same as storkey_hopfield_demo.py)."""
+    """Create standard MLP baseline."""
     pixels = IdentityNode(shape=(784,), name="pixels")
     hidden1 = Linear(
         shape=(128,),
@@ -196,20 +141,97 @@ def create_mlp_model(rng_key):
     return params, structure
 
 
+def make_data_factory(k_per_class, noise_std, batch_size):
+    """Return a data_loader_factory(seed) for ABExperiment."""
+
+    def factory(seed):
+        train_loader = FewShotLoader(
+            dataset_name="fashion_mnist",
+            split="train",
+            k_per_class=k_per_class,
+            batch_size=batch_size,
+            num_classes=10,
+            shuffle=True,
+            seed=seed,
+            tensor_format="flat",
+            normalize_mean=0.2860,
+            normalize_std=0.3530,
+        )
+        base_test_loader = FashionMnistLoader(
+            split="test",
+            batch_size=batch_size,
+            shuffle=False,
+            tensor_format="flat",
+        )
+        test_loader = NoisyTestLoader(
+            base_loader=base_test_loader,
+            noise_std=noise_std,
+            seed=seed,
+        )
+        return train_loader, test_loader
+
+    return factory
+
+
+def _make_train_loader(seed=42):
+    """Create a FewShotLoader for Fashion-MNIST at default K/noise."""
+    return FewShotLoader(
+        dataset_name="fashion_mnist",
+        split="train",
+        k_per_class=DEFAULT_K,
+        batch_size=BATCH_SIZE,
+        num_classes=10,
+        shuffle=True,
+        seed=seed,
+        tensor_format="flat",
+        normalize_mean=0.2860,
+        normalize_std=0.3530,
+    )
+
+
+def _make_test_loader(seed=42):
+    """Create a NoisyTestLoader for Fashion-MNIST at default noise."""
+    base = FashionMnistLoader(
+        split="test",
+        batch_size=BATCH_SIZE,
+        shuffle=False,
+        tensor_format="flat",
+    )
+    return NoisyTestLoader(base_loader=base, noise_std=DEFAULT_NOISE, seed=seed)
+
+
+def _get_learned_strength(params, structure):
+    """Extract the effective hopfield_strength from trained params."""
+    for node_name, node_params in params.nodes.items():
+        if "hopfield_strength" in node_params.biases:
+            raw = node_params.biases["hopfield_strength"]
+            return float(jax.nn.softplus(raw))
+    return None
+
+
 def custom_train_loop(
-    params, structure, train_loader, optimizer, rng_key, max_batches=None
+    params, structure, train_loader, optimizer, rng_key, max_batches=50
 ):
-    """Minimal training loop returning params after N batches."""
+    """Minimal training loop returning params after N batches.
+
+    Loops over the loader multiple times if needed (important for small
+    few-shot loaders that may have fewer batches than max_batches).
+    """
     opt_state = optimizer.init(params)
     jit_train_step = jax.jit(
         lambda p, o, b, k: train_step(p, o, b, structure, optimizer, k)
     )
-    for batch_idx, batch_data in enumerate(train_loader):
-        if max_batches is not None and batch_idx >= max_batches:
-            break
-        batch = {"x": jnp.array(batch_data[0]), "y": jnp.array(batch_data[1])}
-        rng_key, subkey = jax.random.split(rng_key)
-        params, opt_state, energy, _ = jit_train_step(params, opt_state, batch, subkey)
+    batch_count = 0
+    while batch_count < max_batches:
+        for batch_data in train_loader:
+            if batch_count >= max_batches:
+                break
+            batch = {"x": jnp.array(batch_data[0]), "y": jnp.array(batch_data[1])}
+            rng_key, subkey = jax.random.split(rng_key)
+            params, opt_state, energy, _ = jit_train_step(
+                params, opt_state, batch, subkey
+            )
+            batch_count += 1
     return params
 
 
@@ -219,26 +241,34 @@ def custom_train_loop_with_snapshots(
     train_loader,
     optimizer,
     rng_key,
-    snapshot_every=25,
-    max_batches=None,
+    snapshot_every=5,
+    max_batches=50,
 ):
-    """Training loop that snapshots W matrix at regular intervals."""
+    """Training loop that snapshots W matrix at regular intervals.
+
+    Loops over the loader multiple times if needed.
+    """
     opt_state = optimizer.init(params)
     jit_train_step = jax.jit(
         lambda p, o, b, k: train_step(p, o, b, structure, optimizer, k)
     )
     w_snapshots = []
-    for batch_idx, batch_data in enumerate(train_loader):
-        if max_batches is not None and batch_idx >= max_batches:
-            break
-        batch = {"x": jnp.array(batch_data[0]), "y": jnp.array(batch_data[1])}
-        rng_key, subkey = jax.random.split(rng_key)
-        params, opt_state, energy, _ = jit_train_step(params, opt_state, batch, subkey)
-        if batch_idx % snapshot_every == 0:
-            analysis = analyze_W_matrix(params, structure)
-            analysis["batch"] = batch_idx
-            analysis["energy"] = float(energy)
-            w_snapshots.append(analysis)
+    batch_count = 0
+    while batch_count < max_batches:
+        for batch_data in train_loader:
+            if batch_count >= max_batches:
+                break
+            batch = {"x": jnp.array(batch_data[0]), "y": jnp.array(batch_data[1])}
+            rng_key, subkey = jax.random.split(rng_key)
+            params, opt_state, energy, _ = jit_train_step(
+                params, opt_state, batch, subkey
+            )
+            if batch_count % snapshot_every == 0:
+                analysis = analyze_W_matrix(params, structure)
+                analysis["batch"] = batch_count
+                analysis["energy"] = float(energy)
+                w_snapshots.append(analysis)
+            batch_count += 1
     return params, w_snapshots
 
 
@@ -256,71 +286,157 @@ def get_hopfield_node_name(structure):
 
 
 # ============================================================================
-# Phase 1: Hopfield Strength Sweep
+# Phase 1: Hopfield Strength Sweep (ABExperiment under K=50, noise=2.0)
 # ============================================================================
 
 
-def phase1_strength_sweep():
-    """Sweep hopfield_strength to find the accuracy tipping point."""
-    STRENGTHS = [0.0, 0.1, 0.5, 1, 2, 4, 8, 16, 32]
-    train_config = {"num_epochs": 1}
-    results = {}
+def phase1_strength_sweep(n_trials=10, num_epochs=5):
+    """Sweep hopfield_strength vs MLP baseline under K=50, noise=2.0.
+
+    Uses ABExperiment for paired statistical comparisons at each strength.
+    """
+    K = DEFAULT_K
+    NOISE_STD = DEFAULT_NOISE
+    STRENGTHS = [0.0, 0.1, 0.5, 1.0, 2.0, 4.0, 8.0, 32.0, None]
+
+    optimizer = optax.adamw(0.001, weight_decay=0.1)
+    train_config = {"num_epochs": num_epochs}
+
+    print("=" * 70)
+    print("Strength Sweep: Hopfield vs MLP")
+    print("=" * 70)
+    print(f"Dataset: Fashion-MNIST, K={K} shots/class, noise_std={NOISE_STD}")
+    print("Hopfield: 784 -> 128(tanh) -> 128(StorkeyHopfield, tanh) -> 10(softmax, CE)")
+    print("MLP:      784 -> 128(tanh) -> 128(tanh) -> 10(softmax, CE)")
+    print(f"Trials: {n_trials}, Epochs: {num_epochs}")
+    print(f"Strengths: {[s if s is not None else 'learnable' for s in STRENGTHS]}")
+    print()
+
+    arm_mlp = ExperimentArm(
+        name="MLP",
+        model_factory=create_mlp_model,
+        train_fn=train_pcn,
+        eval_fn=evaluate_pcn,
+        optimizer=optimizer,
+        train_config=train_config,
+    )
+
+    data_factory = make_data_factory(K, NOISE_STD, BATCH_SIZE)
+    sweep_results = []
 
     for s in STRENGTHS:
-        rng = jax.random.PRNGKey(42)
-        graph_key, train_key, eval_key = jax.random.split(rng, 3)
-        params, structure = create_hopfield_model_with_strength(graph_key, s)
+        label = "learnable" if s is None else f"{s}"
+        print(f"\n{'─'*70}")
+        print(f"  hopfield_strength = {label}")
+        print(f"{'─'*70}")
 
-        train_loader = MnistLoader(
-            "train",
-            batch_size=BATCH_SIZE,
-            tensor_format="flat",
-            shuffle=True,
-            seed=42,
-        )
-        test_loader = MnistLoader(
-            "test",
-            batch_size=BATCH_SIZE,
-            tensor_format="flat",
-            shuffle=False,
+        arm_hop = ExperimentArm(
+            name=f"Hop(s={label})",
+            model_factory=make_hopfield_factory(s),
+            train_fn=train_pcn,
+            eval_fn=evaluate_pcn,
+            optimizer=optimizer,
+            train_config=train_config,
         )
 
-        trained_params, energies, _ = train_pcn(
-            params,
-            structure,
-            train_loader,
-            OPTIMIZER,
-            train_config,
-            train_key,
+        experiment = ABExperiment(
+            arm_a=arm_hop,
+            arm_b=arm_mlp,
+            metric="accuracy",
+            data_loader_factory=data_factory,
+            n_trials=n_trials,
             verbose=False,
         )
-        metrics = evaluate_pcn(
-            trained_params,
-            structure,
-            test_loader,
-            train_config,
-            eval_key,
-        )
+        result = experiment.run()
 
-        last_energies = energies[0][-10:] if energies and energies[0] else [0.0]
-        avg_final_energy = sum(last_energies) / len(last_energies)
+        hop_acc = result.arm_a_metrics
+        mlp_acc = result.arm_b_metrics
+        delta = hop_acc - mlp_acc
 
-        results[s] = {
-            "accuracy": metrics["accuracy"],
-            "final_energy": float(avg_final_energy),
+        row = {
+            "strength": s,
+            "label": label,
+            "hop_mean": float(np.mean(hop_acc)),
+            "hop_se": (
+                float(np.std(hop_acc, ddof=1) / np.sqrt(len(hop_acc)))
+                if len(hop_acc) > 1
+                else 0.0
+            ),
+            "mlp_mean": float(np.mean(mlp_acc)),
+            "mlp_se": (
+                float(np.std(mlp_acc, ddof=1) / np.sqrt(len(mlp_acc)))
+                if len(mlp_acc) > 1
+                else 0.0
+            ),
+            "delta_mean": float(np.mean(delta)),
         }
+
+        if n_trials >= 2:
+            ttest = paired_ttest(hop_acc, mlp_acc)
+            effect = cohens_d(hop_acc, mlp_acc)
+            row["p_value"] = ttest.p_value
+            row["significant"] = ttest.significant_at_05
+            row["cohens_d"] = effect.d
+        else:
+            row["p_value"] = float("nan")
+            row["significant"] = False
+            row["cohens_d"] = float("nan")
+
+        # For learnable strength, extract the learned value
+        learned_str = None
+        if s is None:
+            key = jax.random.PRNGKey(42)
+            params, structure = make_hopfield_factory(None)(key)
+            train_loader, _ = data_factory(42)
+            params, _, _ = train_pcn(
+                params, structure, train_loader, optimizer, train_config, key
+            )
+            learned_str = _get_learned_strength(params, structure)
+
+        row["learned_str"] = learned_str
+        sweep_results.append(row)
+
+        p_str = f"{row['p_value']:.4f}" if not np.isnan(row["p_value"]) else "n/a"
+        sig = "*" if row.get("significant") else ""
         print(
-            f"  strength={s:<8.4f}  acc={metrics['accuracy']:.4f}  "
-            f"energy={avg_final_energy:.4f}"
+            f"  -> Hopfield: {row['hop_mean']*100:.2f}%  "
+            f"MLP: {row['mlp_mean']*100:.2f}%  "
+            f"Delta: {row['delta_mean']*100:+.2f}%  "
+            f"p={p_str} {sig}"
         )
 
-    print(f"\n{'='*55}")
-    print(f"{'Strength':<12} {'Accuracy':<12} {'Final Energy':<15}")
-    print(f"{'-'*55}")
-    for s in STRENGTHS:
-        r = results[s]
-        print(f"{s:<12.4f} {r['accuracy']:<12.4f} {r['final_energy']:<15.4f}")
-    return results
+    # Summary table
+    print("\n")
+    print("=" * 85)
+    print("STRENGTH SWEEP SUMMARY")
+    print("=" * 85)
+    print(f"  K={K}, noise_std={NOISE_STD}, Trials: {n_trials}, Epochs: {num_epochs}")
+    print()
+    header = (
+        f"{'Strength':<12} {'Hopfield%':>12} {'MLP%':>12} "
+        f"{'Delta%':>10} {'p-value':>10} {'Sig':>5} {'d':>8} {'Learned':>10}"
+    )
+    print(header)
+    print("─" * len(header))
+    for r in sweep_results:
+        hop_str = f"{r['hop_mean']*100:.2f}+/-{r['hop_se']*100:.2f}"
+        mlp_str = f"{r['mlp_mean']*100:.2f}+/-{r['mlp_se']*100:.2f}"
+        delta_str = f"{r['delta_mean']*100:+.2f}"
+        p_str = f"{r['p_value']:.4f}" if not np.isnan(r["p_value"]) else "n/a"
+        sig_str = "*" if r.get("significant") else ""
+        d_str = (
+            f"{r['cohens_d']:.3f}"
+            if not np.isnan(r.get("cohens_d", float("nan")))
+            else "n/a"
+        )
+        learned = f"{r['learned_str']:.3f}" if r["learned_str"] is not None else ""
+        print(
+            f"{r['label']:<12} {hop_str:>12} {mlp_str:>12} "
+            f"{delta_str:>10} {p_str:>10} {sig_str:>5} {d_str:>8} {learned:>10}"
+        )
+    print("─" * len(header))
+
+    return sweep_results
 
 
 # ============================================================================
@@ -361,7 +477,7 @@ def instrumented_forward_value_and_grad(params, state, clamps, structure):
         if node_name == hop_node_name:
             snapshots["after_hopfield_forward"] = state.nodes[hop_node_name].latent_grad
 
-        # Accumulate backward grads to source nodes
+        # Accumulate backward grads to pre-synaptic nodes
         for edge_key, grad in inedge_grads.items():
             source_name = structure.edges[edge_key].source
             latent_grad = state.nodes[source_name].latent_grad + grad
@@ -495,10 +611,10 @@ def run_diagnostic_inference(params, initial_state, clamps, structure, n_steps=2
 
 
 def phase2_inference_dynamics():
-    """Decompose gradient signals during inference for failing and working cases."""
+    """Decompose gradient signals during inference for s=1.0 and s=0.0."""
     for strength_label, strength_val in [
-        ("FAILING (s=1.0)", 1.0),
-        ("WORKING (s=0.0)", 0.0),
+        ("Hopfield s=1.0", 1.0),
+        ("Hopfield s=0.0 (baseline)", 0.0),
     ]:
         print(f"\n{'='*110}")
         print(f"  {strength_label}")
@@ -508,13 +624,7 @@ def phase2_inference_dynamics():
         graph_key, train_key, eval_key = jax.random.split(rng, 3)
         params, structure = create_hopfield_model_with_strength(graph_key, strength_val)
 
-        train_loader = MnistLoader(
-            "train",
-            batch_size=BATCH_SIZE,
-            tensor_format="flat",
-            shuffle=True,
-            seed=42,
-        )
+        train_loader = _make_train_loader(seed=42)
 
         # Train for 50 batches to get non-trivial W
         params = custom_train_loop(
@@ -527,12 +637,7 @@ def phase2_inference_dynamics():
         )
 
         # Take one test batch
-        test_loader = MnistLoader(
-            "test",
-            batch_size=BATCH_SIZE,
-            tensor_format="flat",
-            shuffle=False,
-        )
+        test_loader = _make_test_loader(seed=42)
         batch_data = next(iter(test_loader))
         batch = {"x": jnp.array(batch_data[0]), "y": jnp.array(batch_data[1])}
 
@@ -626,13 +731,7 @@ def phase3_W_analysis():
     graph_key, train_key = jax.random.split(rng)
     params, structure = create_hopfield_model_with_strength(graph_key, 1.0)
 
-    train_loader = MnistLoader(
-        "train",
-        batch_size=BATCH_SIZE,
-        tensor_format="flat",
-        shuffle=True,
-        seed=42,
-    )
+    train_loader = _make_train_loader(seed=42)
 
     params, w_trajectory = custom_train_loop_with_snapshots(
         params,
@@ -640,7 +739,8 @@ def phase3_W_analysis():
         train_loader,
         OPTIMIZER,
         train_key,
-        snapshot_every=25,
+        snapshot_every=5,
+        max_batches=50,
     )
 
     # Print trajectory
@@ -660,7 +760,7 @@ def phase3_W_analysis():
 
     # Final detailed analysis
     final = analyze_W_matrix(params, structure)
-    print(f"\nFinal W Analysis (after full epoch):")
+    print(f"\nFinal W Analysis (after training):")
     print(f"  Frobenius norm:        {final['W_frobenius']:.4f}")
     print(f"  Operator norm:         {final['W_operator_norm']:.4f}")
     print(
@@ -694,267 +794,12 @@ def phase3_W_analysis():
 
 
 # ============================================================================
-# Phase 4: Ablation Experiments — Subclass Definitions
-# ============================================================================
-
-
-class StorkeyHopfieldNoPassthrough(StorkeyHopfield):
-    """Ablation: Remove the direct probe passthrough from pre-activation."""
-
-    @staticmethod
-    def forward(params, inputs, state, node_info):
-        config = node_info.node_config
-        batch_size = state.z_latent.shape[0]
-        out_shape = node_info.shape
-        edge_key, input_probe_state = next(iter(inputs.items()))
-        W = StorkeyHopfield._prepare_W(params.weights[edge_key], config)
-
-        if "hopfield_strength" in params.biases:
-            strength = jax.nn.sigmoid(params.biases["hopfield_strength"])
-        else:
-            strength = config.get("hopfield_strength", 0.5)
-
-        pre_activation = jnp.zeros((batch_size,) + out_shape)
-        # ABLATED: no pre_activation += input_probe_state
-        pre_activation = pre_activation + (input_probe_state @ W)
-
-        if "b" in params.biases and params.biases["b"].size > 0:
-            pre_activation = pre_activation + params.biases["b"]
-
-        activation = node_info.activation
-        z_mu = type(activation).forward(pre_activation, activation.config)
-        error = state.z_latent - z_mu
-        state = state._replace(pre_activation=pre_activation, z_mu=z_mu, error=error)
-        node_class = node_info.node_class
-        state = node_class.energy_functional(state, node_info)
-        state = state._replace(
-            energy=(1 - strength) * state.energy,
-            latent_grad=(1 - strength) * state.latent_grad,
-        )
-        state = StorkeyHopfield.accumulate_hopfield_energy_and_grad(state, W, strength)
-        return jnp.sum(state.energy), state
-
-
-class StorkeyHopfieldNoProbeW(StorkeyHopfield):
-    """Ablation: Remove the input_probe_state @ W term from pre-activation."""
-
-    @staticmethod
-    def forward(params, inputs, state, node_info):
-        config = node_info.node_config
-        batch_size = state.z_latent.shape[0]
-        out_shape = node_info.shape
-        edge_key, input_probe_state = next(iter(inputs.items()))
-        W = StorkeyHopfield._prepare_W(params.weights[edge_key], config)
-
-        if "hopfield_strength" in params.biases:
-            strength = jax.nn.softplus(params.biases["hopfield_strength"])
-        else:
-            strength = config.get("hopfield_strength", 1.0)
-
-        pre_activation = jnp.zeros((batch_size,) + out_shape)
-        pre_activation = pre_activation + input_probe_state
-        # ABLATED: pre_activation += (input_probe_state @ W)
-
-        if "b" in params.biases and params.biases["b"].size > 0:
-            pre_activation = pre_activation + params.biases["b"]
-
-        activation = node_info.activation
-        z_mu = type(activation).forward(pre_activation, activation.config)
-        error = state.z_latent - z_mu
-        state = state._replace(pre_activation=pre_activation, z_mu=z_mu, error=error)
-        node_class = node_info.node_class
-        state = node_class.energy_functional(state, node_info)
-        state = StorkeyHopfield.accumulate_hopfield_energy_and_grad(state, W, strength)
-        return jnp.sum(state.energy), state
-
-
-class StorkeyHopfieldClippedEigs(StorkeyHopfield):
-    """Ablation: Clip W eigenvalues to [0, 1] in _prepare_W."""
-
-    @staticmethod
-    def _prepare_W(W, config):
-        D = W.shape[0]
-        if config.get("enforce_symmetry", True):
-            W = 0.5 * (W + W.T)
-        if config.get("zero_diagonal", False):
-            W = W * (1.0 - jnp.eye(D))
-        # Eigenvalue clipping to ensure proper attractor dynamics
-        eigenvalues, eigenvectors = jnp.linalg.eigh(W)
-        eigenvalues = jnp.clip(eigenvalues, 0.0, 1.0)
-        W = eigenvectors @ jnp.diag(eigenvalues) @ eigenvectors.T
-        return W
-
-
-class StorkeyHopfieldNoEnergy(StorkeyHopfield):
-    """Ablation: Remove Hopfield energy; keep probe@W in forward pass."""
-
-    @staticmethod
-    def forward(params, inputs, state, node_info):
-        config = node_info.node_config
-        batch_size = state.z_latent.shape[0]
-        out_shape = node_info.shape
-        edge_key, input_probe_state = next(iter(inputs.items()))
-        W = StorkeyHopfield._prepare_W(params.weights[edge_key], config)
-
-        pre_activation = jnp.zeros((batch_size,) + out_shape)
-        pre_activation = pre_activation + input_probe_state
-        pre_activation = pre_activation + (input_probe_state @ W)
-
-        if "b" in params.biases and params.biases["b"].size > 0:
-            pre_activation = pre_activation + params.biases["b"]
-
-        activation = node_info.activation
-        z_mu = type(activation).forward(pre_activation, activation.config)
-        error = state.z_latent - z_mu
-        state = state._replace(pre_activation=pre_activation, z_mu=z_mu, error=error)
-        node_class = node_info.node_class
-        state = node_class.energy_functional(state, node_info)
-        # ABLATED: no convex scaling, no Hopfield energy — pure PC
-        return jnp.sum(state.energy), state
-
-
-class StorkeyHopfieldStopGradEnergy(StorkeyHopfield):
-    """Ablation: stop_gradient on Hopfield energy to block backward flow.
-
-    Wraps strength*E_hop in jax.lax.stop_gradient so autodiff treats it as
-    a constant when computing d(total_energy)/d(inputs). The Hopfield grad
-    to the node's own latent (latent_grad) is unchanged. If dE_hop/d(inputs)
-    is truly zero (as expected), this ablation should produce identical
-    accuracy to the original convex combination.
-    """
-
-    @staticmethod
-    def forward(params, inputs, state, node_info):
-        config = node_info.node_config
-        batch_size = state.z_latent.shape[0]
-        out_shape = node_info.shape
-        edge_key, input_probe_state = next(iter(inputs.items()))
-        W = StorkeyHopfield._prepare_W(params.weights[edge_key], config)
-
-        if "hopfield_strength" in params.biases:
-            strength = jax.nn.softplus(params.biases["hopfield_strength"])
-        else:
-            strength = config.get("hopfield_strength", 1.0)
-
-        pre_activation = jnp.zeros((batch_size,) + out_shape)
-        pre_activation = pre_activation + input_probe_state
-        pre_activation = pre_activation + (input_probe_state @ W)
-
-        if "b" in params.biases and params.biases["b"].size > 0:
-            pre_activation = pre_activation + params.biases["b"]
-
-        activation = node_info.activation
-        z_mu = type(activation).forward(pre_activation, activation.config)
-        error = state.z_latent - z_mu
-        state = state._replace(pre_activation=pre_activation, z_mu=z_mu, error=error)
-        node_class = node_info.node_class
-        state = node_class.energy_functional(state, node_info)
-        # ABLATED: no accumulate_hopfield_energy_and_grad
-        return jnp.sum(state.energy), state
-
-
-def phase4_ablations():
-    """Run targeted ablation experiments to isolate the causal factor."""
-    train_config = {"num_epochs": 1}
-    STRENGTH = 1.0
-
-    ablations = {
-        f"Original (s={STRENGTH})": lambda key: create_ablation_model(
-            key, StorkeyHopfield, STRENGTH
-        ),
-        "No probe@W": lambda key: create_ablation_model(
-            key, StorkeyHopfieldNoProbeW, STRENGTH
-        ),
-        "No Passthrough": lambda key: create_ablation_model(
-            key, StorkeyHopfieldNoPassthrough, STRENGTH
-        ),
-        "Clipped eigs [0,1]": lambda key: create_ablation_model(
-            key, StorkeyHopfieldClippedEigs, STRENGTH
-        ),
-        "No Hopfield energy": lambda key: create_ablation_model(
-            key, StorkeyHopfieldNoEnergy, STRENGTH
-        ),
-        "StopGrad Hop energy": lambda key: create_ablation_model(
-            key, StorkeyHopfieldStopGradEnergy, STRENGTH
-        ),
-        "5 infer steps": lambda key: create_hopfield_model_with_inference(
-            key, STRENGTH, InferenceSGD(eta_infer=0.05, infer_steps=5)
-        ),
-        "50 infer steps": lambda key: create_hopfield_model_with_inference(
-            key, STRENGTH, InferenceSGD(eta_infer=0.05, infer_steps=50)
-        ),
-        "NormClip 1.0": lambda key: create_hopfield_model_with_inference(
-            key,
-            STRENGTH,
-            InferenceSGDNormClip(eta_infer=0.05, infer_steps=20, max_norm=1.0),
-        ),
-        "NormClip 0.1": lambda key: create_hopfield_model_with_inference(
-            key,
-            STRENGTH,
-            InferenceSGDNormClip(eta_infer=0.05, infer_steps=20, max_norm=0.1),
-        ),
-        "Baseline (s=0.0)": lambda key: create_ablation_model(
-            key, StorkeyHopfield, 0.0
-        ),
-    }
-
-    results = {}
-    for name, factory in ablations.items():
-        rng = jax.random.PRNGKey(42)
-        graph_key, train_key, eval_key = jax.random.split(rng, 3)
-        params, structure = factory(graph_key)
-
-        train_loader = MnistLoader(
-            "train",
-            batch_size=BATCH_SIZE,
-            tensor_format="flat",
-            shuffle=True,
-            seed=42,
-        )
-        test_loader = MnistLoader(
-            "test",
-            batch_size=BATCH_SIZE,
-            tensor_format="flat",
-            shuffle=False,
-        )
-
-        trained_params, _, _ = train_pcn(
-            params,
-            structure,
-            train_loader,
-            OPTIMIZER,
-            train_config,
-            train_key,
-            verbose=False,
-        )
-        metrics = evaluate_pcn(
-            trained_params,
-            structure,
-            test_loader,
-            train_config,
-            eval_key,
-        )
-        results[name] = metrics["accuracy"]
-        print(f"  {name:<25} accuracy={metrics['accuracy']:.4f}")
-
-    print(f"\n{'='*45}")
-    print(f"  {'Ablation':<25} {'Accuracy':>10}")
-    print(f"  {'-'*40}")
-    for name, acc in sorted(results.items(), key=lambda x: -x[1]):
-        print(f"  {name:<25} {acc:>10.4f}")
-
-    return results
-
-
-# ============================================================================
 # Phase 5: Latent Distribution Comparison
 # ============================================================================
 
 
 def collect_latents(params, structure, test_loader, node_name, rng_key):
     """Collect z_latent from a specific node across all test batches (eval mode)."""
-    from fabricpc.core.inference import run_inference
-
     all_z = []
     all_labels = []
 
@@ -1066,13 +911,7 @@ def phase5_latent_analysis():
         graph_key, train_key, eval_key = jax.random.split(rng, 3)
         params, structure = factory(graph_key)
 
-        train_loader = MnistLoader(
-            "train",
-            batch_size=BATCH_SIZE,
-            tensor_format="flat",
-            shuffle=True,
-            seed=42,
-        )
+        train_loader = _make_train_loader(seed=42)
 
         trained_params, _, _ = train_pcn(
             params,
@@ -1084,12 +923,7 @@ def phase5_latent_analysis():
             verbose=False,
         )
 
-        test_loader = MnistLoader(
-            "test",
-            batch_size=BATCH_SIZE,
-            tensor_format="flat",
-            shuffle=False,
-        )
+        test_loader = _make_test_loader(seed=42)
         z, labels = collect_latents(
             trained_params,
             structure,
@@ -1119,27 +953,41 @@ def phase5_latent_analysis():
 def main():
     parser = argparse.ArgumentParser(
         description="StorkeyHopfield diagnostic tool — "
-        "systematically debug Hopfield attractor dynamics in PC classification.",
+        "investigate Hopfield attractor dynamics under few-shot + noise conditions.",
     )
     parser.add_argument(
         "--phase",
         type=str,
-        default="all",
-        choices=["1", "2", "3", "4", "5", "all"],
-        help="Which diagnostic phase to run (default: all)",
+        default="1",
+        choices=["1", "2", "3", "5", "all"],
+        help="Which diagnostic phase to run (default: 1)",
+    )
+    parser.add_argument(
+        "--n_trials",
+        type=int,
+        default=10,
+        help="Number of paired trials for Phase 1 strength sweep (default: 10)",
+    )
+    parser.add_argument(
+        "--num_epochs",
+        type=int,
+        default=5,
+        help="Training epochs per trial for Phase 1 (default: 5)",
     )
     args = parser.parse_args()
 
     phases = {
-        "1": ("Phase 1: Hopfield Strength Sweep", phase1_strength_sweep),
+        "1": (
+            "Phase 1: Strength Sweep (K=50, noise=2.0)",
+            lambda: phase1_strength_sweep(args.n_trials, args.num_epochs),
+        ),
         "2": ("Phase 2: Per-Step Inference Dynamics", phase2_inference_dynamics),
         "3": ("Phase 3: W Matrix Analysis", phase3_W_analysis),
-        "4": ("Phase 4: Ablation Experiments", phase4_ablations),
         "5": ("Phase 5: Latent Distribution Comparison", phase5_latent_analysis),
     }
 
     if args.phase == "all":
-        for key in ["1", "2", "3", "4", "5"]:
+        for key in ["1", "2", "3", "5"]:
             name, fn = phases[key]
             print(f"\n{'#'*70}")
             print(f"# {name}")

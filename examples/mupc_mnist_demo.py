@@ -7,12 +7,14 @@ targeting ~91% accuracy to confirm our implementation matches the jpc reference
 (thebuckleylab/jpc).
 
 Architecture:
-    input(784) -> hidden1(128, ReLU) -> hidden2(128, ReLU) -> output(10)
+    input(784) -> hidden1(N, ReLU) -> ... -> hiddenL(N, ReLU) -> output(10)
 
 muPC scaling:
     - MuPCInitializer (W ~ N(0,1)) on all Linear layers including output
-    - MuPCConfig(ShortestPathDepth(), include_output=True)
-    - Forward scaling: a_1 = 1/sqrt(D), a_l = 1/sqrt(N*L), a_L = 1/N
+    - MuPCConfig(include_output=True)
+    - Forward scaling: a = 1/sqrt(fan_in * K) where K = in-degree
+      For single-edge chain: a = 1/sqrt(fan_in), i.e. Kaiming scaling
+      For output: a = 1/(fan_in * sqrt(K)) = 1/fan_in for K=1
     - Gaussian (MSE) energy on output (matches jpc reference)
 
 Results:
@@ -21,6 +23,7 @@ Results:
 Usage:
     python examples/mupc_mnist_demo.py
     python examples/mupc_mnist_demo.py --num_epochs 10 --verbose
+    python examples/mupc_mnist_demo.py --num_hidden 20 --hidden_dim 64
 """
 
 from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
@@ -39,7 +42,6 @@ from fabricpc.core.activations import IdentityActivation, ReLUActivation
 from fabricpc.core.inference import InferenceSGD
 from fabricpc.core.initializers import MuPCInitializer
 from fabricpc.core.mupc import MuPCConfig
-from fabricpc.core.depth_metric import ShortestPathDepth
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
 
@@ -73,6 +75,18 @@ def parse_args():
         help="Number of hidden layers (default: 20)",
     )
     parser.add_argument(
+        "--infer_steps",
+        type=int,
+        default=None,
+        help="Inference steps per sample (default: max(20, 3*(num_hidden+2)))",
+    )
+    parser.add_argument(
+        "--eta_infer",
+        type=float,
+        default=0.1,
+        help="Inference learning rate (default: 0.1)",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         default=False,
@@ -81,7 +95,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def build_mupc_network(hidden_dim=128, num_hidden=2):
+def build_mupc_network(hidden_dim=128, num_hidden=2, infer_steps=None, eta_infer=0.1):
     """
     Build an FC network for MNIST with muPC scaling.
 
@@ -95,10 +109,14 @@ def build_mupc_network(hidden_dim=128, num_hidden=2):
     Args:
         hidden_dim: Width of hidden layers.
         num_hidden: Number of hidden layers.
+        infer_steps: Inference steps per sample. Default: max(20, 3*(num_hidden+2)).
+        eta_infer: Inference learning rate. Default: 0.1.
 
     Returns:
         GraphStructure with muPC scaling.
     """
+    if infer_steps is None:
+        infer_steps = max(20, 3 * (num_hidden + 2))
     weight_init = MuPCInitializer()
 
     # Input
@@ -140,11 +158,8 @@ def build_mupc_network(hidden_dim=128, num_hidden=2):
         nodes=all_nodes,
         edges=all_edges,
         task_map=TaskMap(x=input_node, y=output),
-        inference=InferenceSGD(eta_infer=0.1, infer_steps=3 * (num_hidden + 2)),
-        scaling=MuPCConfig(
-            depth_metric=ShortestPathDepth(),
-            include_output=True,
-        ),
+        inference=InferenceSGD(eta_infer=eta_infer, infer_steps=infer_steps),
+        scaling=MuPCConfig(include_output=True),
     )
 
     return structure
@@ -164,6 +179,8 @@ def main():
     structure = build_mupc_network(
         hidden_dim=args.hidden_dim,
         num_hidden=args.num_hidden,
+        infer_steps=args.infer_steps,
+        eta_infer=args.eta_infer,
     )
     params = initialize_params(structure, graph_key)
 

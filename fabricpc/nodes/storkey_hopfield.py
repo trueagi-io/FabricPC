@@ -1,5 +1,6 @@
 """
 Storkey Hopfield associative memory node for predictive coding networks.
+Acts a filter selective for stored patterns in the latent space, with energy-based learning of attractors.
 
 Implements a Hopfield memory layer that combines standard PC prediction-error
 energy with a Hopfield attractor energy term. The Hopfield energy pulls the
@@ -37,10 +38,13 @@ Notation:
 
 Architecture (internal to forward()):
 
-    probe ---+--- probe @ W ---+--- bias ----> activation ----> z_mu
-             |                 |
-             +-----------------+
-             (additive)
+    probe ----> probe @ W ---- bias ----> activation ----> z_mu
+
+    error = z - z_mu ----> PC energy (E_pc) ---->  z_latent ----> Hopfield energy (E_hop)
+                                                       ^              |
+                                                       |______________|
+
+Recurrency comes from the Hopfield energy gradient during inference steps, not from explicit self-feedback in the pre-activation.
 """
 
 from __future__ import annotations
@@ -54,7 +58,11 @@ from fabricpc.nodes.base import NodeBase, SlotSpec
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.activations import TanhActivation
 from fabricpc.core.energy import GaussianEnergy
-from fabricpc.core.initializers import ZerosInitializer, NormalInitializer
+from fabricpc.core.initializers import (
+    ZerosInitializer,
+    NormalInitializer,
+    XavierInitializer,
+)
 
 if TYPE_CHECKING:
     from fabricpc.core.activations import ActivationBase
@@ -82,7 +90,7 @@ class StorkeyHopfield(NodeBase):
     - E_pc pulls z toward the upstream prediction mu
     - E_hop pulls z toward stored patterns (attractors learned via W)
 
-    The forward pass computes: z_mu = activation(probe + probe @ W + bias).
+    The forward pass computes: z_mu = activation(probe @ W + bias).
     Attractor dynamics come from the Hopfield energy gradient accumulated to
     latent_grad during forward(), which the PC inference loop applies via
     z -= eta * latent_grad. W is a (D, D) matrix on the last axis of z_latent.
@@ -98,7 +106,7 @@ class StorkeyHopfield(NodeBase):
         use_bias: Whether to include bias (default: True).
         enforce_symmetry: Symmetrize W via 0.5*(W+W.T) in forward (default: True).
         zero_diagonal: Zero W diagonal in forward (default: False).
-        weight_init: Initializer for weights (default: ZerosInitializer()).
+        weight_init: Initializer for weights (default: XavierInitializer()).
         latent_init: Initializer for latent states (default: NormalInitializer()).
     """
 
@@ -113,7 +121,7 @@ class StorkeyHopfield(NodeBase):
         enforce_symmetry: bool = True,
         zero_diagonal: bool = False,
         latent_init: Optional[InitializerBase] = NormalInitializer(),
-        weight_init: Optional[InitializerBase] = ZerosInitializer(),
+        weight_init: Optional[InitializerBase] = XavierInitializer(),
     ):
         super().__init__(
             shape=shape,
@@ -253,7 +261,7 @@ class StorkeyHopfield(NodeBase):
         """
         Forward pass: compute z_mu from probe, then combined energy.
 
-        z_mu = activation(probe + probe @ W + bias)
+        z_mu = activation(probe @ W + bias)
 
         Energy = E_pc(z, z_mu) + hopfield_strength * E_hop(W, z)
 

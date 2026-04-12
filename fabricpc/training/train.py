@@ -59,7 +59,7 @@ def get_graph_param_gradient(
     # Run inference to convergence
     final_state = run_inference(params, init_state, clamps, structure)
 
-    # Compute energy (ignore source nodes)
+    # Compute energy (ignore terminal input nodes)
     energy = sum(
         [
             sum(final_state.nodes[node_name].energy)
