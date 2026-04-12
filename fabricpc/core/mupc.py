@@ -17,10 +17,22 @@ K is the node's in-degree. Weightless nodes (e.g. IdentityNode) return
 fan_in=1, so the formula reduces to a=1/sqrt(K) — compensating only for
 multi-edge summation variance amplification.
 
-Additional scaling placeholders (all 1.0 for now):
-  - Self-gradient scaling (c_self per node): controls dE/dz_self magnitude
-  - Top-down gradient scaling (c_td per edge): normalizes W^T * epsilon
-  - Weight gradient scaling (c_w per edge): controls dE/dW magnitude
+Top-down gradient scaling restores the chain rule factor lost when
+forward scaling is applied outside the differentiation:
+
+    c_td = a_k  (same as the forward scaling factor)
+
+Because _apply_forward_scaling pre-scales inputs (x → a*x) before the
+value_and_grad closure, autodiff yields dE/d(a*x). The gradient w.r.t.
+the original input x is dE/dx = a * dE/d(a*x) by chain rule. Setting
+c_td = a restores this factor, matching what jpc computes by
+differentiating through the scaling.
+
+Additional scaling factors:
+  - Self-gradient scaling (c_self per node): 1.0 (self-gradient is
+    already O(1) when forward scaling maintains O(1) activations)
+  - Weight gradient scaling (c_w per edge): 1.0 (optimizer handles
+    magnitude; placeholder for future exploration)
 
 Usage:
     from fabricpc.core.mupc import MuPCConfig
@@ -51,7 +63,9 @@ class MuPCScalingFactors:
         self_grad_scale: Scalar scaling for the node's self-gradient (dE/dz_self).
             Applied in energy_functional().
         topdown_grad_scale: Per-edge scaling for the top-down gradient to
-            presynaptic nodes. Applied after autodiff in forward_inference().
+            presynaptic nodes. Equals the forward_scale (a) to restore the
+            chain rule factor lost when scaling is applied outside autodiff.
+            Applied after autodiff in forward_inference().
         weight_grad_scale: Per-edge scaling for weight gradients.
             Applied after autodiff in forward_learning().
     """
@@ -196,34 +210,21 @@ def compute_mupc_scalings(
 
             forward_scale[edge_key] = a
 
-            # Keep this code as placeholder for future scaling of gradients
-            fan_out = 0  # TODO define node_class.get_weight_fan_out()
-            # Top-down gradient scaling: c_td
-            # Goal: normalize the gradient sent to presynaptic nodes to O(1).
+            # Top-down gradient scaling: c_td = a (chain rule correction).
             #
-            # Chain rule mechanics:
-            #   1. _apply_forward_scaling multiplies inputs by a before forward().
-            #   2. jax.value_and_grad(forward, argnums=1) differentiates w.r.t.
-            #      the *scaled* inputs, yielding dE/d(a*x).
-            #   3. dE/d(a*x) ~ W^T @ epsilon, which has variance ~fan_out
-            #      (fan_out rows of unit-variance W entries).
-            #   4. The gradient sent to the presynaptic node is c_td * dE/d(a*x).
-            #      The presynaptic latent update accumulates this directly.
-            #   5. The factor a from input pre-scaling is absorbed into the
-            #      differentiated function, so the effective variance contribution
-            #      to the presynaptic update is c_td^2 * a^2 * fan_out.
-            #   6. For O(1): c_td^2 * a^2 * fan_out = 1
-            #      => c_td = 1 / (a * sqrt(fan_out))
-            if fan_out > 0:
-                c_td = 1.0 / (a * math.sqrt(fan_out))
-            else:
-                c_td = 1.0
+            # _apply_forward_scaling pre-scales inputs (x → a*x) outside the
+            # value_and_grad closure. Autodiff then yields dE/d(a*x), but the
+            # gradient w.r.t. the original presynaptic latent x is:
+            #
+            #   dE/dx = a * dE/d(a*x)    (by chain rule)
+            #
+            # Setting c_td = a restores this factor. Without it, each hop
+            # through the network drops the top-down gradient by a factor of a,
+            # causing exponential gradient vanishing in deep networks:
+            # gradient ∝ a^L → 0 for large L.
+            topdown_grad_scale[edge_key] = a
 
-            # Scaling in the backward pass to presynaptic nodes is less crucial because of diminishing energy in deeper layers, but we include it for completeness and to maintain O(1) gradients at the presynaptic nodes.
-            topdown_grad_scale[edge_key] = c_td
-
-            # Weight gradient scaling: 1.0 (let optimizer handle magnitude for now. keep as placeholder for future exploration)
-            # For non-square weight matrices, the variance of dE/dW can depend on both fan_in and fan_out. A more careful scaling could be derived, but for now we keep it at 1.0 and rely on the optimizer's learning rate to manage it.
+            # Weight gradient scaling: 1.0 (optimizer handles magnitude).
             weight_grad_scale[edge_key] = 1.0
 
         # Self-gradient scaling: 1.0

@@ -265,7 +265,7 @@ def _build_resnet18(weight_init, scaling=None, output_weight_init=None):
         nodes=all_nodes,
         edges=all_edges,
         task_map=TaskMap(x=input_node, y=output),
-        inference=InferenceSGD(eta_infer=0.1, infer_steps=50),
+        inference=InferenceSGD(eta_infer=0.1, infer_steps=150),
         scaling=scaling,
     )
 
