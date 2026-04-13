@@ -22,7 +22,7 @@ from fabricpc.graph.graph_net import (
     set_latents_to_clamps,
     compute_local_weight_gradients,
 )
-from fabricpc.core.activations import IdentityActivation, ReLUActivation
+from fabricpc.core.activations import IdentityActivation, TanhActivation
 from fabricpc.core.inference import InferenceSGD, run_inference
 from fabricpc.core.initializers import MuPCInitializer
 from fabricpc.core.mupc import MuPCConfig
@@ -43,7 +43,7 @@ def main():
         layers.append(
             Linear(
                 shape=(hidden_dim,),
-                activation=ReLUActivation(),
+                activation=TanhActivation(),
                 weight_init=weight_init,
                 flatten_input=(i == 0),
                 name=f"h{i + 1}",

@@ -174,6 +174,86 @@ class Cifar100Loader:
         return self._num_batches
 
 
+class Cifar10Loader:
+    """JAX-compatible CIFAR-10 data loader using TensorFlow Datasets.
+
+    Loads the CIFAR-10 dataset (32x32 RGB images, 10 classes)
+    and yields batches of (images, one_hot_labels).
+
+    Args:
+        split: Dataset split to load ('train' or 'test').
+        batch_size: Number of samples per batch.
+        shuffle: Whether to shuffle the data each epoch.
+        seed: Random seed for reproducibility.
+        tensor_format: 'NHWC' for (batch, 32, 32, 3) or 'flat' for (batch, 3072).
+        normalize_mean: Per-channel mean for normalization (default: CIFAR-10 mean).
+        normalize_std: Per-channel std for normalization (default: CIFAR-10 std).
+    """
+
+    def __init__(
+        self,
+        split: str,
+        batch_size: int,
+        shuffle: bool = True,
+        seed: int = None,
+        tensor_format: str = "NHWC",
+        normalize_mean: tuple = (0.4914, 0.4822, 0.4465),
+        normalize_std: tuple = (0.2470, 0.2435, 0.2616),
+    ):
+        import tensorflow_datasets as tfds
+        import tensorflow as tf
+
+        tf.config.set_visible_devices([], "GPU")
+
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.seed = seed
+        self.tensor_format = tensor_format
+        self.normalize_mean = np.array(normalize_mean, dtype=np.float32)
+        self.normalize_std = np.array(normalize_std, dtype=np.float32)
+
+        file_seed, buffer_seed = split_np_seed(seed, n=2)
+
+        read_config = tfds.ReadConfig(
+            shuffle_seed=file_seed,
+            interleave_cycle_length=1,
+        )
+
+        ds, info = tfds.load(
+            "cifar10",
+            split=split,
+            with_info=True,
+            as_supervised=True,
+            read_config=read_config,
+            shuffle_files=shuffle and seed is not None,
+        )
+        self.num_examples = info.splits[split].num_examples
+        self._num_batches = (self.num_examples + batch_size - 1) // batch_size
+
+        if shuffle:
+            ds = ds.shuffle(buffer_size=self.num_examples, seed=buffer_seed)
+        ds = ds.batch(batch_size, drop_remainder=False)
+        ds = ds.prefetch(tf.data.AUTOTUNE)
+
+        self.ds = ds
+
+    def __iter__(self):
+        for images, labels in self.ds:
+            images = images.numpy().astype(np.float32) / 255.0
+            # Per-channel normalization: (H, W, C) broadcast
+            images = (images - self.normalize_mean) / self.normalize_std
+
+            if self.tensor_format == "flat":
+                images = images.reshape(images.shape[0], -1)
+
+            labels = one_hot(labels.numpy(), num_classes=10)
+
+            yield images, labels
+
+    def __len__(self):
+        return self._num_batches
+
+
 class CharDataLoader:
     """JAX-compatible character-level dataloader using TFDS.
 

@@ -26,7 +26,6 @@ Usage:
     python examples/mupc_mnist_demo.py --num_hidden 20 --hidden_dim 64
 """
 
-from fabricpc.core import TanhActivation, SoftmaxActivation, CrossEntropyEnergy
 from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
 
 set_jax_flags_before_importing_jax(jax_platforms="cuda")
@@ -47,7 +46,7 @@ from fabricpc.core.activations import (
 )
 from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.core.inference import InferenceSGD
-from fabricpc.core.initializers import MuPCInitializer
+from fabricpc.core.initializers import MuPCInitializer, XavierInitializer
 from fabricpc.core.mupc import MuPCConfig
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
@@ -61,7 +60,7 @@ def parse_args():
         "--num_epochs",
         type=int,
         default=4,
-        help="Training epochs (default: 1)",
+        help="Training epochs (default: 4)",
     )
     parser.add_argument(
         "--batch_size",
@@ -123,7 +122,7 @@ def build_mupc_network(hidden_dim=128, num_hidden=2, infer_steps=None, eta_infer
         GraphStructure with muPC scaling.
     """
     if infer_steps is None:
-        infer_steps = 4 * (num_hidden + 2)
+        infer_steps = max(20, 4 * (num_hidden + 2))
     weight_init = MuPCInitializer()
 
     # Input
@@ -147,7 +146,7 @@ def build_mupc_network(hidden_dim=128, num_hidden=2, infer_steps=None, eta_infer
         shape=(10,),
         activation=SoftmaxActivation(),
         energy=CrossEntropyEnergy(),
-        weight_init=weight_init,
+        weight_init=XavierInitializer(),
         flatten_input=True,
         name="output",
     )

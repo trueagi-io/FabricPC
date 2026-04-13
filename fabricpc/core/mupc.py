@@ -10,23 +10,30 @@ width and topology. Based on:
 
 Forward scaling uses a unified per-edge formula:
 
-    a_k = 1 / sqrt(fan_in_k * K)
+    a_k = gain / sqrt(fan_in_k * K)
 
-where fan_in_k is the weight-matrix fan_in (from get_weight_fan_in()) and
-K is the node's in-degree. Weightless nodes (e.g. IdentityNode) return
-fan_in=1, so the formula reduces to a=1/sqrt(K) — compensating only for
-multi-edge summation variance amplification.
+where fan_in_k is the weight-matrix fan_in (from get_weight_fan_in()),
+K is the node's in-degree, and gain = activation.variance_gain() is the
+Kaiming-style gain compensating for activation-induced variance contraction
+(e.g. sqrt(5/3) for tanh, sqrt(2) for ReLU, 1.0 for identity).
+Weightless nodes (e.g. IdentityNode) return fan_in=1, so the formula
+reduces to a=gain/sqrt(K).
 
-Top-down gradient scaling restores the chain rule factor lost when
-forward scaling is applied outside the differentiation:
+Top-down gradient scaling combines chain rule correction with Jacobian
+compensation for deep gradient propagation:
 
-    c_td = a_k  (same as the forward scaling factor)
+    c_td = a_k * jacobian_gain
 
-Because _apply_forward_scaling pre-scales inputs (x → a*x) before the
-value_and_grad closure, autodiff yields dE/d(a*x). The gradient w.r.t.
-the original input x is dE/dx = a * dE/d(a*x) by chain rule. Setting
-c_td = a restores this factor, matching what jpc computes by
-differentiating through the scaling.
+Chain rule correction (a_k): Because _apply_forward_scaling pre-scales
+inputs (x → a*x) before the value_and_grad closure, autodiff yields
+dE/d(a*x). Multiplying by a restores dE/dx.
+
+Jacobian compensation (jacobian_gain): The per-hop Jacobian
+diag(act'(z)) @ (a*W) has RMS singular value ≈ gain * rms(act'(z)),
+which is < 1 for saturating activations (e.g. tanh: 0.79). Over L
+hops, gradients shrink as (gain*rms(act'))^L. The jacobian_gain
+factor = 1/(gain*rms(act'(z))) normalizes this to ~1.0 per hop.
+For identity/ReLU/LeakyReLU, jacobian_gain = 1.0 (exact preservation).
 
 Additional scaling factors:
   - Self-gradient scaling (c_self per node): 1.0 (self-gradient is
@@ -63,9 +70,10 @@ class MuPCScalingFactors:
         self_grad_scale: Scalar scaling for the node's self-gradient (dE/dz_self).
             Applied in energy_functional().
         topdown_grad_scale: Per-edge scaling for the top-down gradient to
-            presynaptic nodes. Equals the forward_scale (a) to restore the
-            chain rule factor lost when scaling is applied outside autodiff.
-            Applied after autodiff in forward_inference().
+            presynaptic nodes. Equals a * jacobian_gain, combining chain rule
+            correction (a) with Jacobian compensation (jacobian_gain) for
+            deep gradient propagation. Applied after autodiff in
+            forward_inference().
         weight_grad_scale: Per-edge scaling for weight gradients.
             Applied after autodiff in forward_learning().
     """
@@ -132,15 +140,16 @@ def compute_mupc_scalings(
 
     Uses a unified forward scaling formula for all non-source nodes:
 
-        a_k = 1 / sqrt(fan_in_k * K)
+        a_k = gain / sqrt(fan_in_k * K)
 
     where fan_in_k comes from each node class's get_weight_fan_in() method
-    (which returns 1 for weightless nodes like IdentityNode) and K is the
-    node's in-degree (number of input edges).
+    (which returns 1 for weightless nodes like IdentityNode), K is the
+    node's in-degree, and gain = activation.variance_gain() compensates
+    for activation-induced variance contraction (Kaiming convention).
 
     For output nodes (include_output=True):
 
-        a_k = 1 / (fan_in_k * sqrt(K))
+        a_k = gain / (fan_in_k * sqrt(K))
 
     Args:
         nodes: Dictionary mapping node names to finalized NodeBase instances
@@ -186,6 +195,17 @@ def compute_mupc_scalings(
         K = node_info.in_degree
         node_config = node_info.node_config
 
+        # Activation-aware gain for variance preservation (Kaiming convention).
+        # Compensates for activation-induced variance contraction so that
+        # Var(act(z)) ≈ 1 when pre-activations have Var(z) = gain^2.
+        activation = node_info.activation
+        if activation is not None:
+            gain = type(activation).variance_gain(activation.config)
+            jac_gain = type(activation).jacobian_gain(activation.config)
+        else:
+            gain = 1.0
+            jac_gain = 1.0
+
         forward_scale = {}
         topdown_grad_scale = {}
         weight_grad_scale = {}
@@ -200,29 +220,30 @@ def compute_mupc_scalings(
             # (e.g. IdentityNode) return 1.
             fan_in = node_class.get_weight_fan_in(source_shape, node_config)
 
-            # Forward scaling formula:
-            #   Hidden: a = 1/sqrt(fan_in * K)  — maintains O(1) pre-activation variance
-            #   Output: a = 1/(fan_in * sqrt(K)) — matches muPC O(1/N) convention
+            # Forward scaling formula with activation gain:
+            #   Hidden: a = gain/sqrt(fan_in * K) — maintains O(1) post-activation variance
+            #   Output: a = gain/(fan_in * sqrt(K)) — matches muPC O(1/N) convention
             if is_output:
-                a = 1.0 / (fan_in * math.sqrt(K))
+                a = gain / (fan_in * math.sqrt(K))
             else:
-                a = 1.0 / math.sqrt(fan_in * K)
+                a = gain / math.sqrt(fan_in * K)
 
             forward_scale[edge_key] = a
 
-            # Top-down gradient scaling: c_td = a (chain rule correction).
+            # Top-down gradient scaling: c_td = a * jacobian_gain.
             #
-            # _apply_forward_scaling pre-scales inputs (x → a*x) outside the
-            # value_and_grad closure. Autodiff then yields dE/d(a*x), but the
-            # gradient w.r.t. the original presynaptic latent x is:
-            #
-            #   dE/dx = a * dE/d(a*x)    (by chain rule)
-            #
-            # Setting c_td = a restores this factor. Without it, each hop
-            # through the network drops the top-down gradient by a factor of a,
-            # causing exponential gradient vanishing in deep networks:
-            # gradient ∝ a^L → 0 for large L.
-            topdown_grad_scale[edge_key] = a
+            # Two components:
+            # 1. Chain rule correction (a): _apply_forward_scaling pre-scales
+            #    inputs (x → a*x) outside the value_and_grad closure. Autodiff
+            #    yields dE/d(a*x); multiplying by a restores dE/dx.
+            # 2. Jacobian compensation (jacobian_gain): the per-hop Jacobian
+            #    diag(act'(z)) @ (a*W) has RMS singular value ≈ gain*rms(act'(z)),
+            #    which is < 1 for saturating activations (e.g. tanh). Multiplying
+            #    by jacobian_gain = 1/(gain*rms(act'(z))) normalizes the expected
+            #    per-hop gradient propagation factor to ~1.0, preventing
+            #    exponential gradient vanishing in deep networks.
+            #    For identity/ReLU/LeakyReLU, jacobian_gain = 1.0 (no correction).
+            topdown_grad_scale[edge_key] = a * jac_gain
 
             # Weight gradient scaling: 1.0 (optimizer handles magnitude).
             weight_grad_scale[edge_key] = 1.0
