@@ -222,22 +222,24 @@ class TestMuPCScalingComputation:
         assert y_info.scaling_config is None
 
     def test_hidden_forward_scale_formula(self, linear_chain_with_mupc):
-        """Hidden node forward scale = 1/sqrt(fan_in * K) where K=in_degree."""
+        """Hidden node forward scale = gain/sqrt(fan_in * K) where K=in_degree."""
         structure = linear_chain_with_mupc
         h_info = structure.nodes["h"].node_info
         scaling = h_info.scaling_config
 
         # h has one input from x (shape=(10,)), K=1 (in_degree)
+        # h uses ReLUActivation -> gain = sqrt(2)
         fan_in = 10  # x.shape[-1]
         K = 1
-        expected_a = 1.0 / math.sqrt(fan_in * K)
+        gain = math.sqrt(2.0)  # ReLU gain
+        expected_a = gain / math.sqrt(fan_in * K)
 
         edge_key = h_info.in_edges[0]
         actual_a = scaling.forward_scale[edge_key]
         assert abs(actual_a - expected_a) < 1e-10
 
-    def test_topdown_grad_scale_equals_forward_scale(self, linear_chain_with_mupc):
-        """Top-down gradient scale equals forward scale (chain rule correction)."""
+    def test_topdown_grad_scale_for_relu(self, linear_chain_with_mupc):
+        """For ReLU (jacobian_gain=1.0), topdown_grad_scale equals forward_scale."""
         structure = linear_chain_with_mupc
         h_info = structure.nodes["h"].node_info
         scaling = h_info.scaling_config
@@ -896,3 +898,198 @@ class TestBackwardCompatibility:
             )
         # Should still compute scaling correctly
         assert structure.nodes["h"].node_info.scaling_config is not None
+
+
+# ============================================================================
+# Activation Variance Gain Tests
+# ============================================================================
+
+
+class TestActivationVarianceGain:
+    """Test that variance_gain() returns correct values and integrates with scaling."""
+
+    def test_identity_gain(self):
+        """IdentityActivation gain should be 1.0."""
+        assert IdentityActivation.variance_gain() == 1.0
+
+    def test_relu_gain(self):
+        """ReLUActivation gain should be sqrt(2)."""
+        assert abs(ReLUActivation.variance_gain() - math.sqrt(2.0)) < 1e-10
+
+    def test_tanh_gain(self):
+        """TanhActivation gain should be sqrt(5/3)."""
+        from fabricpc.core.activations import TanhActivation
+
+        assert abs(TanhActivation.variance_gain() - math.sqrt(5.0 / 3.0)) < 1e-10
+
+    def test_gain_included_in_forward_scale(self):
+        """Forward scale should include activation gain: a = gain/sqrt(fan_in*K)."""
+        from fabricpc.core.activations import TanhActivation
+
+        x = IdentityNode(shape=(10,), name="x")
+        h = Linear(
+            shape=(20,),
+            name="h",
+            activation=TanhActivation(),
+            weight_init=MuPCInitializer(),
+        )
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, h, y],
+            edges=[
+                Edge(source=x, target=h.slot("in")),
+                Edge(source=h, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(),
+        )
+        h_info = structure.nodes["h"].node_info
+        edge_key = h_info.in_edges[0]
+        actual_a = h_info.scaling_config.forward_scale[edge_key]
+        # tanh gain = sqrt(5/3), fan_in=10, K=1
+        expected_a = math.sqrt(5.0 / 3.0) / math.sqrt(10)
+        assert abs(actual_a - expected_a) < 1e-10
+
+    def test_identity_activation_scaling_unchanged(self):
+        """Nodes with IdentityActivation (gain=1) should have same scaling as before."""
+        x = IdentityNode(shape=(10,), name="x")
+        h = Linear(
+            shape=(20,),
+            name="h",
+            activation=IdentityActivation(),
+            weight_init=MuPCInitializer(),
+        )
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, h, y],
+            edges=[
+                Edge(source=x, target=h.slot("in")),
+                Edge(source=h, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(),
+        )
+        h_info = structure.nodes["h"].node_info
+        edge_key = h_info.in_edges[0]
+        actual_a = h_info.scaling_config.forward_scale[edge_key]
+        # identity gain = 1.0, so a = 1/sqrt(fan_in*K) = 1/sqrt(10)
+        expected_a = 1.0 / math.sqrt(10)
+        assert abs(actual_a - expected_a) < 1e-10
+
+    def test_deep_tanh_chain_no_activation_collapse(self):
+        """100-layer tanh chain with muPC gain should maintain O(1) activations."""
+        from fabricpc.core.activations import TanhActivation
+        from fabricpc.graph.state_initializer import initialize_graph_state
+
+        width = 32
+        num_hidden = 100
+        x = IdentityNode(shape=(width,), name="x")
+        layers = [
+            Linear(
+                shape=(width,),
+                name=f"h{i}",
+                activation=TanhActivation(),
+                weight_init=MuPCInitializer(),
+            )
+            for i in range(num_hidden)
+        ]
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+
+        all_nodes = [x] + layers + [y]
+        all_edges = []
+        prev = x
+        for h in layers:
+            all_edges.append(Edge(source=prev, target=h.slot("in")))
+            prev = h
+        all_edges.append(Edge(source=prev, target=y.slot("in")))
+
+        structure = graph(
+            nodes=all_nodes,
+            edges=all_edges,
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(eta_infer=0.1, infer_steps=10),
+            scaling=MuPCConfig(),
+        )
+
+        rng_key = jax.random.PRNGKey(42)
+        params = initialize_params(structure, rng_key)
+        state = initialize_graph_state(structure, 32, rng_key, params=params)
+
+        # Check activation variance at last hidden layer
+        last_hidden = f"h{num_hidden - 1}"
+        z_last = state.nodes[last_hidden].z_latent
+        var_last = float(jnp.var(z_last))
+
+        # Should be O(1), not collapsed to 0 or exploded
+        assert var_last > 0.01, f"Activations collapsed: var={var_last}"
+        assert var_last < 100.0, f"Activations exploded: var={var_last}"
+
+
+# ============================================================================
+# Jacobian Gain Tests
+# ============================================================================
+
+
+class TestJacobianGain:
+    """Test jacobian_gain() values and integration with topdown_grad_scale."""
+
+    def test_identity_jacobian_gain(self):
+        """IdentityActivation jacobian_gain should be 1.0."""
+        assert IdentityActivation.jacobian_gain() == 1.0
+
+    def test_relu_jacobian_gain(self):
+        """ReLUActivation jacobian_gain should be 1.0 (gain*rms(relu')=1 exactly)."""
+        assert ReLUActivation.jacobian_gain() == 1.0
+
+    def test_tanh_jacobian_gain(self):
+        """TanhActivation jacobian_gain should be ~1.261."""
+        from fabricpc.core.activations import TanhActivation
+
+        assert abs(TanhActivation.jacobian_gain() - 1.261) < 0.001
+
+    def test_gelu_jacobian_gain(self):
+        """GeluActivation jacobian_gain should be ~1.168."""
+        from fabricpc.core.activations import GeluActivation
+
+        assert abs(GeluActivation.jacobian_gain() - 1.168) < 0.001
+
+    def test_hardtanh_jacobian_gain(self):
+        """HardTanhActivation jacobian_gain should be ~1.035."""
+        from fabricpc.core.activations import HardTanhActivation
+
+        assert abs(HardTanhActivation.jacobian_gain() - 1.035) < 0.001
+
+    def test_topdown_grad_scale_includes_jacobian_gain(self):
+        """For tanh, topdown_grad_scale = a * jacobian_gain (not just a)."""
+        from fabricpc.core.activations import TanhActivation
+
+        x = IdentityNode(shape=(10,), name="x")
+        h = Linear(
+            shape=(20,),
+            name="h",
+            activation=TanhActivation(),
+            weight_init=MuPCInitializer(),
+        )
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, h, y],
+            edges=[
+                Edge(source=x, target=h.slot("in")),
+                Edge(source=h, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(),
+        )
+        h_info = structure.nodes["h"].node_info
+        edge_key = h_info.in_edges[0]
+        fwd = h_info.scaling_config.forward_scale[edge_key]
+        td = h_info.scaling_config.topdown_grad_scale[edge_key]
+
+        # topdown should be forward_scale * jacobian_gain
+        expected_td = fwd * TanhActivation.jacobian_gain()
+        assert abs(td - expected_td) < 1e-10
+        # And NOT equal to forward_scale (since jacobian_gain != 1.0 for tanh)
+        assert td != fwd

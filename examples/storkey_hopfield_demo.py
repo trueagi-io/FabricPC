@@ -22,6 +22,13 @@ Usage:
     python examples/storkey_hopfield_demo.py
     python examples/storkey_hopfield_demo.py --k_values 10,50 --noise_levels 0.0,1.0 --n_trials 5
     python examples/storkey_hopfield_demo.py --k_values 50 --noise_levels 0.0 --n_trials 2 --num_epochs 1
+
+Results:
+python examples/storkey_hopfield_demo.py --k_values "50" --noise_levels "2.0" --strength "2.0"
+     K    Noise    Hopfield%         MLP%     Delta%    p-value   Sig        d
+------------------------------------------------------------------------------
+    50      2.0 61.25+/-0.22 58.17+/-0.19      +3.08     0.0000     *    4.745
+------------------------------------------------------------------------------
 """
 
 from fabricpc.utils.helpers import set_jax_flags_before_importing_jax

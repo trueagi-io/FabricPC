@@ -1,4 +1,4 @@
-# Aim How-to Guide for TensorBoards with FabricPC
+# Experiment Tracking with Aim
 
 FabricPC integrates with [Aim](https://aimstack.io/) for comprehensive experiment tracking and visualization. This enables detailed monitoring of training quality, batch-level debugging, and hyperparameter tuning for predictive coding networks.
 
@@ -56,6 +56,7 @@ Then launch the Aim UI:
 ```bash
 aim up
 ```
+
 Click on the link returned in the console to explore the dashboard.
 
 Be sure to run the python script and start aim from the same working directory to ensure the tracking data in folder .aim/ is correctly linked.

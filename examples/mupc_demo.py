@@ -40,13 +40,17 @@ from fabricpc.graph import initialize_params
 from fabricpc.core.activations import (
     IdentityActivation,
     ReLUActivation,
+    TanhActivation,
     SoftmaxActivation,
 )
 from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.core.inference import InferenceSGD
-from fabricpc.core.initializers import MuPCInitializer, XavierInitializer
+from fabricpc.core.initializers import (
+    MuPCInitializer,
+    XavierInitializer,
+    KaimingInitializer,
+)
 from fabricpc.core.mupc import MuPCConfig
-from fabricpc.core.depth_metric import ShortestPathDepth
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.dataloader import Cifar100Loader
 
@@ -149,8 +153,8 @@ def create_mupc_convnet():
             Edge(source=conv3, target=output.slot("in")),
         ],
         task_map=TaskMap(x=input_node, y=output),
-        inference=InferenceSGD(eta_infer=0.1, infer_steps=20),
-        scaling=MuPCConfig(depth_metric=ShortestPathDepth()),
+        inference=InferenceSGD(eta_infer=0.1, infer_steps=30),
+        scaling=MuPCConfig(include_output=False),
     )
 
     return structure
