@@ -62,7 +62,7 @@ This is a research-first project.
 - Any breaking changes are documented in the changelog.
 
 ## License
-This project is licensed under the [GPLv2.0 License](LICENSE).
+This project is licensed under the [MIT License](LICENSE).
 
 
 ## Building a model
