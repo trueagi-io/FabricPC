@@ -1,0 +1,73 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cl-benchmark"
+version = "0.1.0"
+description = "Framework-agnostic continual learning benchmark and evaluation protocol"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "FabricPC Contributors"},
+]
+keywords = [
+    "continual-learning",
+    "benchmark",
+    "machine-learning",
+    "evaluation",
+    "catastrophic-forgetting",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "numpy>=1.24.0",
+    "plotly>=5.0.0",
+]
+
+[project.optional-dependencies]
+scipy = [
+    "scipy>=1.10.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+all = [
+    "scipy>=1.10.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/dort/cl-benchmark"
+Documentation = "https://github.com/dort/cl-benchmark#readme"
+Repository = "https://github.com/dort/cl-benchmark"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cl_benchmark"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --tb=short"
+
+[tool.black]
+line-length = 88
+target-version = ["py39", "py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]

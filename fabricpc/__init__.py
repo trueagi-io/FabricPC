@@ -42,7 +42,16 @@ from importlib.metadata import version
 __version__ = version("fabricpc")
 
 # Submodules (for advanced use)
-from fabricpc import core, graph, nodes, training, utils, builder, experiments
+from fabricpc import (
+    core,
+    graph,
+    nodes,
+    training,
+    utils,
+    builder,
+    experiments,
+    continual,
+)
 
 # Core API - what most users need
 from fabricpc.graph import initialize_params
@@ -68,4 +77,5 @@ __all__ = [
     "training",
     "utils",
     "experiments",
+    "continual",
 ]

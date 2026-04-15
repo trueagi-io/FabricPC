@@ -1,0 +1,79 @@
+{
+  "config": {
+    "dataset_name": "split-mnist",
+    "dataset_kwargs": {},
+    "epochs_per_task": 1,
+    "batch_size": 256,
+    "num_runs": 1,
+    "seeds": [
+      0
+    ],
+    "save_results": true,
+    "output_dir": "./benchmark_results",
+    "verbose": false
+  },
+  "accuracy_matrices": [
+    [
+      [
+        0.46335697399527187,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.46335697399527187,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.46335697399527187,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.46335697399527187,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.46335697399527187,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ]
+    ]
+  ],
+  "training_times": [
+    [
+      2.86102294921875e-06,
+      1.9073486328125e-06,
+      1.430511474609375e-06,
+      1.1920928955078125e-06,
+      1.1920928955078125e-06
+    ]
+  ],
+  "forgetting": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "backward_transfer": 0.0,
+  "forward_transfer": 0.0,
+  "average_accuracy": 0.09267139479905437,
+  "accuracy_mean": 0.09267139479905437,
+  "accuracy_std": 0.0,
+  "forgetting_mean": 0.0,
+  "forgetting_std": 0.0,
+  "model_name": "mock",
+  "timestamp": "2026-04-07T16:03:38.690596"
+}

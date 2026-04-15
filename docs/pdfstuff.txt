@@ -1,0 +1,5 @@
+apt install -y poppler-utils qpdf ghostscript tesseract-ocr ocrmypdf
+
+  And in the active venv:
+
+  pip install pypdf pdfplumber pymupdf

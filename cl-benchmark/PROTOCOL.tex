@@ -1,0 +1,347 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{fontspec}
+\usepackage{unicode-math}
+\usepackage{amsmath}
+\usepackage{booktabs,longtable,array}
+\usepackage{enumitem}
+\usepackage{fancyvrb}
+\usepackage[hidelinks]{hyperref}
+\usepackage{microtype}
+\setmainfont{Latin Modern Roman}
+\setmathfont{Latin Modern Math}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.6em}
+\begin{document}
+\section{Continual Learning Benchmark Protocol Specification}
+
+Version: 1.0.0
+
+\subsection{Overview}
+
+This document specifies a standardized protocol for evaluating continual learning algorithms. The protocol is designed to be framework-agnostic and provides reproducible, comparable evaluations across different methods.
+
+\subsection{1. Definitions}
+
+\subsubsection{1.1 Task Sequence}
+
+A continual learning benchmark consists of a sequence of T tasks: ${\mathrm{Task}_0, \mathrm{Task}_1, \ldots, \mathrm{Task}_{T-1}}$.
+
+Each task $\mathrm{Task}_t$ contains:
+
+\begin{itemize}[leftmargin=*]
+\item A training set $D_t^{\mathrm{train}} = {(x_i, y_i)}$
+\item A test set $D_t^{\mathrm{test}} = {(x_i, y_i)}$
+\item A set of target classes $C_t$
+\end{itemize}
+
+Tasks are presented sequentially. When training on $\mathrm{Task}_t$, only $D_t^{\mathrm{train}}$ is available (unless explicitly using replay or other memory mechanisms).
+
+\subsubsection{1.2 Model Interface}
+
+A model $M$ must implement two operations:
+
+\begin{Verbatim}[fontsize=\small]
+predict(x) -> y_hat
+    Input: x with shape (batch_size, ...)
+    Output: y_hat with shape (batch_size, num_classes)
+
+train_on_task(task_id, train_data, epochs) -> metrics
+    Input: task identifier, training data, number of epochs
+    Output: dictionary of training metrics
+\end{Verbatim}
+
+\subsection{2. Evaluation Protocol}
+
+\subsubsection{2.1 Training Phase}
+
+For each task $t$ in sequence $0, 1, \ldots, T-1$:
+
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Train}: Call $model.train_on_task(t, \mathrm{Task}_t, epochs)$
+\item \textbf{Evaluate}: After training, evaluate on ALL tasks \texttt{0, 1, ..., t}
+\item \textbf{Record}: Store accuracy for each evaluated task
+\end{enumerate}
+
+\subsubsection{2.2 Accuracy Matrix}
+
+The accuracy matrix $A$ has shape \texttt{(T, T)} where:
+
+\[
+A[i, j] = \text{accuracy on } \mathrm{Task}_j \text{ after training through } \mathrm{Task}_i
+\]
+
+The matrix is lower triangular (only $A[i, j]$ where $j \le  i$ is defined).
+
+\textbf{Evaluation procedure for $A[i, j]$:}
+
+\begin{enumerate}[leftmargin=*]
+\item For each sample \texttt{(x, y)} in $D_j^{\mathrm{test}}$:
+\item Compute $y_hat = \operatorname{argmax}(model.predict(x))$
+\item $A[i, j] = \operatorname{mean}(y_hat == \operatorname{argmax}(y))$
+\end{enumerate}
+
+\subsubsection{2.3 Multiple Runs}
+
+For statistical validity, run the protocol multiple times (recommended: 5+ runs) with different random seeds. Report mean and standard deviation of all metrics.
+
+\subsection{3. Metrics}
+
+\subsubsection{3.1 Average Accuracy}
+
+Final average accuracy across all tasks:
+
+\[
+Average Accuracy = (1/T) * sum_{t=0}^{T-1} A[T-1, t]
+\]
+
+\subsubsection{3.2 Forgetting}
+
+Per-task forgetting measures the drop from peak accuracy to final accuracy:
+
+\[
+F_t = max_{i \ge  t} A[i, t] - A[T-1, t]
+\]
+
+Average forgetting (excluding the last task, which has no opportunity to be forgotten):
+
+\[
+Average Forgetting = (1/(T-1)) * sum_{t=0}^{T-2} F_t
+\]
+
+\subsubsection{3.3 Backward Transfer (BWT)}
+
+Backward transfer measures how learning new tasks affects performance on previous tasks:
+
+\[
+BWT = (1/(T-1)) * sum_{t=0}^{T-2} (A[T-1, t] - A[t, t])
+\]
+
+\begin{itemize}[leftmargin=*]
+\item \texttt{BWT < 0}: Negative transfer (forgetting)
+\item \texttt{BWT > 0}: Positive transfer (learning new tasks improves old ones)
+\item $BWT = 0$: No transfer effect
+\end{itemize}
+
+\subsubsection{3.4 Forward Transfer (FWT)}
+
+Forward transfer measures how knowledge from previous tasks helps learning new tasks:
+
+\[
+FWT = (1/(T-1)) * sum_{t=1}^{T-1} (A[t-1, t] - B[t])
+\]
+
+Where $B[t]$ is the baseline accuracy on task $t$ (e.g., random initialization performance).
+
+\begin{itemize}[leftmargin=*]
+\item \texttt{FWT > 0}: Positive forward transfer
+\item \texttt{FWT < 0}: Negative forward transfer (interference)
+\end{itemize}
+
+\subsubsection{3.5 Learning Curve Area}
+
+For each task $t$, the learning curve tracks $A[i, t]$ for $i \ge  t$. The area under this curve provides a comprehensive view of both initial learning and retention.
+
+\subsection{4. Standard Datasets}
+
+\subsubsection{4.1 Split-MNIST}
+
+\begin{itemize}[leftmargin=*]
+\item \textbf{Tasks}: 5
+\item \textbf{Classes}: 10 (digits 0-9)
+\item \textbf{Task composition}: ${(0,1), (2,3), (4,5), (6,7), (8,9)}$
+\item \textbf{Input shape}: (784,) or (28, 28)
+\item \textbf{Labels}: One-hot encoded (10,)
+\end{itemize}
+
+\subsubsection{4.2 Permuted-MNIST}
+
+\begin{itemize}[leftmargin=*]
+\item \textbf{Tasks}: Configurable (typically 10-20)
+\item \textbf{Classes}: 10 (same digits each task)
+\item \textbf{Task composition}: Same classes, different pixel permutations
+\item \textbf{Input shape}: (784,)
+\item \textbf{Labels}: One-hot encoded (10,)
+\end{itemize}
+
+\subsubsection{4.3 Split-CIFAR10}
+
+\begin{itemize}[leftmargin=*]
+\item \textbf{Tasks}: 5
+\item \textbf{Classes}: 10
+\item \textbf{Task composition}: ${(airplane, automobile), (bird, cat), \ldots}$
+\item \textbf{Input shape}: (3072,) or (32, 32, 3)
+\item \textbf{Labels}: One-hot encoded (10,)
+\end{itemize}
+
+\subsubsection{4.4 Split-CIFAR100}
+
+\begin{itemize}[leftmargin=*]
+\item \textbf{Tasks}: 10 or 20
+\item \textbf{Classes}: 100
+\item \textbf{Task composition}: Groups of 10 or 5 classes
+\item \textbf{Input shape}: (3072,) or (32, 32, 3)
+\item \textbf{Labels}: One-hot encoded (100,)
+\end{itemize}
+
+\subsection{5. Reporting Standards}
+
+\subsubsection{5.1 Required Information}
+
+When reporting results, include:
+
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Dataset}: Name and configuration
+\item \textbf{Model architecture}: Network structure, number of parameters
+\item \textbf{Training}: Epochs per task, batch size, learning rate, optimizer
+\item \textbf{Evaluation}: Number of runs, random seeds used
+\item \textbf{Metrics}: Average Accuracy, Forgetting, BWT (with standard deviations)
+\end{enumerate}
+
+\subsubsection{5.2 Recommended Format}
+
+\begin{Verbatim}[fontsize=\small]
+Dataset: Split-MNIST (5 tasks)
+Model: MLP (784-256-10)
+Training: 5 epochs/task, batch=256, lr=0.01, SGD
+Runs: 5 (seeds: 0, 1, 2, 3, 4)
+
+Results:
+- Average Accuracy: 0.8534 +/- 0.0123
+- Average Forgetting: 0.1245 +/- 0.0089
+- Backward Transfer: -0.0987 +/- 0.0056
+\end{Verbatim}
+
+\subsubsection{5.3 Visualization}
+
+Include at minimum:
+
+\begin{enumerate}[leftmargin=*]
+\item Accuracy matrix heatmap
+\item Per-task forgetting bar chart
+\item Learning curves (optional but recommended)
+\end{enumerate}
+
+\subsection{6. Statistical Significance}
+
+\subsubsection{6.1 Comparing Methods}
+
+When comparing two methods A and B:
+
+\begin{enumerate}[leftmargin=*]
+\item \textbf{Paired t-test}: For normally distributed differences
+\item \textbf{Wilcoxon signed-rank}: For non-parametric comparison
+\item \textbf{Bootstrap confidence intervals}: For robust estimation
+\end{enumerate}
+
+\subsubsection{6.2 Effect Size}
+
+Report Cohen's d for practical significance:
+
+\[
+d = (mean_A - mean_B) / pooled_std
+\]
+
+Interpretation:
+
+\begin{itemize}[leftmargin=*]
+\item \texttt{|d| < 0.2}: Negligible
+\item $0.2 \le  |d| < 0.5$: Small
+\item $0.5 \le  |d| < 0.8$: Medium
+\item $|d| \ge  0.8$: Large
+\end{itemize}
+
+\subsection{7. Reference Baselines}
+
+\subsubsection{7.1 Naive Fine-tuning (Lower Bound)}
+
+\begin{itemize}[leftmargin=*]
+\item Train sequentially on each task
+\item No mechanism to prevent forgetting
+\item Establishes lower bound for continual learning performance
+\end{itemize}
+
+\subsubsection{7.2 Joint Training (Upper Bound)}
+
+\begin{itemize}[leftmargin=*]
+\item Train on all tasks simultaneously (all data available)
+\item Violates continual learning constraints
+\item Establishes upper bound for achievable performance
+\end{itemize}
+
+\subsubsection{7.3 Experience Replay}
+
+\begin{itemize}[leftmargin=*]
+\item Maintain buffer of samples from previous tasks
+\item Mix replay samples with current task training
+\item Common practical approach
+\end{itemize}
+
+\subsubsection{7.4 EWC (Elastic Weight Consolidation)}
+
+\begin{itemize}[leftmargin=*]
+\item Compute Fisher information after each task
+\item Add quadratic penalty to protect important parameters
+\item Regularization-based approach
+\end{itemize}
+
+\subsection{8. Implementation Notes}
+
+\subsubsection{8.1 Data Format}
+
+\begin{itemize}[leftmargin=*]
+\item Images: NumPy arrays, dtype float32, range [0, 1]
+\item Labels: One-hot encoded NumPy arrays, dtype float32
+\item Batching: Provided through iterator interface
+\end{itemize}
+
+\subsubsection{8.2 Reproducibility}
+
+For reproducible results:
+
+\begin{enumerate}[leftmargin=*]
+\item Set numpy random seed before each run
+\item Use deterministic data shuffling
+\item Document framework-specific seeds (PyTorch, JAX, TensorFlow)
+\end{enumerate}
+
+\subsubsection{8.3 Evaluation Timing}
+
+Evaluate AFTER completing training on each task, not during training epochs. This ensures the accuracy matrix reflects the model state at task boundaries.
+
+\subsection{Appendix A: Mathematical Notation}
+
+\begin{longtable}{p{0.28\textwidth} p{0.62\textwidth}}
+\toprule
+Symbol & Description \\
+\midrule
+\endfirsthead
+\toprule
+Symbol & Description \\
+\midrule
+\endhead
+T & Total number of tasks \\
+t & Task index (0-indexed) \\
+A[i,j] & Accuracy on task j after training through task i \\
+$F_t$ & Forgetting for task t \\
+$BWT$ & Backward Transfer \\
+$FWT$ & Forward Transfer \\
+$D_t^{\mathrm{train}}$ & Training data for task t \\
+$D_t^{\mathrm{test}}$ & Test data for task t \\
+$C_t$ & Classes in task t \\
+\bottomrule
+\end{longtable}
+
+\subsection{Appendix B: Changelog}
+
+\subsubsection{Version 1.0.0}
+
+\begin{itemize}[leftmargin=*]
+\item Initial protocol specification
+\item Standard metrics definitions
+\item Built-in dataset specifications
+\item Reporting guidelines
+\end{itemize}
+
+
+\end{document}
