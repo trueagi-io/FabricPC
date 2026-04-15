@@ -26,9 +26,9 @@ Usage:
     python examples/mupc_mnist_demo.py --num_hidden 20 --hidden_dim 64
 """
 
-from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+from jax_setup import set_jax_flags_before_importing_jax
 
-set_jax_flags_before_importing_jax(jax_platforms="cuda")
+set_jax_flags_before_importing_jax()
 
 import argparse
 import time
@@ -72,7 +72,7 @@ def parse_args():
         "--hidden_dim",
         type=int,
         default=64,
-        help="Hidden layer width (default: 128, matches jpc reference)",
+        help="Hidden layer width (default: 64, matches jpc reference)",
     )
     parser.add_argument(
         "--num_hidden",
@@ -101,7 +101,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def build_mupc_network(hidden_dim=128, num_hidden=2, infer_steps=None, eta_infer=0.1):
+def build_mupc_network(hidden_dim=64, num_hidden=2, infer_steps=None, eta_infer=0.1):
     """
     Build an FC network for MNIST with muPC scaling.
 

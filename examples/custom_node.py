@@ -5,9 +5,9 @@ Create a custom node type by subclassing NodeBase, implementing a
 forward pass with JAX's lax.conv, and training on MNIST.
 """
 
-from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+from jax_setup import set_jax_flags_before_importing_jax
 
-set_jax_flags_before_importing_jax(jax_platforms="cuda")
+set_jax_flags_before_importing_jax()
 
 import time
 from typing import Dict, Any, Optional, Tuple

@@ -249,6 +249,7 @@ class StorkeyHopfield(NodeBase):
         strength: jax.Array,
     ) -> NodeState:
         """Add Hopfield attractor energy E = (1/2D) z^T (W^2 - W) z to state.
+        E = (1/2D) z^T (W^2) z -(1/2D) z^T (W) z
 
         The Hopfield energy pulls z toward stored patterns (attractors in
         z-space). Combined with the PC energy (which pulls z toward the

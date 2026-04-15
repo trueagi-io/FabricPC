@@ -417,3 +417,19 @@ Strength        Hopfield%         MLP%     Delta%    p-value   Sig        d    L
 32.0         55.72+/-0.46 58.17+/-0.19      -2.44     0.0012     *   -1.472           
 learnable    60.72+/-0.20 58.17+/-0.19      +2.55     0.0000     *    3.949      0.995
 ──────────────────────────────────────────────────────────────────────────────────────
+
+RESULTS SUMMARY (sweep K examples per class, Gaussian noise with std n):
+  Hopfield strength: 1.0
+  Trials: 10, Epochs: 5
+Delta Accuracy Heatmap (Hopfield - MLP, percentage points):
+
+     K  n=0.0  n=0.5  n=1.0  n=1.5  n=2.0
+-----------------------------------------
+     5  -1.2   -0.9   -0.7   -0.5   -0.5 
+    10  -1.5   -1.1   -0.8   -0.3   -0.1 
+    20  -0.1   -0.0   +0.7   +1.7*  +2.4*
+    50  -0.8*  -0.4   +0.7*  +1.7*  +2.6*
+   100  -0.4*  +0.0   +1.0*  +1.9*  +3.0*
+   500  +0.2   +0.7*  +1.9*  +2.9*  +3.8*
+
+  * = significant at p<0.05

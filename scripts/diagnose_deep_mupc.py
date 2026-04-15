@@ -7,7 +7,7 @@ Prints per-layer forward scales for a 20-layer chain to verify:
 - Energy is non-zero and weight gradients are non-zero after inference
 """
 
-from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+from jax_setup import set_jax_flags_before_importing_jax
 
 set_jax_flags_before_importing_jax(jax_platforms="cpu")
 
