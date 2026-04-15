@@ -53,8 +53,8 @@ This is expected — JAX JIT-compiles the training step on first invocation. Sub
 
 Set before importing JAX:
 ```python
-from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
-set_jax_flags_before_importing_jax(jax_platforms="cuda")
+from jax_setup import set_jax_flags_before_importing_jax
+set_jax_flags_before_importing_jax()
 ```
 
 Or manually:

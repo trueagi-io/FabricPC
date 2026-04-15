@@ -8,7 +8,7 @@ PC training is not yet tuned — treat as a starting point for experimentation.
 use_pcn = True  # Set to True to use predictive coding training, False for backprop
 use_extra_skip_connections = True  # Add extra skip connections from embedding to all transformer blocks (can help PC inference convergence)
 
-from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+from jax_setup import set_jax_flags_before_importing_jax
 
 set_jax_flags_before_importing_jax()
 

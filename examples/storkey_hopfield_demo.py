@@ -31,9 +31,9 @@ python examples/storkey_hopfield_demo.py --k_values "50" --noise_levels "2.0" --
 ------------------------------------------------------------------------------
 """
 
-from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+from jax_setup import set_jax_flags_before_importing_jax
 
-set_jax_flags_before_importing_jax(jax_platforms="cpu")
+set_jax_flags_before_importing_jax()
 
 import argparse
 import numpy as np
@@ -410,12 +410,7 @@ def main():
         print()
         print("  * = significant at p<0.05")
 
-    # Count wins
-    hop_wins = sum(1 for r in grid_results if r["significant"] and r["delta_mean"] > 0)
-    mlp_wins = sum(1 for r in grid_results if r["significant"] and r["delta_mean"] < 0)
-    ties = len(grid_results) - hop_wins - mlp_wins
     print()
-    print(f"Significant wins: Hopfield={hop_wins}, MLP={mlp_wins}, NS={ties}")
     print("=" * 70)
 
 

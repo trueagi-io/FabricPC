@@ -60,6 +60,9 @@ all = [
     "fabricpc[dev,tfds,experiments,viz]",
 ]
 
+[tool.setuptools]
+py-modules = ["jax_setup"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["fabricpc*"]

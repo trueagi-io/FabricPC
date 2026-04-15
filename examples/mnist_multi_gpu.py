@@ -6,9 +6,9 @@ Data-parallel training across multiple GPUs using pmap.
 Works with 1 GPU (falls back to single-device) but benefits from 2+.
 """
 
-from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+from jax_setup import set_jax_flags_before_importing_jax
 
-set_jax_flags_before_importing_jax(jax_platforms="cuda")
+set_jax_flags_before_importing_jax()
 
 import jax
 import time

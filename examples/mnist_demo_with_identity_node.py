@@ -7,9 +7,9 @@ no learnable parameters. An IdentityNode is inserted between hidden layers
 as a passthrough.
 """
 
-from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+from jax_setup import set_jax_flags_before_importing_jax
 
-set_jax_flags_before_importing_jax(jax_platforms="cuda")
+set_jax_flags_before_importing_jax()
 
 import jax
 from fabricpc.nodes import Linear, IdentityNode

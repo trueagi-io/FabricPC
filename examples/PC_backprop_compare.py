@@ -18,9 +18,9 @@ Usage:
     python examples/PC_backprop_compare.py --verbose       # show per-epoch output
 """
 
-from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+from jax_setup import set_jax_flags_before_importing_jax
 
-set_jax_flags_before_importing_jax(jax_platforms="cuda")  # "cpu", "cuda" or "tpu"
+set_jax_flags_before_importing_jax()  # "cpu", "cuda" or "tpu"
 
 import jax
 import argparse
