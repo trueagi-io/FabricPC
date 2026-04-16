@@ -506,12 +506,23 @@ class NodeBase(ABC):
             node_class.forward, argnums=0, has_aux=True
         )(params, scaled_inputs, state, node_info)
 
-        # Apply muPC weight gradient scaling per edge
+        # Apply muPC weight gradient scaling
         if node_info.scaling_config is not None:
-            scaled_weights = {
-                edge_key: grad * node_info.scaling_config.weight_grad_scale[edge_key]
-                for edge_key, grad in params_grad.weights.items()
-            }
+            wg_scale = node_info.scaling_config.weight_grad_scale
+            if all(k in wg_scale for k in params_grad.weights):
+                # Edge-keyed weights (e.g., LinearNode): per-edge scaling
+                scaled_weights = {
+                    key: grad * wg_scale[key]
+                    for key, grad in params_grad.weights.items()
+                }
+            else:
+                # Param-name-keyed weights (e.g., TransformerBlock):
+                # apply uniform scale from mean of all edge scales
+                uniform_scale = sum(wg_scale.values()) / len(wg_scale)
+                scaled_weights = {
+                    key: grad * uniform_scale
+                    for key, grad in params_grad.weights.items()
+                }
             params_grad = NodeParams(weights=scaled_weights, biases=params_grad.biases)
 
         return new_state, params_grad

@@ -98,17 +98,18 @@ class SkipConnection(NodeBase):
         node_info: NodeInfo,
     ) -> Tuple[jax.Array, NodeState]:
         """Sum all inputs and pass through (no transformation)."""
-        z_mu = None
+        pre_activation = None
         for edge_key, x in inputs.items():
-            if z_mu is None:
-                z_mu = x
+            if pre_activation is None:
+                pre_activation = x
             else:
-                z_mu = z_mu + x
+                pre_activation = pre_activation + x
 
+        z_mu = pre_activation  # no activation function, so pre_activation = z_mu
         error = state.z_latent - z_mu
         state = state._replace(
-            pre_activation=z_mu,
-            z_mu=z_mu,
+            pre_activation=pre_activation,
+            z_mu=z_mu,  # no activation function, so pre_activation = z_mu
             error=error,
         )
 

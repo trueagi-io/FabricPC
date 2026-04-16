@@ -33,9 +33,10 @@ import time
 from typing import Tuple, Dict, List, Optional, Any
 from tqdm.auto import tqdm
 
-from fabricpc.nodes import Linear, TransformerBlock, IdentityNode
+from fabricpc.nodes import Linear, TransformerBlock, IdentityNode, SkipConnection
 from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.graph import initialize_params, FeedforwardStateInit
+from fabricpc.core.mupc import MuPCConfig
 from fabricpc.core.activations import (
     IdentityActivation,
     SoftmaxActivation,
@@ -44,10 +45,9 @@ from fabricpc.core.activations import (
 from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.core.initializers import (
     NormalInitializer,
-    KaimingInitializer,
-    XavierInitializer,
+    MuPCInitializer,
 )
-from fabricpc.core.inference import InferenceSGDNormClip, InferenceSGD
+from fabricpc.core.inference import InferenceSGDNormClip
 import optax
 from fabricpc.training.train_autoregressive import (
     train_step_autoregressive,
@@ -137,15 +137,13 @@ def create_transformer_model(
     embed = Linear(
         shape=(seq_len, embed_dim),
         activation=IdentityActivation(),
-        weight_init=NormalInitializer(std=1.0 / jnp.sqrt(vocab_size)),
+        weight_init=MuPCInitializer(),
         name="embed",
     )
     mask_node = IdentityNode(shape=(1, seq_len, seq_len), name="mask")
 
     nodes = [input_node, embed, mask_node]
     edges = [Edge(source=input_node, target=embed.slot("in"))]
-
-    # TODO add skip connections and summing blocks.
 
     prev_node = embed
     for i in range(num_blocks):
@@ -157,10 +155,17 @@ def create_transformer_model(
             rope_theta=rope_theta,
             name=f"transformer_{i}",
         )
+        new_skip = SkipConnection(
+            shape=(seq_len, embed_dim),
+            name=f"skip_{i}",
+        )
         nodes.append(new_block)
         edges.append(Edge(source=prev_node, target=new_block.slot("in")))
         edges.append(Edge(source=mask_node, target=new_block.slot("mask")))
-        prev_node = new_block
+        nodes.append(new_skip)
+        edges.append(Edge(source=prev_node, target=new_skip.slot("in")))
+        edges.append(Edge(source=new_block, target=new_skip.slot("in")))
+        prev_node = new_skip
 
     output_node = Linear(
         shape=(seq_len, vocab_size),
@@ -180,6 +185,7 @@ def create_transformer_model(
         inference=InferenceSGDNormClip(
             eta_infer=eta_infer, infer_steps=infer_steps, max_norm=0.5, latent_decay=0.0
         ),
+        scaling=MuPCConfig(include_output=False),
     )
     params = initialize_params(structure, rng_key)
     return structure, params
