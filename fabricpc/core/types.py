@@ -23,6 +23,9 @@ class SlotInfo:
     name: str  # Slot name (e.g., "in")
     parent_node: str  # Name of the parent node
     is_multi_input: bool  # True if slot accepts multiple edges, False for single edge
+    is_variance_scalable: (
+        bool  # muPC scales edges to this slot (True) or leaves at 1.0 (False)
+    )
     in_neighbors: Tuple[str, ...]  # Tuple of node names connecting to this slot
 
 

@@ -54,6 +54,9 @@ class SlotSpec:
 
     name: str
     is_multi_input: bool  # True = multiple inputs allowed, False = single input only
+    is_variance_scalable: bool = (
+        True  # False = muPC leaves edges to this slot unscaled (scale 1.0)
+    )
 
 
 @dataclass(frozen=True)
@@ -155,6 +158,7 @@ class NodeBase(ABC):
     # SkipConnection sets this to False so the identity mapping is preserved
     # through deep residual networks, preventing exponential signal decay.
     # Post-synaptic nodes count their in_degree scaling factor only for nodes that set apply_variance_scaling=True.
+    # TODO deprecate this attribute - mupc now handles scaling by edge and input slot than by node output.
     apply_variance_scaling: bool = True
 
     def __init__(

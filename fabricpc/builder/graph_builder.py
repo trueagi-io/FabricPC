@@ -49,6 +49,7 @@ def _build_slots(node: NodeBase, in_edges: Dict[str, EdgeInfo]) -> Dict[str, Slo
             name=slot_name,
             parent_node=node.name,
             is_multi_input=slot_spec.is_multi_input,
+            is_variance_scalable=slot_spec.is_variance_scalable,
             in_neighbors=tuple(in_neighbors),
         )
 
