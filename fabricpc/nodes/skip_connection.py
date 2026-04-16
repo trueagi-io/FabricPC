@@ -73,7 +73,9 @@ class SkipConnection(NodeBase):
 
     @staticmethod
     def get_slots() -> Dict[str, SlotSpec]:
-        return {"in": SlotSpec(name="in", is_multi_input=True)}
+        return {
+            "in": SlotSpec(name="in", is_multi_input=True, is_variance_scalable=False)
+        }
 
     @staticmethod
     def get_weight_fan_in(source_shape: Tuple[int, ...], config: Dict[str, Any]) -> int:

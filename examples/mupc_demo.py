@@ -7,24 +7,26 @@ on a deep fully-connected residual network trained on MNIST, using only
 FabricPC's native graph components. muPC scaling is computed automatically
 from the graph topology — no manual scaling needed.
 
-Architecture:
-    input(784) -> stem(W, W=64) -> [N residual blocks] -> output(10)
+Two residual block styles are supported (--mode flag):
 
-Each residual block:
-    prev -> Linear(W, Tanh) -> SkipConnection(sum)
-      |                              ^
-      +------------------------------+  (identity skip path)
+  skip (default): Linear + SkipConnection (2 PC nodes per block)
+      prev -> Linear(W, Tanh) -> SkipConnection(sum)
+        |                              ^
+        +------------------------------+  (identity skip path)
 
-SkipConnection nodes have apply_variance_scaling=False, so muPC preserves
-the identity mapping through deep networks without signal decay.
+  linear_residual: LinearResidual (1 PC node per block, half graph depth)
+      prev -> LinearResidual(W, Tanh, skip=prev)
+
+Both use edge-based muPC scaling: "in" slot edges get full variance
+scaling, "skip" slot edges pass through at scale 1.0.
 
 Usage:
     python examples/mupc_demo.py
+    python examples/mupc_demo.py --mode linear_residual --num_blocks 32
     python examples/mupc_demo.py --num_blocks 4 --verbose
-    python examples/mupc_demo.py --num_blocks 32 --num_epochs 6
 
     for d in 8 16 32 64 128; do
-      python examples/mupc_demo.py --num_blocks $d
+      python examples/mupc_demo.py --mode linear_residual --num_blocks $d
     done
 """
 
@@ -42,7 +44,7 @@ import time
 import jax
 import optax
 
-from fabricpc.nodes import Linear, IdentityNode
+from fabricpc.nodes import Linear, IdentityNode, LinearResidual
 from fabricpc.nodes.skip_connection import SkipConnection
 from fabricpc.builder import Edge, TaskMap, graph, GraphNamespace
 from fabricpc.graph import initialize_params
@@ -108,6 +110,13 @@ def parse_args():
         help="Weight decay (default: 0.01)",
     )
     parser.add_argument(
+        "--mode",
+        choices=["skip", "linear_residual"],
+        default="skip",
+        help="Residual block style: 'skip' (Linear+SkipConnection, 2 nodes/block) "
+        "or 'linear_residual' (LinearResidual, 1 node/block). Default: skip",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         default=False,
@@ -137,7 +146,7 @@ def build_fc_resnet(num_blocks, hidden_dim, infer_steps=None, *, eta_infer):
         GraphStructure with muPC scaling.
     """
     if infer_steps is None:
-        infer_steps = max(20, 6 * (num_blocks + 2))
+        infer_steps = max(20, 3 * (2 * num_blocks + 2))
     mupc_init = MuPCInitializer()
 
     # Input node
@@ -201,6 +210,78 @@ def build_fc_resnet(num_blocks, hidden_dim, infer_steps=None, *, eta_infer):
     return structure
 
 
+def build_fc_resnet_linear_residual(
+    num_blocks, hidden_dim, infer_steps=None, *, eta_infer
+):
+    """
+    Build an FC-ResNet using LinearResidual nodes (1 PC node per block).
+
+    Architecture:
+        input(784) -> stem(hidden_dim) -> [N LinearResidual blocks] -> output(10)
+
+    Each LinearResidual has two slots:
+      - "in"   (scalable): receives input, applies W @ x + b then activation
+      - "skip" (non-scalable): receives identity skip, summed after activation
+
+    This halves the graph depth compared to build_fc_resnet: N+2 nodes
+    instead of 2N+2.
+    """
+    if infer_steps is None:
+        infer_steps = max(20, 3 * (num_blocks + 2))
+    mupc_init = MuPCInitializer()
+
+    input_node = IdentityNode(shape=(784,), name="input")
+
+    stem = Linear(
+        shape=(hidden_dim,),
+        weight_init=mupc_init,
+        flatten_input=True,
+        name="stem",
+    )
+
+    all_nodes = [input_node, stem]
+    all_edges = [Edge(source=input_node, target=stem.slot("in"))]
+
+    prev = stem
+    for i in range(num_blocks):
+        with GraphNamespace(f"block{i}"):
+            res = LinearResidual(
+                shape=(hidden_dim,),
+                activation=TanhActivation(),
+                weight_init=mupc_init,
+                name="res",
+            )
+
+        all_nodes.append(res)
+        all_edges.extend(
+            [
+                Edge(source=prev, target=res.slot("in")),  # transform path
+                Edge(source=prev, target=res.slot("skip")),  # identity skip
+            ]
+        )
+        prev = res
+
+    output = Linear(
+        shape=(10,),
+        activation=SoftmaxActivation(),
+        energy=CrossEntropyEnergy(),
+        weight_init=XavierInitializer(),
+        name="output",
+    )
+    all_nodes.append(output)
+    all_edges.append(Edge(source=prev, target=output.slot("in")))
+
+    structure = graph(
+        nodes=all_nodes,
+        edges=all_edges,
+        task_map=TaskMap(x=input_node, y=output),
+        inference=InferenceSGD(eta_infer=eta_infer, infer_steps=infer_steps),
+        scaling=MuPCConfig(include_output=False),
+    )
+
+    return structure
+
+
 def main():
     args = parse_args()
 
@@ -212,16 +293,27 @@ def main():
     graph_key, train_key, eval_key = jax.random.split(master_rng_key, 3)
 
     # Build model
-    structure = build_fc_resnet(
-        num_blocks=args.num_blocks,
-        hidden_dim=args.hidden_dim,
-        infer_steps=args.infer_steps,
-        eta_infer=args.eta_infer,
-    )
+    if args.mode == "linear_residual":
+        structure = build_fc_resnet_linear_residual(
+            num_blocks=args.num_blocks,
+            hidden_dim=args.hidden_dim,
+            infer_steps=args.infer_steps,
+            eta_infer=args.eta_infer,
+        )
+        mode_label = "LinearResidual (1 node/block)"
+    else:
+        structure = build_fc_resnet(
+            num_blocks=args.num_blocks,
+            hidden_dim=args.hidden_dim,
+            infer_steps=args.infer_steps,
+            eta_infer=args.eta_infer,
+        )
+        mode_label = "Linear+SkipConnection (2 nodes/block)"
     params = initialize_params(structure, graph_key)
 
+    print(f"\nMode: {mode_label}")
     print(
-        f"\nArchitecture: input(784) -> stem({args.hidden_dim})"
+        f"Architecture: input(784) -> stem({args.hidden_dim})"
         f" -> {args.num_blocks} residual blocks -> output(10)"
     )
     print(f"Model: {len(structure.nodes)} nodes, {len(structure.edges)} edges")
