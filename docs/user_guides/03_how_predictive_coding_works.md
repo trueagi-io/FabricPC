@@ -22,7 +22,7 @@ The **inference loop** minimizes energy by updating latent states `z_latent` whi
 z_latent -= eta_infer * dE/dz
 ```
 
-where `eta_infer` is the inference learning rate (distinct from the weight learning rate). The network runs this update for a fixed number of steps (e.g., 20) until the states converge to a low-energy configuration.
+where `eta_infer` is the inference rate (distinct from the weight learning rate). The network runs this update for a fixed number of steps (e.g., 20) until the states converge to a low-energy configuration.
 
 In FabricPC, inference is controlled by an inference algorithm like `InferenceSGD`:
 
@@ -121,7 +121,7 @@ Here's how predictive coding concepts map to FabricPC types:
 | Weight gradient | `compute_local_weight_gradients` | Local Hebbian gradient `dE/dW` |
 | Clamped node | `clamps` dict | Node whose `z_latent` is fixed to observed data |
 | Inference steps | `InferenceSGD.infer_steps` | Number of inner-loop iterations |
-| Inference learning rate | `InferenceSGD.eta_infer` | Step size for latent state updates |
+| Inference rate | `InferenceSGD.eta_infer` | Step size for latent state updates |
 | Weight learning rate | `optax.adam(lr)` | Step size for weight updates |
 
 ### Example: Accessing States

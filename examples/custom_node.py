@@ -302,7 +302,6 @@ def main():
     )
 
     print(f"Test Accuracy: {metrics['accuracy'] * 100:.2f}%")
-    print(f"Test Energy:   {metrics['energy']:.4f}")
 
 
 if __name__ == "__main__":

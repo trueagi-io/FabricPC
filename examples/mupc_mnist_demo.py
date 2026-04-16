@@ -66,7 +66,7 @@ def parse_args():
         "--batch_size",
         type=int,
         default=256,
-        help="Batch size (default: 64, matches jpc reference)",
+        help="Batch size (default: 256)",
     )
     parser.add_argument(
         "--hidden_dim",
@@ -78,7 +78,7 @@ def parse_args():
         "--num_hidden",
         type=int,
         default=10,
-        help="Number of hidden layers (default: 20)",
+        help="Number of hidden layers (default: 10)",
     )
     parser.add_argument(
         "--infer_steps",
@@ -89,8 +89,20 @@ def parse_args():
     parser.add_argument(
         "--eta_infer",
         type=float,
-        default=0.1,
-        help="Inference learning rate (default: 0.1)",
+        default=0.003,
+        help="Inference rate (default: 0.003)",
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=0.002,
+        help="Learning rate (default: 0.002)",
+    )
+    parser.add_argument(
+        "--weight_decay",
+        type=float,
+        default=0.01,
+        help="Weight decay (default: 0.01)",
     )
     parser.add_argument(
         "--verbose",
@@ -101,7 +113,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def build_mupc_network(hidden_dim=64, num_hidden=2, infer_steps=None, eta_infer=0.1):
+def build_mupc_network(hidden_dim, num_hidden, infer_steps=None, *, eta_infer):
     """
     Build an FC network for MNIST with muPC scaling.
 
@@ -116,7 +128,7 @@ def build_mupc_network(hidden_dim=64, num_hidden=2, infer_steps=None, eta_infer=
         hidden_dim: Width of hidden layers.
         num_hidden: Number of hidden layers.
         infer_steps: Inference steps per sample. Default: max(20, 3*(num_hidden+2)).
-        eta_infer: Inference learning rate. Default: 0.1.
+        eta_infer: Inference rate.
 
     Returns:
         GraphStructure with muPC scaling.
@@ -220,7 +232,7 @@ def main():
     )
 
     # Train
-    optimizer = optax.adamw(0.001, weight_decay=0.01)
+    optimizer = optax.adamw(args.lr, weight_decay=args.weight_decay)
     train_config = {"num_epochs": args.num_epochs}
 
     print(

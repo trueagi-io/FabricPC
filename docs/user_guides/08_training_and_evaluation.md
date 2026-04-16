@@ -111,22 +111,23 @@ This is useful for validating that the PC network architecture is capable, indep
 
 ## Multi-GPU Training
 
-Scale to multiple GPUs with data parallelism:
+`train_pcn` and `evaluate_pcn` automatically detect available devices and use
+pmap data parallelism when multiple GPUs are present. No separate import is needed:
 
 ```python
-from fabricpc.training.multi_gpu import (
-    train_pcn_multi_gpu, evaluate_pcn_multi_gpu,
-    replicate_params, shard_batch
-)
+from fabricpc.training import train_pcn, evaluate_pcn
 
-trained_params, _, _ = train_pcn_multi_gpu(
+# Same API for 1 or N devices — multi-GPU is automatic
+trained_params, energies, epoch_results = train_pcn(
     params=params, structure=structure, train_loader=train_loader,
     optimizer=optimizer, config=config, rng_key=train_key,
 )
-metrics = evaluate_pcn_multi_gpu(trained_params, structure, test_loader, config, eval_key)
+metrics = evaluate_pcn(trained_params, structure, test_loader, config, eval_key)
 ```
 
-The total batch size must be divisible by the number of devices. Works transparently with a single GPU.
+The total batch size must be divisible by the number of devices (batches that
+aren't divisible are skipped with a warning). To force the pmap code path on a
+single device (useful for testing), pass `pmap_single_device=True`.
 
 ## Statistical A/B Experiments
 

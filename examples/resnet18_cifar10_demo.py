@@ -18,13 +18,9 @@ Each residual block:
 
 Skip connections use IdentityNode (same dims) or 1x1 conv (downsample).
 
-Default mode runs a single muPC training run. Use --run_ab_test for a
-statistical comparison of muPC vs standard Xavier parameterization.
-
 Usage:
     python examples/resnet18_cifar10_demo.py
     python examples/resnet18_cifar10_demo.py --num_epochs 10 --verbose
-    python examples/resnet18_cifar10_demo.py --run_ab_test --n_trials 5
 """
 
 import sys
@@ -64,7 +60,6 @@ from fabricpc.core.initializers import (
 from fabricpc.core.mupc import MuPCConfig
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.training import train_pcn, evaluate_pcn
-from fabricpc.experiments import ExperimentArm, ABExperiment
 from fabricpc.utils.data.dataloader import Cifar10Loader
 
 jax.config.update("jax_default_prng_impl", "threefry2x32")
@@ -285,7 +280,7 @@ def make_residual_block(
 
 
 def build_resnet18(
-    weight_init, scaling=None, output_weight_init=None, infer_steps=80, eta_infer=0.1
+    weight_init, scaling=None, output_weight_init=None, *, infer_steps, eta_infer
 ):
     """
     Build ResNet-18 for CIFAR-10 as a predictive coding graph.
@@ -304,7 +299,7 @@ def build_resnet18(
         output_weight_init: Optional InitializerBase for the output layer.
             Defaults to XavierInitializer.
         infer_steps: Number of PC inference steps.
-        eta_infer: PC inference learning rate.
+        eta_infer: Inference rate.
 
     Returns:
         GraphStructure ready for initialize_params().
@@ -384,11 +379,11 @@ def build_resnet18(
 
 
 # =============================================================================
-# Model Factories (for A/B experiment)
+# Model Factory
 # =============================================================================
 
 
-def _create_mupc_model(rng_key, infer_steps=80, eta_infer=0.1):
+def _create_mupc_model(rng_key, *, infer_steps, eta_infer):
     """Create ResNet-18 with muPC parameterization."""
     structure = build_resnet18(
         weight_init=MuPCInitializer(),
@@ -401,20 +396,8 @@ def _create_mupc_model(rng_key, infer_steps=80, eta_infer=0.1):
     return params, structure
 
 
-def _create_standard_model(rng_key, infer_steps=80, eta_infer=0.1):
-    """Create ResNet-18 with standard Xavier parameterization."""
-    structure = build_resnet18(
-        weight_init=XavierInitializer(),
-        scaling=None,
-        infer_steps=infer_steps,
-        eta_infer=eta_infer,
-    )
-    params = initialize_params(structure, rng_key)
-    return params, structure
-
-
 # =============================================================================
-# Run Modes
+# Training
 # =============================================================================
 
 
@@ -455,7 +438,7 @@ def run_single_mupc(args):
     test_loader = Cifar10Loader("test", batch_size=args.batch_size, shuffle=False)
 
     # Train
-    optimizer = optax.adamw(args.lr, weight_decay=0.01)
+    optimizer = optax.adamw(args.lr, weight_decay=args.weight_decay)
     train_config = {"num_epochs": args.num_epochs}
 
     print(
@@ -468,7 +451,7 @@ def run_single_mupc(args):
     progress = tqdm(total=num_batches * args.num_epochs, desc="Training", unit="batch")
 
     def iter_cb(epoch_idx, batch_idx, energy):
-        norm = float(energy) / args.batch_size
+        norm = float(energy)  # already per-sample
         progress.update(1)
         progress.set_postfix(
             epoch=f"{epoch_idx + 1}/{args.num_epochs}", energy=f"{norm:.4f}"
@@ -498,78 +481,6 @@ def run_single_mupc(args):
     print(f"Test Accuracy: {metrics['accuracy'] * 100:.2f}%")
 
 
-def run_ab_experiment(args):
-    """A/B comparison: muPC vs standard Xavier parameterization."""
-    optimizer = optax.adamw(args.lr, weight_decay=0.01)
-    train_config = {"num_epochs": args.num_epochs}
-
-    # Print architecture summary from a throwaway build
-    summary_struct = build_resnet18(weight_init=XavierInitializer())
-    n_nodes = len(summary_struct.nodes)
-    n_edges = len(summary_struct.edges)
-
-    print("=" * 70)
-    print("A/B Experiment: muPC vs Standard Parameterization")
-    print("=" * 70)
-    print(f"Architecture: CIFAR-10 ResNet-18 ({n_nodes} nodes, {n_edges} edges)")
-    print(f"muPC arm:     MuPCInitializer + MuPCConfig(include_output=False)")
-    print(f"Standard arm: XavierInitializer, no scaling")
-    print(f"Epochs per trial: {args.num_epochs}")
-    print(f"Trials: {args.n_trials}")
-    print(f"Batch size: {args.batch_size}")
-    print()
-
-    arm_mupc = ExperimentArm(
-        name="muPC",
-        model_factory=lambda rng_key: _create_mupc_model(
-            rng_key,
-            infer_steps=args.infer_steps,
-            eta_infer=args.eta_infer,
-        ),
-        train_fn=train_pcn,
-        eval_fn=evaluate_pcn,
-        optimizer=optimizer,
-        train_config=train_config,
-    )
-
-    arm_standard = ExperimentArm(
-        name="Standard",
-        model_factory=lambda rng_key: _create_standard_model(
-            rng_key,
-            infer_steps=args.infer_steps,
-            eta_infer=args.eta_infer,
-        ),
-        train_fn=train_pcn,
-        eval_fn=evaluate_pcn,
-        optimizer=optimizer,
-        train_config=train_config,
-    )
-
-    experiment = ABExperiment(
-        arm_a=arm_mupc,
-        arm_b=arm_standard,
-        metric="accuracy",
-        data_loader_factory=lambda seed: (
-            Cifar10Loader(
-                "train",
-                batch_size=args.batch_size,
-                shuffle=True,
-                seed=seed,
-            ),
-            Cifar10Loader(
-                "test",
-                batch_size=args.batch_size,
-                shuffle=False,
-            ),
-        ),
-        n_trials=args.n_trials,
-        verbose=args.verbose,
-    )
-
-    results = experiment.run()
-    results.print_summary()
-
-
 # =============================================================================
 # CLI and Main
 # =============================================================================
@@ -578,17 +489,6 @@ def run_ab_experiment(args):
 def parse_args():
     parser = argparse.ArgumentParser(
         description="ResNet-18 on CIFAR-10 (Predictive Coding)"
-    )
-    parser.add_argument(
-        "--run_ab_test",
-        action="store_true",
-        help="Run statistical A/B comparison (muPC vs Xavier/no-scaling)",
-    )
-    parser.add_argument(
-        "--n_trials",
-        type=int,
-        default=2,
-        help="Number of A/B trials (default: 2, only with --run_ab_test)",
     )
     parser.add_argument(
         "--num_epochs", type=int, default=2, help="Training epochs (default: 2)"
@@ -600,10 +500,13 @@ def parse_args():
         "--infer_steps", type=int, default=80, help="Inference steps (default: 80)"
     )
     parser.add_argument(
-        "--eta_infer", type=float, default=0.1, help="Inference LR (default: 0.1)"
+        "--eta_infer", type=float, default=0.003, help="Inference rate (default: 0.003)"
     )
     parser.add_argument(
-        "--lr", type=float, default=0.001, help="Learning rate (default: 0.001)"
+        "--lr", type=float, default=0.002, help="Learning rate (default: 0.002)"
+    )
+    parser.add_argument(
+        "--weight_decay", type=float, default=0.01, help="Weight decay (default: 0.01)"
     )
     parser.add_argument("--verbose", action="store_true", help="Print per-epoch output")
     return parser.parse_args()
@@ -611,11 +514,7 @@ def parse_args():
 
 def main():
     args = parse_args()
-
-    if args.run_ab_test:
-        run_ab_experiment(args)
-    else:
-        run_single_mupc(args)
+    run_single_mupc(args)
 
 
 if __name__ == "__main__":

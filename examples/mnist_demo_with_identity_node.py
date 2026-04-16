@@ -98,7 +98,6 @@ if __name__ == "__main__":
         trained_params, structure, test_loader, train_config, eval_key
     )
     print(f"Test Accuracy: {metrics['accuracy'] * 100:.2f}%")
-    print(f"Test Energy:   {metrics['energy']:.4f}")
 
     print(
         f"\n{len(structure.nodes)} nodes, {len(structure.edges)} edges, "

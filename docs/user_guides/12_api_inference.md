@@ -24,7 +24,7 @@ structure = graph(..., inference=inference)
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `eta_infer` | `float` | `0.1` | Inference learning rate |
+| `eta_infer` | `float` | `0.1` | Inference rate |
 | `infer_steps` | `int` | `20` | Number of inference iterations |
 | `latent_decay` | `float` | `0.0` | Weight decay on latent states |
 
@@ -48,7 +48,7 @@ inference = InferenceSGDNormClip(
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `eta_infer` | `float` | `0.1` | Inference learning rate |
+| `eta_infer` | `float` | `0.1` | Inference rate |
 | `infer_steps` | `int` | `20` | Number of inference iterations |
 | `latent_decay` | `float` | `0.0` | Weight decay on latent states |
 | `max_norm` | `float` | `1.0` | Maximum L2 norm per node per sample |
