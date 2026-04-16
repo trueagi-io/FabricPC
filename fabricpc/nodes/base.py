@@ -149,6 +149,14 @@ class NodeBase(ABC):
     and weight_init in their ``__init__`` parameter defaults.
     """
 
+    # Whether muPC variance scaling is applied to edges arriving at this node.
+    # True (default): edges into this node are scaled by muPC (gain/sqrt(fan_in*K)).
+    # False: edges into this node are NOT scaled (pass-through at scale 1.0).
+    # SkipConnection sets this to False so the identity mapping is preserved
+    # through deep residual networks, preventing exponential signal decay.
+    # Post-synaptic nodes count their in_degree scaling factor only for nodes that set apply_variance_scaling=True.
+    apply_variance_scaling: bool = True
+
     def __init__(
         self,
         shape: Tuple[int, ...],

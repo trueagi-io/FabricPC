@@ -442,3 +442,16 @@ python examples/mupc_mnist_demo.py --num_hidden=*
                                                                                                                                                                                                                                                                                                            
   python examples/jpc_fc_resnet_compare.py  # depth=10, jpc scaling → ~93%      
   
+## Skip connections & Arbitry Graphs Upgrade (completed 2026-04-16)
+
+  Request 1 — Diagnose and fix muPC scaling for deep ResNets:
+  - Root cause: skip connections attenuated by 1/sqrt(K) causing exponential signal decay (0.707^L)
+  - Added fabricpc_v2 mode to jpc_fc_resnet_compare.py with skip_scale=1.0 and depth-compensated linear scaling
+  - Validated: 85.4% accuracy at depth 64 (vs 11.5% for broken fabricpc, 83.5% for JPC reference)
+
+  Request 2 — Extend muPC to arbitrary graphs:
+  - Added apply_variance_scaling = True default on NodeBase
+  - Created SkipConnection node with apply_variance_scaling = False
+  - Rewrote mupc.py with _count_skip_depth() counting only unscaled merge points as depth L
+  - Formula: a = gain / sqrt(fan_in * K * L) where K = in-degree, L = max(skip_depth, 1)
+  - Pure sequential chains degenerate to original formula (L=1), residual networks get depth compensation

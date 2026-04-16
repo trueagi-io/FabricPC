@@ -1,28 +1,28 @@
 """
-muPC Scaling — CIFAR-10 Conv Demo
+muPC Scaling — FC-ResNet on MNIST
 ==================================
 
 Demonstrates muPC (Maximal Update Parameterization for Predictive Coding)
-on a small convolutional network trained on CIFAR-10. Using this as a small network reference for task performance with muPC to compare the separate resnet18 example.
+on a deep fully-connected residual network trained on MNIST, using only
+FabricPC's native graph components. muPC scaling is computed automatically
+from the graph topology — no manual scaling needed.
 
 Architecture:
-    input(32,32,3) -> Conv3x3(32,32,16) -> Conv3x3(16,16,32, stride=2)
-    -> Conv3x3(8,8,64, stride=2) -> Linear(10, softmax, CE)
+    input(784) -> stem(W, W=64) -> [N residual blocks] -> output(10)
 
-Key patterns:
-    - MuPCInitializer() on all parameterized nodes (weights ~ N(0, gain^2))
-    - MuPCConfig() in graph() builder
-    - Per-edge forward/gradient scaling computed automatically from topology
+Each residual block:
+    prev -> Linear(W, Tanh) -> SkipConnection(sum)
+      |                              ^
+      +------------------------------+  (identity skip path)
+
+SkipConnection nodes have apply_variance_scaling=False, so muPC preserves
+the identity mapping through deep networks without signal decay.
 
 Usage:
     python examples/mupc_demo.py
-    python examples/mupc_demo.py --num_epochs 5 --verbose
-
-Test Accuracy: 49.08% after 2 epochs (quick demo).
+    python examples/mupc_demo.py --num_blocks 4 --verbose
+    python examples/mupc_demo.py --num_blocks 32 --num_epochs 6
 """
-
-# TODO merge this with the JPC comparison which compares with FabricPC's maximal update algorithm on FC resnets. The main point is to show muPC works for long chains of FC layers, and skip connections.
-# Call it something like deep network muPC ab_test. Point user to the resnet18 demo for a convolutional resnet example.
 
 import sys
 from pathlib import Path
@@ -39,38 +39,39 @@ import jax
 import optax
 
 from fabricpc.nodes import Linear, IdentityNode
-from custom_node import Conv2DNode
-from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.nodes.skip_connection import SkipConnection
+from fabricpc.builder import Edge, TaskMap, graph, GraphNamespace
 from fabricpc.graph import initialize_params
-from fabricpc.core.activations import (
-    IdentityActivation,
-    ReLUActivation,
-    TanhActivation,
-    SoftmaxActivation,
-)
+from fabricpc.core.activations import TanhActivation, SoftmaxActivation
 from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.core.inference import InferenceSGD
-from fabricpc.core.initializers import (
-    MuPCInitializer,
-    XavierInitializer,
-    KaimingInitializer,
-)
+from fabricpc.core.initializers import MuPCInitializer, XavierInitializer
 from fabricpc.core.mupc import MuPCConfig
 from fabricpc.training import train_pcn, evaluate_pcn
-from fabricpc.utils.data.dataloader import Cifar10Loader
+from fabricpc.utils.data.dataloader import MnistLoader
 
 jax.config.update("jax_default_prng_impl", "threefry2x32")
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="muPC scaling demo: small ConvNet on CIFAR-10"
+    parser = argparse.ArgumentParser(description="muPC demo: FC-ResNet on MNIST")
+    parser.add_argument(
+        "--num_blocks",
+        type=int,
+        default=16,
+        help="Number of residual blocks (default: 16)",
+    )
+    parser.add_argument(
+        "--hidden_dim",
+        type=int,
+        default=64,
+        help="Hidden layer width (default: 64)",
     )
     parser.add_argument(
         "--num_epochs",
         type=int,
-        default=2,
-        help="Training epochs (default: 2 for quick demo, increase for better accuracy)",
+        default=4,
+        help="Training epochs (default: 4)",
     )
     parser.add_argument(
         "--batch_size",
@@ -87,8 +88,8 @@ def parse_args():
     parser.add_argument(
         "--infer_steps",
         type=int,
-        default=30,
-        help="Inference steps per sample (default: 30)",
+        default=None,
+        help="Inference steps per sample (default: 4*(num_blocks+2))",
     )
     parser.add_argument(
         "--lr",
@@ -111,91 +112,83 @@ def parse_args():
     return parser.parse_args()
 
 
-def create_mupc_convnet(*, eta_infer, infer_steps):
+def build_fc_resnet(num_blocks, hidden_dim, infer_steps=None, *, eta_infer):
     """
-    Build a small convolutional network with muPC parameterization.
+    Build an FC-ResNet for MNIST with muPC scaling.
 
     Architecture:
-        input(32,32,3) -> conv1(32,32,16) 3x3 ReLU
-        -> conv2(16,16,32) 3x3 stride=2 ReLU
-        -> conv3(8,8,64) 3x3 stride=2 ReLU
-        -> output(10) flatten -> softmax + CE
+        input(784) -> stem(hidden_dim) -> [N residual blocks] -> output(10)
+
+    Each residual block has a Linear transform path and a SkipConnection
+    that sums the transform output with the identity skip. SkipConnection
+    nodes disable muPC variance scaling to preserve the identity mapping.
 
     Args:
+        num_blocks: Number of residual blocks.
+        hidden_dim: Width of hidden layers.
+        infer_steps: Inference steps per sample. Default: max(20, 4*(num_blocks+2)).
         eta_infer: Inference rate.
-        infer_steps: Number of inference steps per sample.
 
     Returns:
-        GraphStructure with muPC scaling attached to each node.
+        GraphStructure with muPC scaling.
     """
+    if infer_steps is None:
+        infer_steps = max(20, 4 * (num_blocks + 2))
     mupc_init = MuPCInitializer()
 
-    input_node = IdentityNode(
-        shape=(32, 32, 3),
-        name="input",
-    )
+    # Input node
+    input_node = IdentityNode(shape=(784,), name="input")
 
-    conv1 = Conv2DNode(
-        shape=(32, 32, 16),
-        kernel_size=(3, 3),
-        stride=(1, 1),
-        padding="SAME",
-        activation=ReLUActivation(),
+    # Stem: projects 784 -> hidden_dim (no skip connection)
+    stem = Linear(
+        shape=(hidden_dim,),
         weight_init=mupc_init,
-        name="conv1",
+        flatten_input=True,
+        name="stem",
     )
 
-    conv2 = Conv2DNode(
-        shape=(16, 16, 32),
-        kernel_size=(3, 3),
-        stride=(2, 2),
-        padding="SAME",
-        activation=ReLUActivation(),
-        weight_init=mupc_init,
-        name="conv2",
-    )
+    all_nodes = [input_node, stem]
+    all_edges = [Edge(source=input_node, target=stem.slot("in"))]
 
-    conv3 = Conv2DNode(
-        shape=(8, 8, 64),
-        kernel_size=(3, 3),
-        stride=(2, 2),
-        padding="SAME",
-        activation=ReLUActivation(),
-        weight_init=mupc_init,
-        name="conv3",
-    )
+    # Residual blocks
+    prev = stem
+    for i in range(num_blocks):
+        with GraphNamespace(f"block{i}"):
+            linear = Linear(
+                shape=(hidden_dim,),
+                activation=TanhActivation(),
+                weight_init=mupc_init,
+                name="linear",
+            )
+            skip = SkipConnection(
+                shape=(hidden_dim,),
+                name="sum",
+            )
 
-    conv4 = Conv2DNode(
-        shape=(4, 4, 128),
-        kernel_size=(3, 3),
-        stride=(2, 2),
-        padding="SAME",
-        activation=ReLUActivation(),
-        weight_init=mupc_init,
-        name="conv4",
-    )
+        all_nodes.extend([linear, skip])
+        all_edges.extend(
+            [
+                Edge(source=prev, target=linear.slot("in")),  # transform path
+                Edge(source=prev, target=skip.slot("in")),  # skip/identity path
+                Edge(source=linear, target=skip.slot("in")),  # merge into sum
+            ]
+        )
+        prev = skip
 
-    # Output uses Xavier init (not MuPC): muPC forward scaling is excluded
-    # from output nodes, so standard initialization maintains proper logit
-    # scale for softmax.
+    # Output classifier
     output = Linear(
         shape=(10,),
         activation=SoftmaxActivation(),
         energy=CrossEntropyEnergy(),
-        flatten_input=True,
         weight_init=XavierInitializer(),
         name="output",
     )
+    all_nodes.append(output)
+    all_edges.append(Edge(source=prev, target=output.slot("in")))
 
     structure = graph(
-        nodes=[input_node, conv1, conv2, conv3, conv4, output],
-        edges=[
-            Edge(source=input_node, target=conv1.slot("in")),
-            Edge(source=conv1, target=conv2.slot("in")),
-            Edge(source=conv2, target=conv3.slot("in")),
-            Edge(source=conv3, target=conv4.slot("in")),
-            Edge(source=conv4, target=output.slot("in")),
-        ],
+        nodes=all_nodes,
+        edges=all_edges,
         task_map=TaskMap(x=input_node, y=output),
         inference=InferenceSGD(eta_infer=eta_infer, infer_steps=infer_steps),
         scaling=MuPCConfig(include_output=False),
@@ -208,40 +201,50 @@ def main():
     args = parse_args()
 
     print("=" * 60)
-    print("muPC Demo: ConvNet on CIFAR-10")
+    print("muPC Demo: FC-ResNet on MNIST")
     print("=" * 60)
 
     master_rng_key = jax.random.PRNGKey(42)
     graph_key, train_key, eval_key = jax.random.split(master_rng_key, 3)
 
-    # Build model with muPC scaling
-    structure = create_mupc_convnet(
-        eta_infer=args.eta_infer, infer_steps=args.infer_steps
+    # Build model
+    structure = build_fc_resnet(
+        num_blocks=args.num_blocks,
+        hidden_dim=args.hidden_dim,
+        infer_steps=args.infer_steps,
+        eta_infer=args.eta_infer,
     )
     params = initialize_params(structure, graph_key)
 
-    print(f"\nModel: {len(structure.nodes)} nodes, {len(structure.edges)} edges")
+    print(
+        f"\nArchitecture: input(784) -> stem({args.hidden_dim})"
+        f" -> {args.num_blocks} residual blocks -> output(10)"
+    )
+    print(f"Model: {len(structure.nodes)} nodes, {len(structure.edges)} edges")
     for name, node in structure.nodes.items():
         ni = node.node_info
-        scaling_tag = ""
         if ni.scaling_config is not None:
             fwd_scales = list(ni.scaling_config.forward_scale.values())
-            scaling_tag = f"  fwd_scale={fwd_scales[0]:.4f}" if fwd_scales else ""
-        print(f"  {name}: shape={ni.shape}, type={ni.node_type}{scaling_tag}")
+            tag = f"fwd_scale={fwd_scales[0]:.6f}" if fwd_scales else ""
+        else:
+            tag = "no scaling"
+        print(f"  {name}: shape={ni.shape}, {tag}")
 
     total_params = sum(p.size for p in jax.tree_util.tree_leaves(params))
     print(f"Total parameters: {total_params:,}")
 
     # Data
-    train_loader = Cifar10Loader(
+    train_loader = MnistLoader(
         "train",
         batch_size=args.batch_size,
+        tensor_format="flat",
         shuffle=True,
         seed=42,
     )
-    test_loader = Cifar10Loader(
+    test_loader = MnistLoader(
         "test",
         batch_size=args.batch_size,
+        tensor_format="flat",
         shuffle=False,
     )
 
@@ -250,7 +253,8 @@ def main():
     train_config = {"num_epochs": args.num_epochs}
 
     print(
-        f"\nTraining for {args.num_epochs} epochs (JIT compilation on first batch)..."
+        f"\nTraining for {args.num_epochs} epochs "
+        f"(JIT compilation on first batch)..."
     )
     start_time = time.time()
 
@@ -273,6 +277,11 @@ def main():
         trained_params, structure, test_loader, train_config, eval_key
     )
     print(f"Test Accuracy: {metrics['accuracy'] * 100:.2f}%")
+
+    if metrics["accuracy"] >= 0.90:
+        print("PASS: accuracy >= 90%")
+    else:
+        print(f"BELOW TARGET: {metrics['accuracy']*100:.1f}% < 90%")
 
 
 if __name__ == "__main__":

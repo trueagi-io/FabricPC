@@ -1,0 +1,279 @@
+"""
+muPC Scaling — CIFAR-10 Conv Demo
+==================================
+
+Demonstrates muPC (Maximal Update Parameterization for Predictive Coding)
+on a small convolutional network trained on CIFAR-10. Using this as a small network reference for task performance with muPC to compare the separate resnet18 example.
+
+Architecture:
+    input(32,32,3) -> Conv3x3(32,32,16) -> Conv3x3(16,16,32, stride=2)
+    -> Conv3x3(8,8,64, stride=2) -> Linear(10, softmax, CE)
+
+Key patterns:
+    - MuPCInitializer() on all parameterized nodes (weights ~ N(0, gain^2))
+    - MuPCConfig() in graph() builder
+    - Per-edge forward/gradient scaling computed automatically from topology
+
+Usage:
+    python examples/mupc_demo.py
+    python examples/mupc_demo.py --num_epochs 5 --verbose
+
+Test Accuracy: 49.08% after 2 epochs (quick demo).
+"""
+
+# TODO merge this with the JPC comparison which compares with FabricPC's maximal update algorithm on FC resnets. The main point is to show muPC works for long chains of FC layers, and skip connections.
+# Call it something like deep network muPC ab_test. Point user to the resnet18 demo for a convolutional resnet example.
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from jax_setup import set_jax_flags_before_importing_jax
+
+set_jax_flags_before_importing_jax()
+
+import argparse
+import time
+import jax
+import optax
+
+from fabricpc.nodes import Linear, IdentityNode
+from custom_node import Conv2DNode
+from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.graph import initialize_params
+from fabricpc.core.activations import (
+    IdentityActivation,
+    ReLUActivation,
+    TanhActivation,
+    SoftmaxActivation,
+)
+from fabricpc.core.energy import CrossEntropyEnergy
+from fabricpc.core.inference import InferenceSGD
+from fabricpc.core.initializers import (
+    MuPCInitializer,
+    XavierInitializer,
+    KaimingInitializer,
+)
+from fabricpc.core.mupc import MuPCConfig
+from fabricpc.training import train_pcn, evaluate_pcn
+from fabricpc.utils.data.dataloader import Cifar10Loader
+
+jax.config.update("jax_default_prng_impl", "threefry2x32")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="muPC scaling demo: small ConvNet on CIFAR-10"
+    )
+    parser.add_argument(
+        "--num_epochs",
+        type=int,
+        default=2,
+        help="Training epochs (default: 2 for quick demo, increase for better accuracy)",
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=256,
+        help="Batch size (default: 256)",
+    )
+    parser.add_argument(
+        "--eta_infer",
+        type=float,
+        default=0.003,
+        help="Inference rate (default: 0.003)",
+    )
+    parser.add_argument(
+        "--infer_steps",
+        type=int,
+        default=30,
+        help="Inference steps per sample (default: 30)",
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=0.002,
+        help="Learning rate (default: 0.002)",
+    )
+    parser.add_argument(
+        "--weight_decay",
+        type=float,
+        default=0.01,
+        help="Weight decay (default: 0.01)",
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="Print per-epoch training output",
+    )
+    return parser.parse_args()
+
+
+def create_mupc_convnet(*, eta_infer, infer_steps):
+    """
+    Build a small convolutional network with muPC parameterization.
+
+    Architecture:
+        input(32,32,3) -> conv1(32,32,16) 3x3 ReLU
+        -> conv2(16,16,32) 3x3 stride=2 ReLU
+        -> conv3(8,8,64) 3x3 stride=2 ReLU
+        -> output(10) flatten -> softmax + CE
+
+    Args:
+        eta_infer: Inference rate.
+        infer_steps: Number of inference steps per sample.
+
+    Returns:
+        GraphStructure with muPC scaling attached to each node.
+    """
+    mupc_init = MuPCInitializer()
+
+    input_node = IdentityNode(
+        shape=(32, 32, 3),
+        name="input",
+    )
+
+    conv1 = Conv2DNode(
+        shape=(32, 32, 16),
+        kernel_size=(3, 3),
+        stride=(1, 1),
+        padding="SAME",
+        activation=ReLUActivation(),
+        weight_init=mupc_init,
+        name="conv1",
+    )
+
+    conv2 = Conv2DNode(
+        shape=(16, 16, 32),
+        kernel_size=(3, 3),
+        stride=(2, 2),
+        padding="SAME",
+        activation=ReLUActivation(),
+        weight_init=mupc_init,
+        name="conv2",
+    )
+
+    conv3 = Conv2DNode(
+        shape=(8, 8, 64),
+        kernel_size=(3, 3),
+        stride=(2, 2),
+        padding="SAME",
+        activation=ReLUActivation(),
+        weight_init=mupc_init,
+        name="conv3",
+    )
+
+    conv4 = Conv2DNode(
+        shape=(4, 4, 128),
+        kernel_size=(3, 3),
+        stride=(2, 2),
+        padding="SAME",
+        activation=ReLUActivation(),
+        weight_init=mupc_init,
+        name="conv4",
+    )
+
+    # Output uses Xavier init (not MuPC): muPC forward scaling is excluded
+    # from output nodes, so standard initialization maintains proper logit
+    # scale for softmax.
+    output = Linear(
+        shape=(10,),
+        activation=SoftmaxActivation(),
+        energy=CrossEntropyEnergy(),
+        flatten_input=True,
+        weight_init=XavierInitializer(),
+        name="output",
+    )
+
+    structure = graph(
+        nodes=[input_node, conv1, conv2, conv3, conv4, output],
+        edges=[
+            Edge(source=input_node, target=conv1.slot("in")),
+            Edge(source=conv1, target=conv2.slot("in")),
+            Edge(source=conv2, target=conv3.slot("in")),
+            Edge(source=conv3, target=conv4.slot("in")),
+            Edge(source=conv4, target=output.slot("in")),
+        ],
+        task_map=TaskMap(x=input_node, y=output),
+        inference=InferenceSGD(eta_infer=eta_infer, infer_steps=infer_steps),
+        scaling=MuPCConfig(include_output=False),
+    )
+
+    return structure
+
+
+def main():
+    args = parse_args()
+
+    print("=" * 60)
+    print("muPC Demo: ConvNet on CIFAR-10")
+    print("=" * 60)
+
+    master_rng_key = jax.random.PRNGKey(42)
+    graph_key, train_key, eval_key = jax.random.split(master_rng_key, 3)
+
+    # Build model with muPC scaling
+    structure = create_mupc_convnet(
+        eta_infer=args.eta_infer, infer_steps=args.infer_steps
+    )
+    params = initialize_params(structure, graph_key)
+
+    print(f"\nModel: {len(structure.nodes)} nodes, {len(structure.edges)} edges")
+    for name, node in structure.nodes.items():
+        ni = node.node_info
+        scaling_tag = ""
+        if ni.scaling_config is not None:
+            fwd_scales = list(ni.scaling_config.forward_scale.values())
+            scaling_tag = f"  fwd_scale={fwd_scales[0]:.4f}" if fwd_scales else ""
+        print(f"  {name}: shape={ni.shape}, type={ni.node_type}{scaling_tag}")
+
+    total_params = sum(p.size for p in jax.tree_util.tree_leaves(params))
+    print(f"Total parameters: {total_params:,}")
+
+    # Data
+    train_loader = Cifar10Loader(
+        "train",
+        batch_size=args.batch_size,
+        shuffle=True,
+        seed=42,
+    )
+    test_loader = Cifar10Loader(
+        "test",
+        batch_size=args.batch_size,
+        shuffle=False,
+    )
+
+    # Train
+    optimizer = optax.adamw(args.lr, weight_decay=args.weight_decay)
+    train_config = {"num_epochs": args.num_epochs}
+
+    print(
+        f"\nTraining for {args.num_epochs} epochs (JIT compilation on first batch)..."
+    )
+    start_time = time.time()
+
+    trained_params, energy_history, _ = train_pcn(
+        params=params,
+        structure=structure,
+        train_loader=train_loader,
+        optimizer=optimizer,
+        config=train_config,
+        rng_key=train_key,
+        verbose=args.verbose,
+    )
+
+    elapsed = time.time() - start_time
+    print(f"Training time: {elapsed:.1f}s ({elapsed / args.num_epochs:.1f}s per epoch)")
+
+    # Evaluate
+    print("\nEvaluating...")
+    metrics = evaluate_pcn(
+        trained_params, structure, test_loader, train_config, eval_key
+    )
+    print(f"Test Accuracy: {metrics['accuracy'] * 100:.2f}%")
+
+
+if __name__ == "__main__":
+    main()

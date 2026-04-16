@@ -203,8 +203,10 @@ class TestTransformerMuPCVariance:
                 0.2 < var_z_mu < 5.0
             ), f"seq_len={seq_len}: z_mu variance {var_z_mu:.4f} outside [0.2, 5.0]"
 
-    def test_no_mupc_no_residual_scaling(self, transformer_graph_no_mupc, rng_key):
-        """Without muPC, forward() should not apply residual or attention scaling."""
+    def test_no_mupc_variance_still_controlled(
+        self, transformer_graph_no_mupc, rng_key
+    ):
+        """Without muPC, internal scaling (1/sqrt(2) residuals, sqrt-eff-ctx) still applies."""
         structure = transformer_graph_no_mupc
         params = initialize_params(structure, rng_key)
 
@@ -223,7 +225,9 @@ class TestTransformerMuPCVariance:
             state_init=FeedforwardStateInit(),
         )
 
-        # Without muPC, the output variance should be higher than 1
-        # (residual additions inflate without 1/sqrt(2) scaling)
+        # Internal variance control is always on — z_mu should be near unity
+        # even without muPC inter-node scaling.
         var_z_mu = float(jnp.var(state.nodes["transformer"].z_mu))
-        assert var_z_mu > 0.5, f"Non-muPC z_mu variance {var_z_mu:.4f} unexpectedly low"
+        assert (
+            0.2 < var_z_mu < 5.0
+        ), f"Non-muPC z_mu variance {var_z_mu:.4f} outside [0.2, 5.0]"

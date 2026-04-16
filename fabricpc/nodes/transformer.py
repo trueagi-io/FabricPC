@@ -29,21 +29,32 @@ def precompute_freqs_cis(
     head_dim: int, max_seq_len: int, theta: float = 10000.0
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
-    Precompute the frequency tensor for RoPE (Rotary Position Embeddings).
+      Precompute the frequency tensor for RoPE (Rotary Position Embeddings).
 
-    RoPE encodes position by rotating pairs of dimensions in the embedding space.
-    Each pair (2i, 2i+1) is rotated by angle θ_i * position, where θ_i decreases
-    geometrically with dimension index.
+      RoPE encodes position by rotating pairs of dimensions in the embedding space.
+      Each pair (2i, 2i+1) is rotated by angle θ_i * position, where θ_i decreases
+      geometrically with dimension index.
 
-    θ_i = 1 / (theta^(2i/d))
+      θ_i = 1 / (theta^(2i/d))
 
-    Args:
-        head_dim: Dimension of each attention head (must be even)
-        max_seq_len: Maximum sequence length to precompute
-        theta: Base for the geometric progression of frequencies (default 10000)
+      Args:
+          head_dim: Dimension of each attention head (must be even)
+          max_seq_len: Maximum sequence length to precompute
+          theta: Base for the geometric progression of frequencies (default 10000)
 
-    Returns:
-        Tuple of (cos, sin) arrays of shape (max_seq_len, head_dim // 2)
+      Returns:
+          Tuple of (cos, sin) arrays of shape (max_seq_len, head_dim // 2)
+
+      Variance Control
+      The transofmrer block node encapsulates many operations and needs variance scaling internal to the node. muPC scaling handles variance control at the network graph level. It's necessary to have graph skip connections for muPC to work.
+    1. Position-dependent softmax variance compensation (was √seq_len only when muPC active):
+      - With mask: computes effective context length per position from the mask (eff_ctx = [1, 2, ..., S] for causal), scales attention output by √eff_ctx[t]
+      - Without mask: uses √seq_len (correct for full attention)
+      - Why: The old √seq_len was position-independent — at position 0 (context=1 token), it amplified variance by seq_len instead of restoring to 1. This made early-position attention output dominate the skip signal by up to 128x.
+    2. 1/√2 residual scaling (was only when muPC active):
+      - Both residual adds now always scale by 1/√2
+      - Why: Raw skip + branch doubles variance. The 1/√2 factor maintains Var≈1 when both branches have Var≈1.
+
     """
     assert head_dim % 2 == 0, "head_dim must be even for RoPE"
 
@@ -306,11 +317,7 @@ class TransformerBlock(NodeBase):
             input_tensor, params.weights["ln1_gamma"], params.biases["ln1_beta"]
         )
 
-        # muPC internal scaling: LN absorbs the external forward_scale,
-        # so all variance control is handled here.
-        mupc_active = node_info.scaling_config is not None
-        if mupc_active:
-            inv_sqrt2 = jnp.float32(1.0 / jnp.sqrt(2.0))
+        inv_sqrt2 = jnp.float32(1.0 / jnp.sqrt(2.0))
 
         # Multi-Head Attention
         attn_output = TransformerBlock._mha(
@@ -330,19 +337,25 @@ class TransformerBlock(NodeBase):
             rope_theta=config.get("rope_theta", 10000.0),
         )
 
-        # muPC: compensate for softmax averaging variance contraction.
-        # At init, uniform attention contracts Var by 1/S; sqrt(S) restores
-        # unit variance through the W_o projection.
-        if mupc_active:
+        # Compensate for softmax averaging variance contraction.
+        # At init with near-uniform attention, position t attending to c(t)
+        # keys contracts Var by 1/c(t). Multiply by sqrt(c(t)) to restore
+        # unit variance after the W_o projection.
+        if mask is not None:
+            # Position-dependent: count attended keys per query position.
+            # For a causal mask this gives [1, 2, ..., seq_len].
+            # mask shape: (batch, 1, seq_len, seq_len)
+            eff_ctx = jnp.maximum(
+                jnp.sum(mask[0, 0] != 0, axis=-1, dtype=jnp.float32), 1.0
+            )
+            attn_output = attn_output * jnp.sqrt(eff_ctx)[None, :, None]
+        else:
+            # Full (non-causal) attention: all positions attend to all keys.
             attn_output = attn_output * jnp.sqrt(jnp.float32(seq_len))
 
-        # Residual connection 1
-        # muPC: balanced 1/sqrt(2) scaling so Var(sum) = 1 when both
-        # branches have Var = 1 (matches PreActResBlock skip_scale pattern).
-        if mupc_active:
-            x_res1 = inv_sqrt2 * (input_tensor + attn_output)
-        else:
-            x_res1 = input_tensor + attn_output
+        # Residual connection 1: balanced 1/sqrt(2) scaling so
+        # Var(sum) ≈ 1 when both branches have Var ≈ 1.
+        x_res1 = inv_sqrt2 * (input_tensor + attn_output)
 
         # LayerNorm 2
         x_norm2 = TransformerBlock._layernorm(
@@ -359,10 +372,7 @@ class TransformerBlock(NodeBase):
         )
 
         # Residual connection 2
-        if mupc_active:
-            z_mu = inv_sqrt2 * (x_res1 + ff_output)
-        else:
-            z_mu = x_res1 + ff_output
+        z_mu = inv_sqrt2 * (x_res1 + ff_output)
 
         pre_activation = z_mu
         error = state.z_latent - z_mu

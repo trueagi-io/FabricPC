@@ -8,16 +8,24 @@ width and topology. Based on:
   - Depth-muP (Yang et al.) — width+depth scaling for deep networks
   - muPC (Innocenti et al., arXiv:2505.13124) — adaptation to predictive coding
 
-Forward scaling uses a unified per-edge formula:
+Forward scaling for variance-scaled nodes uses a depth+fan_in formula:
 
-    a_k = gain / sqrt(fan_in_k * K)
+    a_k = gain / sqrt(fan_in_k * K * L)
 
 where fan_in_k is the weight-matrix fan_in (from get_weight_fan_in()),
-K is the node's in-degree, and gain = activation.variance_gain() is the
-Kaiming-style gain compensating for activation-induced variance contraction
-(e.g. sqrt(5/3) for tanh, sqrt(2) for ReLU, 1.0 for identity).
-Weightless nodes (e.g. IdentityNode) return fan_in=1, so the formula
-reduces to a=gain/sqrt(K).
+K is the node's in-degree, gain = activation.variance_gain() is the
+Kaiming-style gain, and L is the residual depth (number of SkipConnection
+nodes along the longest path in the graph, minimum 1).
+
+For pure sequential chains (no SkipConnection nodes), L=1 and the
+formula reduces to a = gain/sqrt(fan_in * K). For residual networks
+with D skip connections, L=D and the depth factor bounds total variance
+growth to (1 + gain²/L)^L ≈ e^{gain²} — finite regardless of depth.
+
+Skip connections (nodes with apply_variance_scaling=False) pass through
+at scale 1.0. This preserves the identity mapping that carries signal
+through deep residual networks. Without this, in-degree scaling attenuates
+skip paths by 1/sqrt(K), causing exponential signal decay (0.707^L).
 
 Top-down gradient scaling combines chain rule correction with Jacobian
 compensation for deep gradient propagation:
@@ -55,6 +63,8 @@ import math
 import warnings
 from typing import Dict, Any, Optional, List
 from dataclasses import dataclass
+
+from fabricpc.nodes.skip_connection import SkipConnection
 
 
 @dataclass(frozen=True)
@@ -114,19 +124,63 @@ class MuPCConfig:
         if self.depth_metric is not None:
             warnings.warn(
                 "MuPCConfig.depth_metric is deprecated and ignored. "
-                "muPC scaling now uses a=1/sqrt(fan_in*K) based on graph "
-                "topology (in-degree K) instead of depth metrics.",
+                "muPC scaling now uses a=gain/sqrt(fan_in*K*L) based on graph "
+                "topology (in-degree K, depth L) instead of depth metrics.",
                 DeprecationWarning,
                 stacklevel=2,
             )
         if self.min_depth is not None:
             warnings.warn(
                 "MuPCConfig.min_depth is deprecated and ignored. "
-                "muPC scaling now uses a=1/sqrt(fan_in*K) based on graph "
-                "topology (in-degree K) instead of depth metrics.",
+                "muPC scaling now uses a=gain/sqrt(fan_in*K*L) based on graph "
+                "topology (in-degree K, depth L) instead of depth metrics.",
                 DeprecationWarning,
                 stacklevel=2,
             )
+
+
+def _count_skip_depth(
+    nodes: Dict[str, Any],
+    edges: Dict[str, Any],
+    node_order: List[str],
+) -> int:
+    """
+    Count the number of unscaled (SkipConnection) nodes along the longest
+    path in the graph. This is the "residual depth" — the number of
+    variance-accumulating merge points where skip and compute paths sum.
+
+    In a pure sequential chain (no SkipConnection nodes), returns 0.
+    In a ResNet with D residual blocks, returns D.
+
+    The caller uses max(skip_depth, 1) as L in the scaling formula so that
+    pure chains degenerate to a = gain/sqrt(fan_in * K) (no depth factor).
+    """
+    # Count skip nodes along the longest path (BFS on topological order)
+    skip_counts: Dict[str, int] = {}
+
+    for node_name in node_order:
+        node = nodes[node_name]
+        node_info = node.node_info
+        node_class = node_info.node_class
+
+        if node_info.in_degree == 0:
+            skip_counts[node_name] = 0
+            continue
+
+        # Find max skip count among predecessors
+        max_pred_skips = 0
+        for edge_key in node_info.in_edges:
+            edge_info = edges[edge_key]
+            pred_skips = skip_counts.get(edge_info.source, 0)
+            max_pred_skips = max(max_pred_skips, pred_skips)
+
+        # SkipConnection nodes increment the skip depth count
+        if issubclass(node_class, SkipConnection):
+            skip_counts[node_name] = max_pred_skips + 1
+        else:
+            skip_counts[node_name] = max_pred_skips
+
+    return max(skip_counts.values()) if skip_counts else 0
 
 
 def compute_mupc_scalings(
@@ -138,18 +192,19 @@ def compute_mupc_scalings(
     """
     Compute per-node MuPCScalingFactors from graph topology.
 
-    Uses a unified forward scaling formula for all non-source nodes:
+    Uses a depth+fan_in scaling formula for variance-scaled nodes:
 
-        a_k = gain / sqrt(fan_in_k * K)
+        a_k = gain / sqrt(fan_in_k * K * L)
 
-    where fan_in_k comes from each node class's get_weight_fan_in() method
-    (which returns 1 for weightless nodes like IdentityNode), K is the
-    node's in-degree, and gain = activation.variance_gain() compensates
-    for activation-induced variance contraction (Kaiming convention).
+    where K is the number of variance-scaled incoming edges, L is the
+    effective depth, and gain = activation.variance_gain().
+
+    Nodes with apply_variance_scaling=False (e.g., SkipConnection) get
+    scale 1.0 on all edges — the identity mapping is preserved.
 
     For output nodes (include_output=True):
 
-        a_k = gain / (fan_in_k * sqrt(K))
+        a_k = gain / (fan_in_k * sqrt(K * L))
 
     Args:
         nodes: Dictionary mapping node names to finalized NodeBase instances
@@ -170,7 +225,14 @@ def compute_mupc_scalings(
     }
 
     # Use topological order if provided, otherwise iterate dict order
-    iteration_order = node_order if node_order is not None else nodes.keys()
+    iteration_order = node_order if node_order is not None else list(nodes.keys())
+
+    # Compute residual depth: number of SkipConnection (unscaled) nodes
+    # along the longest path. For pure chains this is 0, for ResNets it's
+    # the number of residual blocks. Using max(skip_depth, 1) ensures
+    # pure chains degenerate to the original a = gain/sqrt(fan_in * K).
+    skip_depth = _count_skip_depth(nodes, edges, iteration_order)
+    L = max(skip_depth, 1)
 
     scalings = {}
 
@@ -190,6 +252,24 @@ def compute_mupc_scalings(
         is_output = node_name in output_nodes
         if is_output and not config.include_output:
             scalings[node_name] = None
+            continue
+
+        # Check if this node applies variance scaling
+        applies_scaling = getattr(node_class, "apply_variance_scaling", True)
+
+        if not applies_scaling:
+            # Skip connection node: all edges pass through at scale 1.0.
+            # No variance scaling, no gradient scaling adjustments.
+            forward_scale = {ek: 1.0 for ek in node_info.in_edges}
+            topdown_grad_scale = {ek: 1.0 for ek in node_info.in_edges}
+            weight_grad_scale = {ek: 1.0 for ek in node_info.in_edges}
+
+            scalings[node_name] = MuPCScalingFactors(
+                forward_scale=forward_scale,
+                self_grad_scale=1.0,
+                topdown_grad_scale=topdown_grad_scale,
+                weight_grad_scale=weight_grad_scale,
+            )
             continue
 
         K = node_info.in_degree
@@ -220,13 +300,16 @@ def compute_mupc_scalings(
             # (e.g. IdentityNode) return 1.
             fan_in = node_class.get_weight_fan_in(source_shape, node_config)
 
-            # Forward scaling formula with activation gain:
-            #   Hidden: a = gain/sqrt(fan_in * K) — maintains O(1) post-activation variance
-            #   Output: a = gain/(fan_in * sqrt(K)) — matches muPC O(1/N) convention
+            # Forward scaling formula with activation gain and depth:
+            #   Hidden: a = gain/sqrt(fan_in * K * L)
+            #       — K handles multi-input variance amplification
+            #       — L bounds total variance growth to (1+1/L)^L ≈ e
+            #   Output: a = gain/(fan_in * sqrt(K * L))
+            #       — matches muPC O(1/N) convention
             if is_output:
-                a = gain / (fan_in * math.sqrt(K))
+                a = gain / (fan_in * math.sqrt(K * L))
             else:
-                a = gain / math.sqrt(fan_in * K)
+                a = gain / math.sqrt(fan_in * K * L)
 
             forward_scale[edge_key] = a
 
