@@ -2,8 +2,8 @@
 """
 Test suite for multi-GPU training utilities.
 
-Verifies numerical similarity between train.train_pcn() and
-multi_gpu.train_pcn_multi_gpu(), plus utility function correctness.
+Verifies numerical similarity between train_pcn() JIT path and
+train_pcn(..., pmap_single_device=True), plus utility function correctness.
 """
 
 import copy
@@ -20,7 +20,7 @@ from fabricpc.core.activations import IdentityActivation, ReLUActivation
 from fabricpc.core.initializers import XavierInitializer
 from fabricpc.core.inference import InferenceSGD
 from fabricpc.training import train_pcn, evaluate_pcn
-from fabricpc.training.multi_gpu import train_pcn_multi_gpu
+from fabricpc.training.train import shard_batch, replicate_params, unshard_energies
 
 
 @pytest.fixture
@@ -139,7 +139,7 @@ class TestMultiGPUTraining:
         params_single = copy.deepcopy(params)
         params_multi = copy.deepcopy(params)
 
-        # Run single-GPU training and capture energies
+        # Run single-GPU training (JIT path) and capture energies
         trained_single, iter_results_single, _ = train_pcn(
             params_single,
             simple_structure,
@@ -148,10 +148,11 @@ class TestMultiGPUTraining:
             train_config,
             train_key1,
             verbose=False,
+            use_tqdm=False,
         )
 
-        # Run multi-GPU training (captures losses internally)
-        trained_multi = train_pcn_multi_gpu(
+        # Run pmap path training
+        trained_multi, iter_results_multi, _ = train_pcn(
             params_multi,
             simple_structure,
             train_loader,
@@ -159,6 +160,8 @@ class TestMultiGPUTraining:
             train_config,
             train_key2,
             verbose=False,
+            use_tqdm=False,
+            pmap_single_device=True,
         )
 
         # Check that single-GPU training reduced energy
@@ -196,11 +199,11 @@ class TestMultiGPUTraining:
         self, simple_structure, optimizer, train_config, rng_key
     ):
         """
-        Test that train_pcn_multi_gpu with a single shard produces numerically
-        identical results to train_pcn.
+        Test that train_pcn with pmap_single_device=True produces numerically
+        identical results to the JIT path.
 
-        When running on a single device, the multi-GPU training path should be
-        mathematically equivalent to the single-GPU path. Both should use the
+        When running on a single device, the pmap training path should be
+        mathematically equivalent to the JIT path. Both should use the
         same local learning dynamics and produce identical parameter updates.
         """
         model_key, train_key, data_key = jax.random.split(rng_key, 3)
@@ -228,8 +231,9 @@ class TestMultiGPUTraining:
             train_config,
             train_key,
             verbose=False,
+            use_tqdm=False,
         )
-        trained_multi = train_pcn_multi_gpu(
+        trained_multi, _, _ = train_pcn(
             params_multi,
             simple_structure,
             train_loader,
@@ -237,6 +241,8 @@ class TestMultiGPUTraining:
             train_config,
             train_key,
             verbose=False,
+            use_tqdm=False,
+            pmap_single_device=True,
         )
 
         # Compare actual parameter values element-wise
@@ -272,11 +278,11 @@ class TestMultiGPUTraining:
                     )
                     max_relative_diff = max(max_relative_diff, max_rel)
 
-        # Single-shard multi-GPU should produce identical results to single-GPU
+        # Single-shard pmap should produce identical results to JIT
         max_allowed_diff = 1e-5  # Allow for floating point tolerance
 
         assert max_relative_diff < max_allowed_diff, (
-            f"Multi-GPU (single shard) should produce identical parameters to single-GPU! "
+            f"Pmap (single shard) should produce identical parameters to JIT! "
             f"Max relative difference: {max_relative_diff:.6f} (allowed: {max_allowed_diff}). "
             f"Per-parameter diffs: {param_diffs}"
         )
@@ -287,8 +293,6 @@ class TestMultiGPUUtilities:
 
     def test_shard_batch(self):
         """Test batch sharding utility."""
-        from fabricpc.training.multi_gpu import shard_batch
-
         batch = {
             "x": jnp.zeros((8, 10)),
             "y": jnp.zeros((8, 5)),
@@ -311,8 +315,6 @@ class TestMultiGPUUtilities:
 
     def test_shard_batch_invalid_size(self):
         """Test that sharding raises error for invalid batch size."""
-        from fabricpc.training.multi_gpu import shard_batch
-
         batch = {"x": jnp.zeros((7, 10))}  # 7 not divisible by 2
 
         with pytest.raises(ValueError, match="divisible"):
@@ -320,8 +322,6 @@ class TestMultiGPUUtilities:
 
     def test_replicate_params(self, simple_structure, rng_key):
         """Test parameter replication utility."""
-        from fabricpc.training.multi_gpu import replicate_params
-
         params = initialize_params(simple_structure, rng_key)
 
         # Replicate to 2 devices
@@ -345,8 +345,6 @@ class TestMultiGPUUtilities:
 
     def test_unshard_energies(self):
         """Test energy unsharding utility."""
-        from fabricpc.training.multi_gpu import unshard_energies
-
         energies = jnp.array([1.0, 2.0, 3.0, 4.0])
         avg = unshard_energies(energies)
 

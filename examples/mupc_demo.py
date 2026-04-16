@@ -17,6 +17,8 @@ Key patterns:
 Usage:
     python examples/mupc_demo.py
     python examples/mupc_demo.py --num_epochs 5 --verbose
+
+Test Accuracy: 49.08% after 2 epochs (quick demo).
 """
 
 # TODO merge this with the JPC comparison which compares with FabricPC's maximal update algorithm on FC resnets. The main point is to show muPC works for long chains of FC layers, and skip connections.
@@ -77,6 +79,30 @@ def parse_args():
         help="Batch size (default: 256)",
     )
     parser.add_argument(
+        "--eta_infer",
+        type=float,
+        default=0.003,
+        help="Inference rate (default: 0.003)",
+    )
+    parser.add_argument(
+        "--infer_steps",
+        type=int,
+        default=30,
+        help="Inference steps per sample (default: 30)",
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=0.002,
+        help="Learning rate (default: 0.002)",
+    )
+    parser.add_argument(
+        "--weight_decay",
+        type=float,
+        default=0.01,
+        help="Weight decay (default: 0.01)",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         default=False,
@@ -85,7 +111,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def create_mupc_convnet():
+def create_mupc_convnet(*, eta_infer, infer_steps):
     """
     Build a small convolutional network with muPC parameterization.
 
@@ -94,6 +120,10 @@ def create_mupc_convnet():
         -> conv2(16,16,32) 3x3 stride=2 ReLU
         -> conv3(8,8,64) 3x3 stride=2 ReLU
         -> output(10) flatten -> softmax + CE
+
+    Args:
+        eta_infer: Inference rate.
+        infer_steps: Number of inference steps per sample.
 
     Returns:
         GraphStructure with muPC scaling attached to each node.
@@ -167,7 +197,7 @@ def create_mupc_convnet():
             Edge(source=conv4, target=output.slot("in")),
         ],
         task_map=TaskMap(x=input_node, y=output),
-        inference=InferenceSGD(eta_infer=0.1, infer_steps=30),
+        inference=InferenceSGD(eta_infer=eta_infer, infer_steps=infer_steps),
         scaling=MuPCConfig(include_output=False),
     )
 
@@ -185,7 +215,9 @@ def main():
     graph_key, train_key, eval_key = jax.random.split(master_rng_key, 3)
 
     # Build model with muPC scaling
-    structure = create_mupc_convnet()
+    structure = create_mupc_convnet(
+        eta_infer=args.eta_infer, infer_steps=args.infer_steps
+    )
     params = initialize_params(structure, graph_key)
 
     print(f"\nModel: {len(structure.nodes)} nodes, {len(structure.edges)} edges")
@@ -214,7 +246,7 @@ def main():
     )
 
     # Train
-    optimizer = optax.adamw(0.001, weight_decay=0.01)
+    optimizer = optax.adamw(args.lr, weight_decay=args.weight_decay)
     train_config = {"num_epochs": args.num_epochs}
 
     print(

@@ -290,7 +290,7 @@ def get_hopfield_node_name(structure):
 # ============================================================================
 
 
-def phase1_strength_sweep(n_trials=10, num_epochs=5):
+def phase1_strength_sweep(n_trials, num_epochs):
     """Sweep hopfield_strength vs MLP baseline under K=50, noise=2.0.
 
     Uses ABExperiment for paired statistical comparisons at each strength.

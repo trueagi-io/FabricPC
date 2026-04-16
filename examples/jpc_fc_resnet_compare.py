@@ -6,6 +6,16 @@ Replicates the FC-ResNet architecture from the jpc library (thebuckleylab/jpc)
 using FabricPC's predictive coding mechanics, enabling a fair comparison of the
 two implementations.
 
+The PreActResBlock bundles a linear path and an identity skip connection inside one node:
+ z_mu = scale * matmul(act_x, W) + x   # linear + unscaled skip
+
+In FabricPC's graph-based architecture, this summation would be an explicit IdentityNode with in_degree=2,
+and mupc.py:229 would compute a = gain / sqrt(fan_in * K) with K=2 for each incoming edge.
+Effective scales folded into the monolithic PreActResBlock:
+ - Linear path: a_linear * a_identity = sqrt(2)/sqrt(N) * 1/sqrt(2) = 1/sqrt(N)
+   - equivalently: gain / sqrt(fan_in * K) = sqrt(2) / sqrt(N * 2) = 1/sqrt(N)
+ - Skip path: a_identity = 1/sqrt(2)
+
 Architecture (matching jpc mupc.ipynb):
     input(784) -> FCInput(width) -> PreActResBlock(width) x (depth-2) -> Readout(10)
 
@@ -16,8 +26,8 @@ This is a fully-connected ResNet — no convolutions, no spatial structure. The
 skip connection is internal to each block (one z_latent per layer, matching jpc).
 
 Scaling modes (--scaling flag):
-    jpc:      in=1/√D, hidden=1/√(N*L), out=1/N          (includes depth L)
-    fabricpc: in=1/√D, hidden=gain/√N,   out=1/N          (no depth factor)
+    jpc:      in=1/√D, hidden=1/√(N*L), out=1/N, skip=1    (depth L compensates)
+    fabricpc: in=1/√D, hidden=gain/√(N*K), out=1/N, skip=1/√K  (K=2 in_degree)
 
 Key difference from jpc: FabricPC uses fixed-step SGD inference with gradient
 norm clipping (InferenceSGDNormClip), while jpc uses an adaptive ODE solver
@@ -39,7 +49,7 @@ Usage:
     python examples/jpc_fc_resnet_compare.py --scaling fabricpc --depth 10
 
     # Test depth scaling
-    for d in 5 10 30 50; do
+    for d in 8 16 32 64 128; do
       python examples/jpc_fc_resnet_compare.py --scaling jpc --depth $d
     done
 
@@ -50,6 +60,22 @@ Usage:
 References:
     - jpc: https://github.com/thebuckleylab/jpc
     - Innocenti et al., "muPC: scaling for predictive coding networks"
+
+Results
+Architecture: FC-ResNet, depth=*, width=128
+Inference: eta=0.2, steps=3*depth, max_norm=0.2
+Training: lr=0.001, batch_size=256, epochs=3
+
+| Depth | Test Accuracy (jpc scaling) | Test Accuracy (fabricpc scaling) |
+|-------|-----------------------------|----------------------------------|
+| 8     | ~90.8%                        | ~92.6%                         |
+| 16    | ~87.8%                        | ~85.6%                         |
+| 32    | ~85.2%                        | ~43.4%                         |
+| 64    | ~83.5%                        | ~11.5%                         |
+| 128   | ~83.9%                        | ~10.3%                         |
+
+
+
 """
 
 import sys
@@ -93,7 +119,7 @@ jax.config.update("jax_default_prng_impl", "threefry2x32")
 
 def compute_scaling_factors(
     input_dim: int, width: int, depth: int, mode: str
-) -> Tuple[float, float, float]:
+) -> Tuple[float, float, float, float]:
     """
     Compute per-layer-type scaling factors.
 
@@ -104,27 +130,38 @@ def compute_scaling_factors(
         mode: 'jpc' or 'fabricpc'.
 
     Returns:
-        (in_scale, hidden_scale, out_scale)
+        (in_scale, hidden_scale, out_scale, skip_scale)
     """
     if mode == "jpc":
         # jpc mupc.ipynb: exact formulas from Innocenti et al.
+        # The depth factor in hidden_scale makes the linear path's contribution
+        # O(1/L), so the unscaled skip dominates and variance stays ~O(1).
         in_scale = 1.0 / math.sqrt(input_dim)
         hidden_scale = 1.0 / math.sqrt(width * depth)
         out_scale = 1.0 / width
+        skip_scale = 1.0
     elif mode == "fabricpc":
-        # FabricPC muPC: a = gain / sqrt(fan_in), no depth factor
-        # Input layer: identity activation, gain=1.0
-        in_scale = 1.0 / math.sqrt(input_dim)
-        # Hidden layers: ReLU activation, gain=sqrt(2)
+        # FabricPC muPC: a = gain / sqrt(fan_in * K)
+        # Each PreActResBlock sums a linear path and an identity skip,
+        # equivalent to an IdentityNode with in_degree K=2 in FabricPC's
+        # graph. Both paths must be scaled by 1/sqrt(K) to preserve O(1)
+        # variance at the summation point (see mupc.py:229).
+        K = 2  # effective in_degree for residual blocks (linear + skip)
         relu_gain = math.sqrt(2.0)
-        hidden_scale = relu_gain / math.sqrt(width)
-        # Output layer: identity activation, gain=1.0
+        # Input layer: identity activation, gain=1.0, no skip
+        in_scale = 1.0 / math.sqrt(input_dim)
+        # Hidden layers: gain/sqrt(fan_in * K) folds linear node scaling
+        # (gain/sqrt(fan_in)) with identity summation scaling (1/sqrt(K))
+        hidden_scale = relu_gain / math.sqrt(width * K)
+        # Skip path: identity (fan_in=1), so a = 1/sqrt(1 * K) = 1/sqrt(K)
+        skip_scale = 1.0 / math.sqrt(K)
+        # Output layer: identity activation, gain=1.0, no skip
         # FabricPC output formula: a = gain / (fan_in * sqrt(K)) for K=1
         out_scale = 1.0 / width
     else:
         raise ValueError(f"Unknown scaling mode: {mode!r}. Use 'jpc' or 'fabricpc'.")
 
-    return in_scale, hidden_scale, out_scale
+    return in_scale, hidden_scale, out_scale, skip_scale
 
 
 # =============================================================================
@@ -211,15 +248,20 @@ class FCInputNode(NodeBase):
 
 class PreActResBlock(NodeBase):
     """
-    Pre-activation residual block: z_mu = hidden_scale * (W @ act(x)) + x.
+    Pre-activation residual block:
+        z_mu = hidden_scale * (W @ act(x)) + skip_scale * x
 
-    Matches jpc's ResNetBlock exactly:
+    Matches jpc's ResNetBlock architecture:
     - Activation applied BEFORE linear transformation (pre-activation)
     - Identity skip connection adds raw input (NOT the activated/scaled version)
-    - Scaling applied only to the linear path
 
     The skip connection is internal to this node — it does NOT appear as a
     graph edge. This means there is one z_latent per block, matching jpc.
+
+    In FabricPC's graph, this block decomposes into LinearNode -> IdentityNode(sum)
+    with in_degree=2. hidden_scale = gain/sqrt(fan_in*K) folds the linear
+    forward scale with the summation scaling, and skip_scale = 1/sqrt(K)
+    scales the identity path. Both are needed to preserve O(1) variance.
     """
 
     def __init__(
@@ -231,6 +273,7 @@ class PreActResBlock(NodeBase):
         latent_init=NormalInitializer(),
         weight_init=NormalInitializer(mean=0.0, std=1.0),
         scale=1.0,
+        skip_scale=1.0,
     ):
         super().__init__(
             shape=shape,
@@ -240,6 +283,7 @@ class PreActResBlock(NodeBase):
             latent_init=latent_init,
             weight_init=weight_init,
             scale=scale,
+            skip_scale=skip_scale,
             use_bias=False,
         )
 
@@ -273,6 +317,7 @@ class PreActResBlock(NodeBase):
     def forward(params, inputs, state, node_info):
         config = node_info.node_config
         scale = config.get("scale", 1.0)
+        skip_scale = config.get("skip_scale", 1.0)
         activation = node_info.activation
 
         # Single input
@@ -282,8 +327,10 @@ class PreActResBlock(NodeBase):
         # Pre-activation: apply activation BEFORE linear transform
         act_x = type(activation).forward(x, activation.config)
 
-        # z_mu = scale * (act(x) @ W) + x   (skip adds raw input)
-        z_mu = scale * jnp.matmul(act_x, W) + x
+        # z_mu = scale * (act(x) @ W) + skip_scale * x
+        # scale = gain/sqrt(fan_in*K) for the linear path
+        # skip_scale = 1/sqrt(K) for the identity skip path (K = in_degree)
+        z_mu = scale * jnp.matmul(act_x, W) + skip_scale * x
 
         error = state.z_latent - z_mu
         state = state._replace(pre_activation=z_mu, z_mu=z_mu, error=error)
@@ -379,14 +426,14 @@ class PreActReadout(NodeBase):
 
 
 def build_fc_resnet(
+    width,
+    depth,
+    scaling_mode,
+    eta_infer,
+    infer_steps,
+    max_norm,
     input_dim=784,
-    width=128,
-    depth=30,
     output_dim=10,
-    scaling_mode="jpc",
-    eta_infer=0.5,
-    infer_steps=None,
-    max_norm=0.5,
 ):
     """
     Build a fully-connected ResNet matching jpc's mupc.ipynb architecture.
@@ -405,17 +452,17 @@ def build_fc_resnet(
         depth: Total parameterized layers (input_linear + resblocks + readout).
         output_dim: Output dimensionality (10 for MNIST).
         scaling_mode: 'jpc' or 'fabricpc'.
-        eta_infer: Inference learning rate.
-        infer_steps: Inference steps (default: max(100, 3*depth)).
+        eta_infer: Inference rate.
+        infer_steps: Inference steps (default: 3*depth).
         max_norm: Maximum gradient norm for inference clipping.
 
     Returns:
         GraphStructure (no MuPCConfig — scaling is internal to nodes).
     """
     if infer_steps is None:
-        infer_steps = max(100, 3 * depth)
+        infer_steps = 3 * depth
 
-    in_scale, hidden_scale, out_scale = compute_scaling_factors(
+    in_scale, hidden_scale, out_scale, skip_scale = compute_scaling_factors(
         input_dim, width, depth, scaling_mode
     )
 
@@ -443,6 +490,7 @@ def build_fc_resnet(
             name=f"layer_{i}",
             weight_init=weight_init,
             scale=hidden_scale,
+            skip_scale=skip_scale,
         )
         all_nodes.append(block)
         all_edges.append(Edge(source=prev, target=block.slot("in")))
@@ -483,7 +531,7 @@ def parse_args():
         type=str,
         default="jpc",
         choices=["jpc", "fabricpc"],
-        help="Scaling formula: 'jpc' (1/sqrt(N*L)) or 'fabricpc' (gain/sqrt(N))",
+        help="Scaling formula: 'jpc' (1/sqrt(N*L)) or 'fabricpc' (gain/sqrt(N*K), K=2)",
     )
     parser.add_argument(
         "--depth", type=int, default=10, help="Total parameterized layers (default: 10)"
@@ -492,13 +540,13 @@ def parse_args():
         "--width", type=int, default=128, help="Hidden layer width (default: 128)"
     )
     parser.add_argument(
-        "--batch_size", type=int, default=64, help="Batch size (default: 64)"
+        "--batch_size", type=int, default=256, help="Batch size (default: 64)"
     )
     parser.add_argument(
         "--num_epochs", type=int, default=3, help="Training epochs (default: 3)"
     )
     parser.add_argument(
-        "--eta_infer", type=float, default=0.2, help="Inference LR (default: 0.2)"
+        "--eta_infer", type=float, default=0.2, help="Inference rate (default: 0.2)"
     )
     parser.add_argument(
         "--param_lr", type=float, default=0.001, help="Parameter LR (default: 0.001)"
@@ -507,7 +555,7 @@ def parse_args():
         "--infer_steps",
         type=int,
         default=None,
-        help="Inference steps (default: max(100, 3*depth))",
+        help="Inference steps (default: 3*depth)",
     )
     parser.add_argument(
         "--max_norm",
@@ -527,10 +575,9 @@ def main():
     print("=" * 60)
     print(f"Scaling mode: {args.scaling}")
     print(f"Architecture: FC-ResNet, depth={args.depth}, width={args.width}")
-    default_steps = args.infer_steps or max(100, 3 * args.depth)
+    steps = args.infer_steps or 3 * args.depth
     print(
-        f"Inference: eta={args.eta_infer}, steps={default_steps}, "
-        f"max_norm={args.max_norm}"
+        f"Inference: eta={args.eta_infer}, steps={steps}, " f"max_norm={args.max_norm}"
     )
     print(
         f"Training: lr={args.param_lr}, batch_size={args.batch_size}, "
@@ -554,13 +601,14 @@ def main():
     params = initialize_params(structure, graph_key)
 
     # Print scaling factors
-    in_s, hid_s, out_s = compute_scaling_factors(
+    in_s, hid_s, out_s, skip_s = compute_scaling_factors(
         784, args.width, args.depth, args.scaling
     )
     print(f"\nScaling factors ({args.scaling}):")
-    print(f"  input layer:  {in_s:.6f}")
+    print(f"  input layer:   {in_s:.6f}")
     print(f"  hidden layers: {hid_s:.6f}")
-    print(f"  output layer: {out_s:.6f}")
+    print(f"  skip path:     {skip_s:.6f}")
+    print(f"  output layer:  {out_s:.6f}")
 
     # Print model summary
     print(f"\nModel: {len(structure.nodes)} nodes, {len(structure.edges)} edges")
@@ -620,9 +668,6 @@ def main():
         f"This run:        {accuracy:.2f}% (depth={args.depth}, "
         f"width={args.width}, scaling={args.scaling})"
     )
-    print(f"\nNote: jpc uses an adaptive ODE solver for inference while")
-    print(f"FabricPC uses fixed-step SGD with gradient clipping. At high")
-    print(f"depths (>20), this gap widens due to stiff inference dynamics.")
 
 
 if __name__ == "__main__":

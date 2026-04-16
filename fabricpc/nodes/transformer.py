@@ -174,6 +174,20 @@ class TransformerBlock(NodeBase):
         }
 
     @staticmethod
+    def get_weight_fan_in(source_shape: Tuple[int, ...], config: Dict[str, Any]) -> int:
+        """Return embed_dim as fan_in for muPC scaling.
+
+        The TransformerBlock uses pre-norm LayerNorm as its first operation.
+        Since LN(a*x) = LN(x) for scalar a > 0, the external muPC
+        forward_scale is absorbed — it affects neither the forward variance
+        nor the topdown gradient (the chain-rule factor 'a' cancels with
+        LN's 1/a Jacobian scaling). All internal variance control is
+        handled inside forward(). We return embed_dim for consistency
+        with the framework's per-edge fan_in convention.
+        """
+        return source_shape[-1]
+
+    @staticmethod
     def initialize_params(
         key: jax.Array,
         node_shape: Tuple[int, ...],
@@ -193,22 +207,23 @@ class TransformerBlock(NodeBase):
 
         keys = jax.random.split(key, 8)
 
-        # N = number of blocks in the architecture, used for residual stream variance control.
+        # Weight initialization for muPC-compatible unit variance propagation.
+        # Residual variance is controlled by forward() scaling (1/sqrt(2) per
+        # residual add when muPC is active), not by output projection init.
         """
-        Weight      | Init std                    | Rationale
-        ------------|-----------------------------|---------------------------------
-        W_q         | 1/√d_model                  | Unit variance Q after projection
-        W_k         | 1/√d_model                  | Unit variance K after projection  
-        W_v         | 1/√d_model                  | Unit variance V after projection
-        W_o         | 1/(√d_model · √(2N))        | Residual stream variance control
-        W_ff1       | √(2/d_model)  [He]          | Compensate for ReLU/GELU zeroing
-        W_ff2       | 1/(√d_ff · √(2N))           | Residual stream variance control
-        ln*_gamma   | 1.0 (ones)                  | Identity at init
-        ln*_beta    | 0.0 (zeros)                 | No shift at init
-        all biases  | 0.0 (zeros)                 | No variance contribution at init
+        Weight      | Init std          | Rationale
+        ------------|-------------------|-------------------------------------------
+        W_q         | 1/√d              | Unit variance Q after projection
+        W_k         | 1/√d              | Unit variance K after projection
+        W_v         | 1/√d              | Unit variance V after projection
+        W_o         | 1/√d              | Xavier fan-in; residual scaling in forward()
+        W_ff1       | √(2/d)  [He]      | Compensate for GELU zeroing
+        W_ff2       | 1/√d_ff           | Xavier fan-in; residual scaling in forward()
+        ln*_gamma   | 1.0 (ones)        | Identity at init
+        ln*_beta    | 0.0 (zeros)       | No shift at init
+        all biases  | 0.0 (zeros)       | No variance contribution at init
         """
 
-        n_blocks = 1  # TODO - make this dynamic based on config
         return NodeParams(
             weights={
                 # Attention weights
@@ -230,14 +245,14 @@ class TransformerBlock(NodeBase):
                 "W_o": initialize(
                     keys[3],
                     (embed_dim, embed_dim),
-                    NormalInitializer(std=1.0 / jnp.sqrt(embed_dim * 2 * n_blocks)),
+                    NormalInitializer(std=1.0 / jnp.sqrt(embed_dim)),
                 ),
                 # FFN weights
                 "W_ff1": initialize(keys[4], (embed_dim, ff_dim), KaimingInitializer()),
                 "W_ff2": initialize(
                     keys[5],
                     (ff_dim, embed_dim),
-                    NormalInitializer(std=1.0 / jnp.sqrt(ff_dim * 2 * n_blocks)),
+                    NormalInitializer(std=1.0 / jnp.sqrt(ff_dim)),
                 ),
                 # LayerNorm parameters
                 "ln1_gamma": jnp.ones((1, 1, embed_dim)),
@@ -291,6 +306,12 @@ class TransformerBlock(NodeBase):
             input_tensor, params.weights["ln1_gamma"], params.biases["ln1_beta"]
         )
 
+        # muPC internal scaling: LN absorbs the external forward_scale,
+        # so all variance control is handled here.
+        mupc_active = node_info.scaling_config is not None
+        if mupc_active:
+            inv_sqrt2 = jnp.float32(1.0 / jnp.sqrt(2.0))
+
         # Multi-Head Attention
         attn_output = TransformerBlock._mha(
             x_norm1,
@@ -309,8 +330,19 @@ class TransformerBlock(NodeBase):
             rope_theta=config.get("rope_theta", 10000.0),
         )
 
+        # muPC: compensate for softmax averaging variance contraction.
+        # At init, uniform attention contracts Var by 1/S; sqrt(S) restores
+        # unit variance through the W_o projection.
+        if mupc_active:
+            attn_output = attn_output * jnp.sqrt(jnp.float32(seq_len))
+
         # Residual connection 1
-        x_res1 = input_tensor + attn_output
+        # muPC: balanced 1/sqrt(2) scaling so Var(sum) = 1 when both
+        # branches have Var = 1 (matches PreActResBlock skip_scale pattern).
+        if mupc_active:
+            x_res1 = inv_sqrt2 * (input_tensor + attn_output)
+        else:
+            x_res1 = input_tensor + attn_output
 
         # LayerNorm 2
         x_norm2 = TransformerBlock._layernorm(
@@ -327,7 +359,10 @@ class TransformerBlock(NodeBase):
         )
 
         # Residual connection 2
-        z_mu = x_res1 + ff_output
+        if mupc_active:
+            z_mu = inv_sqrt2 * (x_res1 + ff_output)
+        else:
+            z_mu = x_res1 + ff_output
 
         pre_activation = z_mu
         error = state.z_latent - z_mu

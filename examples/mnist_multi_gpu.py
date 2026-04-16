@@ -24,7 +24,7 @@ from fabricpc.core.activations import (
 from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.core.inference import InferenceSGD
 import optax
-from fabricpc.training import train_pcn_multi_gpu, evaluate_pcn_multi_gpu
+from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
 
 # --- Network ---
@@ -91,7 +91,7 @@ test_loader = MnistLoader(
 print(f"\nTraining on {n_devices} device(s) (pmap compilation on first batch)...\n")
 
 start_time = time.time()
-trained_params = train_pcn_multi_gpu(
+trained_params, _, _ = train_pcn(
     params=params,
     structure=structure,
     train_loader=train_loader,
@@ -108,7 +108,5 @@ print(
     f"{throughput:.0f} samples/sec"
 )
 
-metrics = evaluate_pcn_multi_gpu(
-    trained_params, structure, test_loader, train_config, eval_key
-)
+metrics = evaluate_pcn(trained_params, structure, test_loader, train_config, eval_key)
 print(f"Test Accuracy: {metrics['accuracy'] * 100:.2f}%")

@@ -27,10 +27,9 @@ def create_iter_callback(
     """
 
     def iter_callback(epoch_idx: int, batch_idx: int, energy: float) -> float:
-        # Normalize energy by batch size if provided
-        normalized_energy = energy / batch_size if batch_size else energy
-        tracker.track_batch_energy(normalized_energy, epoch=epoch_idx, batch=batch_idx)
-        return normalized_energy
+        # Energy is already normalized per-sample by get_graph_param_gradient
+        tracker.track_batch_energy(energy, epoch=epoch_idx, batch=batch_idx)
+        return energy
 
     return iter_callback
 
@@ -166,10 +165,10 @@ def create_detailed_iter_callback(
         energy: float,
         final_state: GraphState,
     ) -> float:
-        normalized_energy = energy / batch_size if batch_size else energy
+        # Energy is already normalized per-sample by get_graph_param_gradient
 
         # Track batch energy
-        tracker.track_batch_energy(normalized_energy, epoch=epoch_idx, batch=batch_idx)
+        tracker.track_batch_energy(energy, epoch=epoch_idx, batch=batch_idx)
 
         # Track per-node energy
         tracker.track_batch_energy_per_node(
@@ -182,6 +181,6 @@ def create_detailed_iter_callback(
                 final_state, epoch=epoch_idx, batch=batch_idx, infer_step=0
             )
 
-        return normalized_energy
+        return energy
 
     return detailed_iter_callback

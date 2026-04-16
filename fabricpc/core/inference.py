@@ -254,7 +254,7 @@ class InferenceSGD(InferenceBase):
     This is the default inference algorithm for predictive coding networks.
 
     Args:
-        eta_infer: Inference learning rate (default: 0.1)
+        eta_infer: Inference rate (default: 0.1)
         infer_steps: Number of inference iterations (default: 20)
     """
 
@@ -285,7 +285,7 @@ class InferenceSGDNormClip(InferenceBase):
     Uses safe division with epsilon to handle zero gradients.
 
     Args:
-        eta_infer: Inference learning rate (default: 0.1)
+        eta_infer: Inference rate (default: 0.1)
         infer_steps: Number of inference iterations (default: 20)
         max_norm: Maximum gradient norm per node (default: 1.0)
         eps: Small constant for numerical stability (default: 1e-8)
