@@ -432,6 +432,106 @@ class TestVariancePropagation:
 
 
 # ============================================================================
+# SkipConnection Scaling Tests
+# ============================================================================
+
+
+class TestSkipConnectionScaling:
+    """Test SkipConnection node and depth-dependent scaling."""
+
+    def test_skip_connection_unscaled(self):
+        """SkipConnection node gets scale 1.0 on all edges."""
+        from fabricpc.nodes.skip_connection import SkipConnection
+
+        x = IdentityNode(shape=(10,), name="x")
+        h = Linear(shape=(10,), name="h", weight_init=MuPCInitializer())
+        skip = SkipConnection(shape=(10,), name="skip")
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, h, skip, y],
+            edges=[
+                Edge(source=x, target=h.slot("in")),
+                Edge(source=h, target=skip.slot("in")),
+                Edge(source=x, target=skip.slot("in")),  # skip path
+                Edge(source=skip, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(),
+        )
+        scaling = structure.nodes["skip"].node_info.scaling_config
+        assert scaling is not None
+        for a in scaling.forward_scale.values():
+            assert a == 1.0
+        for td in scaling.topdown_grad_scale.values():
+            assert td == 1.0
+
+    def test_skip_depth_affects_compute_scaling(self):
+        """Compute nodes get depth factor L = number of SkipConnection nodes."""
+        from fabricpc.nodes.skip_connection import SkipConnection
+
+        x = IdentityNode(shape=(10,), name="x")
+        h1 = Linear(shape=(10,), name="h1", weight_init=MuPCInitializer())
+        s1 = SkipConnection(shape=(10,), name="s1")
+        h2 = Linear(shape=(10,), name="h2", weight_init=MuPCInitializer())
+        s2 = SkipConnection(shape=(10,), name="s2")
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, h1, s1, h2, s2, y],
+            edges=[
+                Edge(source=x, target=h1.slot("in")),
+                Edge(source=x, target=s1.slot("in")),  # skip
+                Edge(source=h1, target=s1.slot("in")),  # compute -> merge
+                Edge(source=s1, target=h2.slot("in")),
+                Edge(source=s1, target=s2.slot("in")),  # skip
+                Edge(source=h2, target=s2.slot("in")),  # compute -> merge
+                Edge(source=s2, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(),
+        )
+        # L = 2 (two SkipConnection nodes: s1, s2)
+        # h1: fan_in=10, K=1, L=2
+        # expected a = 1/sqrt(10 * 1 * 2)  (identity activation, gain=1)
+        h1_edge = structure.nodes["h1"].node_info.in_edges[0]
+        a_h1 = structure.nodes["h1"].node_info.scaling_config.forward_scale[h1_edge]
+        expected_a = 1.0 / math.sqrt(10 * 1 * 2)
+        assert abs(a_h1 - expected_a) < 1e-10
+
+    def test_no_skip_connections_degenerates_to_old_formula(self):
+        """Without SkipConnection nodes, L=1 and formula = gain/sqrt(fan_in*K)."""
+        x = IdentityNode(shape=(10,), name="x")
+        h1 = Linear(shape=(20,), name="h1", weight_init=MuPCInitializer())
+        h2 = Linear(shape=(20,), name="h2", weight_init=MuPCInitializer())
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, h1, h2, y],
+            edges=[
+                Edge(source=x, target=h1.slot("in")),
+                Edge(source=h1, target=h2.slot("in")),
+                Edge(source=h2, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(),
+        )
+        # L=1 (no SkipConnections), K=1
+        # h1: gain=1 (identity), fan_in=10 -> a = 1/sqrt(10)
+        h1_edge = structure.nodes["h1"].node_info.in_edges[0]
+        a_h1 = structure.nodes["h1"].node_info.scaling_config.forward_scale[h1_edge]
+        assert abs(a_h1 - 1.0 / math.sqrt(10)) < 1e-10
+
+    def test_apply_variance_scaling_property(self):
+        """NodeBase has apply_variance_scaling=True, SkipConnection has False."""
+        from fabricpc.nodes.skip_connection import SkipConnection
+
+        assert Linear.apply_variance_scaling is True
+        assert IdentityNode.apply_variance_scaling is True
+        assert SkipConnection.apply_variance_scaling is False
+
+
+# ============================================================================
 # Backward Compatibility Tests
 # ============================================================================
 

@@ -7,7 +7,7 @@ PC training is not yet tuned — treat as a starting point for experimentation.
 Usage:
     PYTHONPATH=. python examples/transformer_demo.py
     PYTHONPATH=. python examples/transformer_demo.py --mode backprop --lr 1e-3 --num_epochs 3
-    PYTHONPATH=. python examples/transformer_demo.py --mode pc --num_blocks 2 --no_extra_skip
+    PYTHONPATH=. python examples/transformer_demo.py --mode pc --num_blocks 2
 
 Results: PC training
 Final train loss: 321.3981
@@ -16,6 +16,8 @@ Prompt: 'ROMEO: '
 ----------------------------------------
 ROMEO: ashoos WIIINigat wat
 ----------------------------------------
+Removing graph skip connections, but added improve internal variance scaling:
+Final test loss: 3.3160, Perplexity: 27.55
 """
 
 from jax_setup import set_jax_flags_before_importing_jax
@@ -112,12 +114,6 @@ def parse_args():
     )
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument(
-        "--extra_skip",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Add skip connections from embedding to transformer blocks (default: True)",
-    )
     return parser.parse_args()
 
 
@@ -135,7 +131,6 @@ def create_transformer_model(
     rng_key: jax.Array,
     infer_steps: int = 10,
     eta_infer: float = 0.01,
-    extra_skip_connections: bool = True,
 ) -> Tuple:
     """Create a transformer language model. Returns (structure, params)."""
     input_node = IdentityNode(shape=(seq_len, vocab_size), name="input")
@@ -150,52 +145,22 @@ def create_transformer_model(
     nodes = [input_node, embed, mask_node]
     edges = [Edge(source=input_node, target=embed.slot("in"))]
 
-    xmfr_blocks = []
-    block_skip_nodes = []
-    summing_nodes = []
-    for i in range(num_blocks):
-        xmfr_blocks.append(
-            TransformerBlock(
-                shape=(seq_len, embed_dim),
-                num_heads=num_heads,
-                ff_dim=ff_dim,
-                internal_activation=GeluActivation(),
-                rope_theta=rope_theta,
-                name=f"transformer_{i}",
-            )
-        )
-        block_skip_nodes.append(
-            IdentityNode(
-                shape=(seq_len, embed_dim),
-                name=f"block_skip_{i}",
-                scale=(1.0 / num_blocks),
-            )
-        )
-        summing_nodes.append(
-            IdentityNode(
-                shape=(seq_len, embed_dim),
-                name=f"summing_skip_{i}",
-                scale=(0.1 / (1 + num_blocks)),
-            )
-        )
-    nodes = nodes + xmfr_blocks
-    if extra_skip_connections:
-        nodes = nodes + summing_nodes  # + block_skip_nodes
+    # TODO add skip connections and summing blocks.
 
     prev_node = embed
     for i in range(num_blocks):
-        edges.append(Edge(source=prev_node, target=xmfr_blocks[i].slot("in")))
-        edges.append(Edge(source=mask_node, target=xmfr_blocks[i].slot("mask")))
-
-        if extra_skip_connections:
-            edges.append(
-                Edge(source=xmfr_blocks[i], target=summing_nodes[i].slot("in"))
-            )
-            for j in range(i, num_blocks):
-                edges.append(Edge(source=prev_node, target=summing_nodes[j].slot("in")))
-            prev_node = summing_nodes[i]
-        else:
-            prev_node = xmfr_blocks[i]
+        new_block = TransformerBlock(
+            shape=(seq_len, embed_dim),
+            num_heads=num_heads,
+            ff_dim=ff_dim,
+            internal_activation=GeluActivation(),
+            rope_theta=rope_theta,
+            name=f"transformer_{i}",
+        )
+        nodes.append(new_block)
+        edges.append(Edge(source=prev_node, target=new_block.slot("in")))
+        edges.append(Edge(source=mask_node, target=new_block.slot("mask")))
+        prev_node = new_block
 
     output_node = Linear(
         shape=(seq_len, vocab_size),
@@ -375,7 +340,6 @@ def main(args=None):
         rng_key=graph_key,
         infer_steps=args.infer_steps,
         eta_infer=args.eta_infer,
-        extra_skip_connections=args.extra_skip,
     )
 
     total_params = sum(p.size for p in jax.tree_util.tree_leaves(params))
@@ -405,7 +369,6 @@ def main(args=None):
                     "ff_dim": args.ff_dim,
                     "rope_theta": args.rope_theta,
                     "total_params": total_params,
-                    "use_extra_skip_connections": args.extra_skip,
                 },
                 "training_method": "PC" if use_pc else "Backprop",
                 "batch_size": args.batch_size,

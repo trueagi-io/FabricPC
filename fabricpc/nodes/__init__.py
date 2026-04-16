@@ -25,6 +25,7 @@ from fabricpc.nodes.transformer_v2 import (
     VocabProjectionNode,
 )
 from fabricpc.nodes.storkey_hopfield import StorkeyHopfield
+from fabricpc.nodes.skip_connection import SkipConnection
 
 # Convenience aliases matching the target API
 Linear = Linear
@@ -47,4 +48,5 @@ __all__ = [
     "Mlp2ResidualNode",
     "VocabProjectionNode",
     "StorkeyHopfield",
+    "SkipConnection",
 ]

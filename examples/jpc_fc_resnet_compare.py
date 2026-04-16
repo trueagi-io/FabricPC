@@ -26,8 +26,9 @@ This is a fully-connected ResNet — no convolutions, no spatial structure. The
 skip connection is internal to each block (one z_latent per layer, matching jpc).
 
 Scaling modes (--scaling flag):
-    jpc:      in=1/√D, hidden=1/√(N*L), out=1/N, skip=1    (depth L compensates)
-    fabricpc: in=1/√D, hidden=gain/√(N*K), out=1/N, skip=1/√K  (K=2 in_degree)
+    jpc:         in=1/√D, hidden=1/√(N*L), out=1/N, skip=1      (depth L compensates)
+    fabricpc:    in=1/√D, hidden=gain/√(N*K), out=1/N, skip=1/√K (K=2 in_degree — BROKEN at depth>16)
+    fabricpc_v2: in=1/√D, hidden=gain/√(N*L), out=1/N, skip=1    (depth L + Kaiming gain)
 
 Key difference from jpc: FabricPC uses fixed-step SGD inference with gradient
 norm clipping (InferenceSGDNormClip), while jpc uses an adaptive ODE solver
@@ -66,15 +67,23 @@ Architecture: FC-ResNet, depth=*, width=128
 Inference: eta=0.2, steps=3*depth, max_norm=0.2
 Training: lr=0.001, batch_size=256, epochs=3
 
-| Depth | Test Accuracy (jpc scaling) | Test Accuracy (fabricpc scaling) |
-|-------|-----------------------------|----------------------------------|
-| 8     | ~90.8%                        | ~92.6%                         |
-| 16    | ~87.8%                        | ~85.6%                         |
-| 32    | ~85.2%                        | ~43.4%                         |
-| 64    | ~83.5%                        | ~11.5%                         |
-| 128   | ~83.9%                        | ~10.3%                         |
+| Depth | jpc scaling | fabricpc scaling | fabricpc_v2 scaling |
+|-------|-------------|------------------|---------------------|
+| 8     | ~90.8%      | ~92.6%           | ~91.6%              |
+| 16    | ~87.8%      | ~85.6%           | ~88.4%              |
+| 32    | ~85.2%      | ~43.4%           | ~86.8%              |
+| 64    | ~83.5%      | ~11.5%           | ~85.4%              |
+| 128   | ~83.9%      | ~10.3%           | (not tested)        |
 
+Root cause of fabricpc collapse: skip_scale = 1/sqrt(2) ≈ 0.707 causes
+exponential signal decay through the identity path. Over L layers, the
+coherent signal decays as 0.707^L (SNR ~ 1e-5 at depth 32) while noise
+from the linear path maintains O(1) variance. The network can't propagate
+gradients through pure noise.
 
+Fix (fabricpc_v2): skip_scale = 1.0 preserves the identity mapping.
+hidden_scale includes a depth factor (gain/sqrt(N*L)) instead of in-degree
+factor (gain/sqrt(N*K)), bounding variance growth to (1+1/L)^L ~ e.
 
 """
 
@@ -127,7 +136,7 @@ def compute_scaling_factors(
         input_dim: Input dimensionality (784 for MNIST).
         width: Hidden layer width.
         depth: Total number of parameterized layers.
-        mode: 'jpc' or 'fabricpc'.
+        mode: 'jpc', 'fabricpc', or 'fabricpc_v2'.
 
     Returns:
         (in_scale, hidden_scale, out_scale, skip_scale)
@@ -138,28 +147,47 @@ def compute_scaling_factors(
         # O(1/L), so the unscaled skip dominates and variance stays ~O(1).
         in_scale = 1.0 / math.sqrt(input_dim)
         hidden_scale = 1.0 / math.sqrt(width * depth)
-        out_scale = 1.0 / width
         skip_scale = 1.0
+        out_scale = 1.0 / width
     elif mode == "fabricpc":
         # FabricPC muPC: a = gain / sqrt(fan_in * K)
         # Each PreActResBlock sums a linear path and an identity skip,
         # equivalent to an IdentityNode with in_degree K=2 in FabricPC's
         # graph. Both paths must be scaled by 1/sqrt(K) to preserve O(1)
         # variance at the summation point (see mupc.py:229).
+        #
+        # BUG: skip_scale = 1/sqrt(2) ≈ 0.707 causes exponential signal
+        # decay through the identity path. Over L layers, the coherent
+        # signal decays as 0.707^L while noise is maintained at O(1) by
+        # the variance-preserving linear path. SNR collapses for L > 16.
+        # See fabricpc_v2 mode for the fix.
         K = 2  # effective in_degree for residual blocks (linear + skip)
         relu_gain = math.sqrt(2.0)
-        # Input layer: identity activation, gain=1.0, no skip
         in_scale = 1.0 / math.sqrt(input_dim)
-        # Hidden layers: gain/sqrt(fan_in * K) folds linear node scaling
-        # (gain/sqrt(fan_in)) with identity summation scaling (1/sqrt(K))
         hidden_scale = relu_gain / math.sqrt(width * K)
-        # Skip path: identity (fan_in=1), so a = 1/sqrt(1 * K) = 1/sqrt(K)
         skip_scale = 1.0 / math.sqrt(K)
-        # Output layer: identity activation, gain=1.0, no skip
-        # FabricPC output formula: a = gain / (fan_in * sqrt(K)) for K=1
+        out_scale = 1.0 / width
+    elif mode == "fabricpc_v2":
+        # Fixed residual scaling: unattenuated skip + depth-compensated linear.
+        #
+        # The skip connection must remain at scale 1.0 to preserve the
+        # identity mapping that carries the signal through deep networks.
+        # The linear path is depth-compensated: its per-layer variance
+        # contribution is O(gain²/(2L)), so total variance over L layers
+        # grows as (1 + gain²/(2L))^L → sqrt(e) ≈ 1.65 — bounded.
+        #
+        # Includes activation-aware gain (sqrt(2) for ReLU) from Kaiming
+        # convention, which JPC's raw 1/sqrt(N*L) omits.
+        relu_gain = math.sqrt(2.0)
+        in_scale = 1.0 / math.sqrt(input_dim)
+        hidden_scale = relu_gain / math.sqrt(width * depth)
+        skip_scale = 1.0
         out_scale = 1.0 / width
     else:
-        raise ValueError(f"Unknown scaling mode: {mode!r}. Use 'jpc' or 'fabricpc'.")
+        raise ValueError(
+            f"Unknown scaling mode: {mode!r}. "
+            "Use 'jpc', 'fabricpc', or 'fabricpc_v2'."
+        )
 
     return in_scale, hidden_scale, out_scale, skip_scale
 
@@ -451,7 +479,7 @@ def build_fc_resnet(
         width: Hidden layer width.
         depth: Total parameterized layers (input_linear + resblocks + readout).
         output_dim: Output dimensionality (10 for MNIST).
-        scaling_mode: 'jpc' or 'fabricpc'.
+        scaling_mode: 'jpc', 'fabricpc', or 'fabricpc_v2'.
         eta_infer: Inference rate.
         infer_steps: Inference steps (default: 3*depth).
         max_norm: Maximum gradient norm for inference clipping.
@@ -530,8 +558,9 @@ def parse_args():
         "--scaling",
         type=str,
         default="jpc",
-        choices=["jpc", "fabricpc"],
-        help="Scaling formula: 'jpc' (1/sqrt(N*L)) or 'fabricpc' (gain/sqrt(N*K), K=2)",
+        choices=["jpc", "fabricpc", "fabricpc_v2"],
+        help="Scaling formula: 'jpc' (1/sqrt(N*L)), 'fabricpc' (gain/sqrt(N*K), K=2), "
+        "or 'fabricpc_v2' (gain/sqrt(N*L), skip=1)",
     )
     parser.add_argument(
         "--depth", type=int, default=10, help="Total parameterized layers (default: 10)"
@@ -564,7 +593,62 @@ def parse_args():
         help="Gradient norm clipping for inference (default: 0.2)",
     )
     parser.add_argument("--verbose", action="store_true", help="Print per-epoch output")
+    parser.add_argument(
+        "--probe_variance",
+        action="store_true",
+        help="Print per-layer variance diagnostics after training",
+    )
     return parser.parse_args()
+
+
+def probe_variance(params, structure, test_loader, rng_key):
+    """
+    Measure per-layer variance diagnostics after inference converges.
+
+    Prints a table showing z_mu variance, latent_grad variance, and
+    z_latent variance at each layer, revealing signal propagation issues.
+    """
+    from fabricpc.graph.state_initializer import initialize_graph_state
+    from fabricpc.core.inference import run_inference
+
+    # Get one batch
+    batch = next(iter(test_loader))
+    x_batch, y_batch = batch
+    x_batch = jnp.array(x_batch)
+    y_batch = jnp.array(y_batch)
+    batch_size = x_batch.shape[0]
+
+    task_map = structure.task_map
+    clamps = {task_map["x"]: x_batch, task_map["y"]: y_batch}
+
+    state = initialize_graph_state(
+        structure, batch_size, rng_key, clamps=clamps, params=params
+    )
+    final_state = run_inference(params, state, clamps, structure)
+
+    # Collect per-layer stats
+    node_order = list(structure.nodes.keys())
+    print("\n" + "=" * 72)
+    print("Per-Layer Variance Diagnostics (after inference)")
+    print("=" * 72)
+    print(
+        f"{'Layer':<12} {'Var(z_mu)':>12} {'Var(z_lat)':>12} "
+        f"{'Var(grad)':>12} {'Var(error)':>12}"
+    )
+    print("-" * 72)
+
+    for node_name in node_order:
+        ns = final_state.nodes[node_name]
+        z_mu_var = float(jnp.var(ns.z_mu))
+        z_lat_var = float(jnp.var(ns.z_latent))
+        grad_var = float(jnp.var(ns.latent_grad))
+        error_var = float(jnp.var(ns.error))
+        print(
+            f"{node_name:<12} {z_mu_var:>12.4f} {z_lat_var:>12.4f} "
+            f"{grad_var:>12.4f} {error_var:>12.4f}"
+        )
+
+    print("=" * 72)
 
 
 def main():
@@ -668,6 +752,11 @@ def main():
         f"This run:        {accuracy:.2f}% (depth={args.depth}, "
         f"width={args.width}, scaling={args.scaling})"
     )
+
+    # Variance diagnostics
+    if args.probe_variance:
+        probe_key = jax.random.PRNGKey(99)
+        probe_variance(trained_params, structure, test_loader, probe_key)
 
 
 if __name__ == "__main__":
