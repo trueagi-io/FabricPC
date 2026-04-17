@@ -1,10 +1,11 @@
 # Changelog
 
 ## [0.3.0] - 2026-04-17
-- muPC now supports arbitrary DAG topologies with correct per-edge scaling, per-slot computation. Scaling formula is `a = gain / sqrt(fan_in * K_slot * L)` where K_slot is the per-slot in-degree and L is the residual depth (number of nodes with skip connection slots along the longest path).
-- Stable training demonstrated on networks with 100+ layers. 
+- muPC scaling supports arbitrary DAG topologies with correct per-edge scaling, per-slot computation. Scaling formula is `a = gain / sqrt(fan_in * K_slot * L)` where K_slot is the per-slot in-degree and L is the residual depth (number of nodes with skip connection slots along the longest path).
+- Stable training demonstrated on networks with 100+ layers with muPC scaling. 
 - Associative memory is now a composable network component with `StorkeyHopfield` node: combines PC prediction-error energy with Hopfield attractor energy.
 - Consolidated multi-GPU trainer into `train.py`.
+- Comprehensive documentation in docs/user_guides folder.
 - Added `is_variance_scalable` and `is_skip_connection` attributes to `SlotSpec` for fine-grained control over which edges receive muPC scaling.
 - Added `SkipConnection` node: passthrough node with `is_variance_scalable=False` for residual/skip paths. Prevents exponential signal decay in deep residual networks.
 - Added `LinearResidual` node: combines linear transform and +skip sum in one PC node with dual slots ("in" scaled, "skip" unscaled). Halves graph depth compared to Linear + SkipConnection pattern.

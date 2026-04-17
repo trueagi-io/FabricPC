@@ -4,6 +4,11 @@ StorkeyHopfield Diagnostic Tool
 Diagnostic investigation of Hopfield attractor dynamics in PC classification
 under few-shot + noise conditions (Fashion-MNIST, K=50, noise_std=2.0).
 
+Architecture (compared models)::
+
+    Hopfield: pixels(784) ──→ hidden(128,tanh) ──→ hopfield(128,tanh) ──→ output(10)
+    MLP:      pixels(784) ──→ hidden(128,tanh) ──→ linear(128,tanh)  ──→ output(10)
+
 Four diagnostic phases:
   Phase 1: Strength sweep — ABExperiment-based sweep of hopfield_strength
            vs MLP control under K=50, noise=2.0 (default)

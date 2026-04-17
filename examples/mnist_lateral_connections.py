@@ -6,6 +6,16 @@ Compares two predictive coding architectures:
 - Lateral: 6-node graph with lateral connections between hidden layers
 - MLP: 4-node standard feedforward network (baseline)
 
+Architecture::
+
+    Lateral:
+        pixels ──→ hidden1 ──────────→ hidden2 ──→ class
+          │           ↑                    ↑
+          └──→ h1_lateral ──→ h2_lateral ──┘
+
+    MLP:
+        pixels ──→ hidden1 ──→ hidden2 ──→ class
+
 Both are trained with identical PC hyperparameters to isolate the effect
 of lateral connectivity on classification accuracy.
 

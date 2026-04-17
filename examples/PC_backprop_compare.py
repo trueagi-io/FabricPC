@@ -5,6 +5,11 @@ Statistical Comparison: Predictive Coding vs Backpropagation on MNIST
 Runs multiple independent training trials for both PC and backprop,
 then performs statistical analysis to compare test accuracies.
 
+Architecture (identical topology, different activations)::
+
+    PC:      pixels(784) ──→ hidden1(256,sigmoid) ──→ hidden2(64,sigmoid) ──→ class(10,softmax)
+    Backprop: pixels(784) ──→ hidden1(256,relu) ──→ hidden2(64,relu) ──→ class(10,softmax)
+
 Reports:
 - Per-trial accuracy results table
 - Mean +/- standard error for each method

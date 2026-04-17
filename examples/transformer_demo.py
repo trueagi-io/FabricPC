@@ -4,6 +4,15 @@ Transformer Predictive Coding Demo
 Character-level language modeling on TinyShakespeare with PC or backprop training.
 PC training still suffers from some poor variance scaling — treat as a starting point for experimentation.
 
+Architecture (per block: TransformerBlock + SkipConnection)::
+
+    input ──→ Embedding ──→ TransformerBlock_0 ──→ SkipConnection_0 ──→ ... ──→ output
+                                  │                   ↑
+                                  └── (skip) ─────────┘
+
+    Each SkipConnection sums the transformer output with the previous
+    node's output (identity skip path), both at scale 1.0.
+
 Usage:
     python examples/transformer_demo.py
     python examples/transformer_demo.py --mode backprop --lr 1e-3 --num_epochs 3
@@ -192,7 +201,7 @@ def create_transformer_model(
         shape=(seq_len, vocab_size),
         activation=SoftmaxActivation(),
         energy=CrossEntropyEnergy(),
-        weight_init=MuPCInitializer(),
+        weight_init=NormalInitializer(std=np.sqrt(1.0 / embed_dim)),
         name="output",
     )
     nodes.append(output_node)

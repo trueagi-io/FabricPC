@@ -3,8 +3,18 @@ Statistical Comparison: Graph Cycles vs Standard MLP on MNIST
 =====================================================================
 
 Compares two predictive coding architectures:
-- Cyclic: 6-node graph with cycles between hidden layers
+- Cyclic: 5-node graph with cycles between hidden layers
 - MLP: 4-node standard feedforward network (baseline)
+
+Architecture::
+
+    Cyclic:
+        pixels ──→ hidden1 ──→ hidden2 ──→ class
+                     ↑            │
+                     └── h2_lat ←─┘  (cycle)
+
+    MLP:
+        pixels ──→ hidden1 ──→ hidden2 ──→ class
 
 Both are trained with identical PC hyperparameters to isolate the effect
 of cyclic structure on classification accuracy.

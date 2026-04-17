@@ -7,9 +7,10 @@ statistically significant advantage over a vanilla MLP under data scarcity
 and input noise — conditions where memorized class prototypes and attractor
 denoising should help.
 
-Architecture (same 4-node graph for both arms):
-    Hopfield: input(784) -> Linear(128, tanh) -> StorkeyHopfield(128, tanh) -> Linear(10, softmax, CE)
-    MLP:      input(784) -> Linear(128, tanh) -> Linear(128, tanh) -> Linear(10, softmax, CE)
+Architecture (same 4-node graph for both arms)::
+
+    Hopfield: pixels(784) ──→ hidden(128,tanh) ──→ hopfield(128,tanh) ──→ output(10,softmax+CE)
+    MLP:      pixels(784) ──→ hidden(128,tanh) ──→ linear(128,tanh)   ──→ output(10,softmax+CE)
 
 Experiment grid: K (shots per class) x noise_std
     - K controls data scarcity: fewer examples -> more reliance on attractor memory

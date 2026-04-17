@@ -16,7 +16,8 @@ Effective scales folded into the monolithic PreActResBlock:
    - equivalently: gain / sqrt(fan_in * K) = sqrt(2) / sqrt(N * 2) = 1/sqrt(N)
  - Skip path: a_identity = 1/sqrt(2)
 
-Architecture (matching jpc mupc.ipynb):
+Architecture (matching jpc mupc.ipynb)::
+
     input(784) -> FCInput(width) -> PreActResBlock(width) x (depth-2) -> Readout(10)
 
 Each PreActResBlock computes:
