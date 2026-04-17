@@ -57,6 +57,7 @@ from fabricpc.core.initializers import (
     UniformInitializer,
     XavierInitializer,
     KaimingInitializer,
+    MuPCInitializer,
     initialize,
 )
 
@@ -105,5 +106,6 @@ __all__ = [
     "UniformInitializer",
     "XavierInitializer",
     "KaimingInitializer",
+    "MuPCInitializer",
     "initialize",
 ]

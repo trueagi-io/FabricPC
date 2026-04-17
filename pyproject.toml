@@ -7,7 +7,7 @@ name = "fabricpc"
 version = "0.3.0"
 description = "A flexible, performant predictive coding library using JAX"
 readme = "README.md"
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.10"
 authors = [
     {name = "FabricPC Authors"}
 ]
@@ -24,7 +24,8 @@ classifiers = [
 ]
 
 dependencies = [
-    "jax[cuda12]",
+    "jax",
+    "jaxlib",
     "optax>=0.1.7",
     "orbax-checkpoint>=0.4.0",
     "flax>=0.7.5",
@@ -54,10 +55,13 @@ viz = [
     "plotly>=5.0.0",
     "kaleido>=0.2.1",
     "pandas>=2.0.0",
-    "aim>=3.0.0",
+    "aim>=3.0.0",  # aim requires Python <3.13
+]
+cuda = [
+    "jax[cuda12]",
 ]
 all = [
-    "fabricpc[dev,tfds,experiments,viz]",
+    "fabricpc[dev,tfds,experiments,viz,cuda]",
 ]
 
 [tool.setuptools]

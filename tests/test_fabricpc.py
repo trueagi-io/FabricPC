@@ -484,7 +484,7 @@ class TestIdentityNode:
                 "name": "node",
                 "shape": node_shape,
                 "type": "identity",
-                "gain": 1.0,
+                "scale": 1.0,
             },
             activation=IdentityActivation(),
             energy=GaussianEnergy(),
@@ -502,3 +502,60 @@ class TestIdentityNode:
 
         expected = sum(inputs.values())
         np.testing.assert_allclose(new_state.z_mu, expected, rtol=1e-5)
+
+
+class TestFractionalEpochs:
+    """Test fractional epoch support in PC training."""
+
+    def test_fractional_epoch_runs(self, rng_key):
+        """train_pcn with num_epochs=0.5 runs fewer batches than a full epoch."""
+        from fabricpc.training.train import train_pcn
+
+        x = IdentityNode(shape=(4,), name="x")
+        h = Linear(shape=(8,), activation=TanhActivation(), name="h")
+        y = Linear(shape=(2,), name="y")
+
+        structure = graph(
+            nodes=[x, h, y],
+            edges=[
+                Edge(source=x, target=h.slot("in")),
+                Edge(source=h, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(eta_infer=0.1, infer_steps=3),
+        )
+        params = initialize_params(structure, rng_key)
+        optimizer = optax.adam(1e-3)
+
+        x_data = jax.random.normal(rng_key, (16, 4))
+        y_data = jax.random.normal(rng_key, (16, 2))
+        loader = [(x_data[:8], y_data[:8]), (x_data[8:], y_data[8:])]
+
+        iters_half = []
+        params_half, _, _ = train_pcn(
+            params,
+            structure,
+            loader,
+            optimizer,
+            {"num_epochs": 0.5},
+            rng_key,
+            verbose=False,
+            use_tqdm=False,
+            iter_callback=lambda e, b, energy: iters_half.append(1) or energy,
+        )
+
+        iters_full = []
+        params_full, _, _ = train_pcn(
+            params,
+            structure,
+            loader,
+            optimizer,
+            {"num_epochs": 1},
+            rng_key,
+            verbose=False,
+            use_tqdm=False,
+            iter_callback=lambda e, b, energy: iters_full.append(1) or energy,
+        )
+
+        assert len(iters_half) < len(iters_full)
+        assert len(iters_half) == 1  # 0.5 * 2 batches = 1 batch

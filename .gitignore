@@ -88,6 +88,7 @@ nbproject/
 *.egg-info
 *.zip
 *.tar.gz
+*.jsonl
 
 # Keep track of files that should not be ignored by mistake (example):
 # !important-file.txt

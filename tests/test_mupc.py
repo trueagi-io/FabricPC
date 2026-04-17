@@ -22,11 +22,6 @@ from fabricpc.core.inference import InferenceSGD, run_inference
 from fabricpc.core.initializers import MuPCInitializer
 from fabricpc.core.activations import IdentityActivation, ReLUActivation, TanhActivation
 from fabricpc.core.mupc import MuPCConfig, MuPCScalingFactors
-from fabricpc.core.depth_metric import (
-    ShortestPathDepth,
-    LongestPathDepth,
-    FixedDepth,
-)
 from fabricpc.graph import initialize_params
 from fabricpc.graph.state_initializer import initialize_graph_state
 from fabricpc.graph.graph_net import (
@@ -91,53 +86,6 @@ def skip_connection_structure():
 # ============================================================================
 # Depth Metric Tests
 # ============================================================================
-
-
-class TestDepthMetrics:
-    """Test depth computation for various graph topologies."""
-
-    def test_shortest_path(self, linear_chain_with_mupc, skip_connection_structure):
-        """Shortest path depths: linear chain and skip connection."""
-        metric = ShortestPathDepth()
-
-        # Linear chain: 0, 1, 2
-        depths = metric.compute(
-            linear_chain_with_mupc.nodes, linear_chain_with_mupc.edges
-        )
-        assert depths == {"x": 0, "h": 1, "y": 2}
-
-        # Skip: h2 gets depth 1 via direct x->h2 edge
-        depths = metric.compute(
-            skip_connection_structure.nodes, skip_connection_structure.edges
-        )
-        assert depths["h2"] == 1
-
-    def test_longest_path(self, linear_chain_with_mupc, skip_connection_structure):
-        """Longest path depths: linear chain and skip connection."""
-        metric = LongestPathDepth()
-
-        # Linear chain: same as shortest
-        depths = metric.compute(
-            linear_chain_with_mupc.nodes, linear_chain_with_mupc.edges
-        )
-        assert depths == {"x": 0, "h": 1, "y": 2}
-
-        # Skip: h2 gets depth 2 via x->h1->h2
-        depths = metric.compute(
-            skip_connection_structure.nodes, skip_connection_structure.edges
-        )
-        assert depths["h2"] == 2
-        assert depths["y"] == 3
-
-    def test_fixed_depth(self, linear_chain_with_mupc):
-        """Fixed depth assigns same depth to all non-source nodes."""
-        metric = FixedDepth(depth=5)
-        depths = metric.compute(
-            linear_chain_with_mupc.nodes, linear_chain_with_mupc.edges
-        )
-        assert depths["x"] == 0
-        assert depths["h"] == 5
-        assert depths["y"] == 5
 
 
 # ============================================================================
@@ -660,7 +608,7 @@ class TestBackwardCompatibility:
     def test_deprecated_params_emit_warnings(self):
         """depth_metric and min_depth emit DeprecationWarning."""
         with pytest.warns(DeprecationWarning, match="depth_metric.*deprecated"):
-            MuPCConfig(depth_metric=ShortestPathDepth())
+            MuPCConfig(depth_metric="ignored")
         with pytest.warns(DeprecationWarning, match="min_depth.*deprecated"):
             MuPCConfig(min_depth=3)
 
@@ -679,7 +627,7 @@ class TestBackwardCompatibility:
                 ],
                 task_map=TaskMap(x=x, y=y),
                 inference=InferenceSGD(),
-                scaling=MuPCConfig(depth_metric=ShortestPathDepth()),
+                scaling=MuPCConfig(depth_metric="ignored"),
             )
         assert structure.nodes["h"].node_info.scaling_config is not None
 

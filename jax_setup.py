@@ -3,12 +3,17 @@
 import os
 
 
-def set_jax_flags_before_importing_jax(jax_platforms: str = "cuda"):
+def set_jax_flags_before_importing_jax(jax_platforms: str = None):
     """
     Set JAX flags for better performance and reproducibility.
     This should be called before importing JAX.
+
+    Args:
+        jax_platforms: Platform to use ("cpu", "cuda", or "tpu").
+            If None, JAX auto-detects available hardware.
     """
-    os.environ.setdefault("JAX_PLATFORMS", jax_platforms)  # "cpu", "cuda" or "tpu"
+    if jax_platforms is not None:
+        os.environ.setdefault("JAX_PLATFORMS", jax_platforms)
     os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
     os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Suppress XLA warnings
 

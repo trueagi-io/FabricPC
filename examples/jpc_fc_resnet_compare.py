@@ -88,11 +88,6 @@ factor (gain/sqrt(N*K)), bounding variance growth to (1+1/L)^L ~ e.
 
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
 from jax_setup import set_jax_flags_before_importing_jax
 
 set_jax_flags_before_importing_jax()
