@@ -3,17 +3,23 @@ Custom Conv2D Node — MNIST Demo
 
 Create a custom node type by subclassing NodeBase, implementing a
 forward pass with JAX's lax.conv, and training on MNIST.
+
+Architecture::
+
+    input(28,28,1) ──→ conv1(26,26,16) ──→ conv2(24,24,32) ──→ output(10)
+                        3x3, ReLU           3x3, ReLU         flatten, Sigmoid
 """
 
-from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+from jax_setup import set_jax_flags_before_importing_jax
 
-set_jax_flags_before_importing_jax(jax_platforms="cuda")
+set_jax_flags_before_importing_jax()
 
 import time
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Optional, Tuple
 import jax
 import jax.numpy as jnp
 import optax
+import numpy as np
 from fabricpc.utils.data.dataloader import MnistLoader
 
 from fabricpc.nodes import Linear
@@ -79,12 +85,19 @@ class Conv2DNode(NodeBase):
         return {"in": SlotSpec(name="in", is_multi_input=True)}
 
     @staticmethod
+    def get_weight_fan_in(source_shape: Tuple[int, ...], config: Dict[str, Any]) -> int:
+        """Conv2D fan_in = C_in * kH * kW (kernel receptive field)."""
+        kernel_size = config.get("kernel_size", (1, 1))
+        C_in = source_shape[-1]  # NHWC: channels last
+        return C_in * int(np.prod(kernel_size))
+
+    @staticmethod
     def initialize_params(
         key: jax.Array,
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
         weight_init=None,
-        config: Dict[str, Any] = {},
+        config: Optional[Dict[str, Any]] = None,
     ) -> NodeParams:
         """
         Initialize convolution kernels and biases.
@@ -92,6 +105,8 @@ class Conv2DNode(NodeBase):
         Kernel shape: (kH, kW, C_in, C_out)
         Bias shape: (1, 1, 1, C_out) for NHWC broadcasting
         """
+        if config is None:
+            config = {}
         kernel_size = config.get("kernel_size")
         out_channels = node_shape[-1]  # Last dim is channels (NHWC)
 
@@ -292,7 +307,6 @@ def main():
     )
 
     print(f"Test Accuracy: {metrics['accuracy'] * 100:.2f}%")
-    print(f"Test Energy:   {metrics['energy']:.4f}")
 
 
 if __name__ == "__main__":

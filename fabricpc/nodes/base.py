@@ -54,6 +54,18 @@ class SlotSpec:
 
     name: str
     is_multi_input: bool  # True = multiple inputs allowed, False = single input only
+    is_variance_scalable: bool = (
+        True  # False = muPC leaves edges to this slot unscaled (scale 1.0)
+    )
+    is_skip_connection: bool = (
+        False  # True = identity bypass path that counts toward muPC depth L
+    )
+
+    def __post_init__(self):
+        if self.is_skip_connection and self.is_variance_scalable:
+            raise ValueError(
+                "is_skip_connection and is_variance_scalable were both set to True, but skip connection slots should NOT be subject to muPC variance scaling"
+            )
 
 
 @dataclass(frozen=True)
@@ -280,7 +292,6 @@ class NodeBase(ABC):
         """
         pass
 
-    # TODO return only the projected value z_mu and compute energy and gradients in a wrapper method.
     @staticmethod
     @abstractmethod
     def forward(
@@ -306,8 +317,60 @@ class NodeBase(ABC):
         pass
 
     # =========================================================================
+    # muPC fan_in for scaling — override per node type
+    # =========================================================================
+
+    @staticmethod
+    def get_weight_fan_in(source_shape: Tuple[int, ...], config: Dict[str, Any]) -> int:
+        """
+        Return weight-matrix fan_in for muPC scaling (Kaiming convention).
+
+        This is the number of input units that contribute to each output unit
+        of the weight matrix. Override in subclasses for node-specific logic
+        (e.g., Conv2D uses C_in * kH * kW instead of H * W * C).
+
+        - flatten_input=True (dense): all dims flattened → prod(source_shape)
+        - flatten_input=False (per-position): last-axis features only
+
+        Args:
+            source_shape: Shape of the source (presynaptic) node, excluding batch.
+            config: Node configuration dictionary (e.g., kernel_size, flatten_input).
+
+        Returns:
+            Integer fan_in for the weight matrix connecting source to this node.
+        """
+        import numpy as np
+
+        if config.get("flatten_input", False):
+            return int(np.prod(source_shape))
+        # Typically nodes operate on the last (feature dimension)
+        return source_shape[-1]
+
+    # =========================================================================
     # Default implementations - can be overridden for explicit gradients
     # =========================================================================
+
+    @staticmethod
+    def _apply_forward_scaling(
+        inputs: Dict[str, jnp.ndarray],
+        node_info: NodeInfo,
+    ) -> Dict[str, jnp.ndarray]:
+        """
+        Pre-scale inputs by muPC forward scaling factors.
+
+        When scaling_config is present, each input tensor is multiplied by
+        its per-edge forward_scale factor. Since W @ (a*x) = a * (W @ x),
+        this is mathematically equivalent to scaling the node output, but
+        keeps all scaling logic outside the node's forward() method.
+
+        When scaling_config is None, returns inputs unchanged.
+        """
+        if node_info.scaling_config is None:
+            return inputs
+        return {
+            edge_key: x * node_info.scaling_config.forward_scale[edge_key]
+            for edge_key, x in inputs.items()
+        }
 
     # TODO rename to forward_and_latent_gradients() or something to clarify that this is the method used during inference to compute both the forward pass and the gradients w.r.t. inputs for updating latents of in-neighbors.
     @staticmethod
@@ -362,8 +425,10 @@ class NodeBase(ABC):
             # No post-synaptic targets and no clamped data!
             # This happens for output nodes when the model is run in inference/evaluation mode (not training)
             # Compute its projection (z_mu) but no gradient since it doesn't contribute to any error.
+            # Apply muPC forward scaling to inputs
+            scaled_inputs = node_class._apply_forward_scaling(inputs, node_info)
             total_energy, new_state = node_class.forward(
-                params, inputs, state, node_info
+                params, scaled_inputs, state, node_info
             )
             # Update keeping the projection, but zero error.
             new_state = new_state._replace(
@@ -378,10 +443,27 @@ class NodeBase(ABC):
 
         else:
             # Internal node or a clamped output node. Compute the energy and gradients.
-            # Use JAX's value_and_grad to compute gradients w.r.t. inputs
+            # Apply muPC forward scaling to inputs before differentiation.
+            # Scaling is applied outside the grad closure: autodiff differentiates
+            # w.r.t. scaled_inputs, yielding dE/d(a*x) with variance ~fan_out.
+            scaled_inputs = node_class._apply_forward_scaling(inputs, node_info)
+            # Use JAX's value_and_grad to compute gradients w.r.t. scaled inputs
             (total_energy, new_state), input_grads = jax.value_and_grad(
                 node_class.forward, argnums=1, has_aux=True
-            )(params, inputs, state, node_info)
+            )(params, scaled_inputs, state, node_info)
+
+            # Apply muPC top-down gradient scaling per edge.
+            # topdown_grad_scale = a (the forward scaling factor) restores
+            # the chain rule factor: dE/dx = a * dE/d(a*x). Without this,
+            # each hop drops the gradient by a, causing exponential vanishing
+            # in deep networks (see derivation in mupc.py).
+            if node_info.scaling_config is not None:
+                input_grads = {
+                    edge_key: grad
+                    * node_info.scaling_config.topdown_grad_scale[edge_key]
+                    for edge_key, grad in input_grads.items()
+                }
+
             # TODO if using preactivation latents, need to wrap the node_class.forward() with method to apply pre-synaptic activation function to the inputs first.
             # TODO Refactor node_class.forward()
             #   - node_class.forward only computes the projection z_mu
@@ -420,10 +502,32 @@ class NodeBase(ABC):
         """
         node_class = node_info.node_class
 
+        # Apply muPC forward scaling to inputs (same as inference)
+        scaled_inputs = node_class._apply_forward_scaling(inputs, node_info)
+
         # Use JAX's value_and_grad to compute gradients w.r.t. params
         (total_energy, new_state), params_grad = jax.value_and_grad(
             node_class.forward, argnums=0, has_aux=True
-        )(params, inputs, state, node_info)
+        )(params, scaled_inputs, state, node_info)
+
+        # Apply muPC weight gradient scaling
+        if node_info.scaling_config is not None:
+            wg_scale = node_info.scaling_config.weight_grad_scale
+            if all(k in wg_scale for k in params_grad.weights):
+                # Edge-keyed weights (e.g., LinearNode): per-edge scaling
+                scaled_weights = {
+                    key: grad * wg_scale[key]
+                    for key, grad in params_grad.weights.items()
+                }
+            else:
+                # Param-name-keyed weights (e.g., TransformerBlock):
+                # apply uniform scale from mean of all edge scales
+                uniform_scale = sum(wg_scale.values()) / len(wg_scale)
+                scaled_weights = {
+                    key: grad * uniform_scale
+                    for key, grad in params_grad.weights.items()
+                }
+            params_grad = NodeParams(weights=scaled_weights, biases=params_grad.biases)
 
         return new_state, params_grad
 
@@ -453,6 +557,10 @@ class NodeBase(ABC):
 
         energy = energy_cls.energy(state.z_latent, state.z_mu, config)
         grad = energy_cls.grad_latent(state.z_latent, state.z_mu, config)
+
+        # Apply muPC self-gradient scaling
+        if node_info.scaling_config is not None:
+            grad = grad * node_info.scaling_config.self_grad_scale
 
         latent_grad = state.latent_grad + grad
         state = state._replace(energy=energy, latent_grad=latent_grad)

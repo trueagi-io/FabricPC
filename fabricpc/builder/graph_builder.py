@@ -49,6 +49,8 @@ def _build_slots(node: NodeBase, in_edges: Dict[str, EdgeInfo]) -> Dict[str, Slo
             name=slot_name,
             parent_node=node.name,
             is_multi_input=slot_spec.is_multi_input,
+            is_variance_scalable=slot_spec.is_variance_scalable,
+            is_skip_connection=slot_spec.is_skip_connection,
             in_neighbors=tuple(in_neighbors),
         )
 
@@ -86,6 +88,7 @@ def graph(
     task_map: TaskMap,
     inference: InferenceBase,
     graph_state_initializer: Optional[StateInitBase] = None,
+    scaling=None,
 ) -> GraphStructure:
     """
     Build a GraphStructure from node objects, edge objects, and a task map.
@@ -100,6 +103,9 @@ def graph(
         inference: InferenceBase instance for inference algorithm
         graph_state_initializer: Optional StateInitBase instance
             (default: FeedforwardStateInit())
+        scaling: Optional MuPCConfig instance for muPC parameterization.
+            When provided, per-node scaling factors are computed from graph
+            topology and attached to each NodeInfo.scaling_config.
 
     Returns:
         GraphStructure with finalized nodes, edges, and topology
@@ -171,6 +177,31 @@ def graph(
 
     # 5. Topological sort
     node_order = _topological_sort(finalized_nodes, edge_infos)
+
+    # 5b. Compute and attach muPC scalings if requested
+    if scaling is not None:
+        from fabricpc.core.mupc import MuPCConfig, compute_mupc_scalings
+        from dataclasses import replace
+
+        if not isinstance(scaling, MuPCConfig):
+            raise TypeError(
+                f"scaling must be a MuPCConfig instance, got {type(scaling)}"
+            )
+
+        mupc_scalings = compute_mupc_scalings(
+            finalized_nodes, edge_infos, scaling, node_order
+        )
+
+        # Attach scaling_config to each NodeInfo via copy-on-finalize
+        updated_nodes = {}
+        for name, node in finalized_nodes.items():
+            node_scaling = mupc_scalings.get(name)
+            if node_scaling is not None:
+                new_info = replace(node.node_info, scaling_config=node_scaling)
+                updated_nodes[name] = node._with_graph_info(new_info)
+            else:
+                updated_nodes[name] = node
+        finalized_nodes = updated_nodes
 
     # 6. Resolve task map
     if isinstance(task_map, TaskMap):

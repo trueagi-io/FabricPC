@@ -167,7 +167,7 @@ class BayesianTuner:
         set_seed(current_seed)
 
         rng_key = jax.random.PRNGKey(current_seed)
-        model_key, train_key = jax.random.split(rng_key)
+        model_key, train_key, eval_key = jax.random.split(rng_key, 3)
 
         # Build model components
         try:
@@ -214,7 +214,7 @@ class BayesianTuner:
                     structure,
                     self.val_loader,
                     config,
-                    jax.random.PRNGKey(0),
+                    eval_key,
                 )
 
                 # Calculate combined score if needed

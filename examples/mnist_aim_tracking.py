@@ -4,14 +4,19 @@ MNIST with Aim Experiment Tracking
 Tracks batch/epoch energy, weight/latent distributions, per-node energy,
 and inference dynamics using Aim.
 
+Architecture::
+
+    pixels(784) ──→ h1(256) ──→ h2(64) ──→ h3(64) ──→ class(10)
+     Identity       Sigmoid     Sigmoid     Sigmoid    Softmax+CE
+
 After running, launch the Aim UI with:  aim up
 
 Requirements: pip install fabricpc[viz]
 """
 
-from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+from jax_setup import set_jax_flags_before_importing_jax
 
-set_jax_flags_before_importing_jax(jax_platforms="cuda")  # "cpu", "cuda" or "tpu"
+set_jax_flags_before_importing_jax()
 
 import time
 

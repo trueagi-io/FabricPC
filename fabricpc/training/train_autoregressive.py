@@ -185,7 +185,7 @@ def train_step_autoregressive(
     # Run inference
     final_state = run_inference(params, init_state, clamps, structure)
 
-    # Compute total energy (sum over non-source nodes)
+    # Compute total energy (sum over nodes with in_degree>0)
     energy = jnp.array(0.0)
     for node_name, node in structure.nodes.items():
         if node.node_info.in_degree > 0:
@@ -372,11 +372,17 @@ def _generation_step(
     context_window, output_buffer, rng_key = carry
     rng_key, sample_key, init_key = jax.random.split(rng_key, 3)
 
-    # Convert context window to one-hot
-    input_onehot = jax.nn.one_hot(context_window, vocab_size)
+    # Format context window for the input node.
+    # If input node shape is 1D (seq_len,), pass float indices (EmbeddingNode).
+    # If input node shape is 2D (seq_len, vocab_size), convert to one-hot (Linear).
+    input_shape = structure.nodes[input_node].node_info.shape
+    if len(input_shape) == 1:
+        input_data = context_window.astype(jnp.float32)
+    else:
+        input_data = jax.nn.one_hot(context_window, vocab_size)
 
     # Create clamps (only input, not output)
-    clamps = {input_node: input_onehot}
+    clamps = {input_node: input_data}
 
     # Initialize and run inference
     state = initialize_graph_state(

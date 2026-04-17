@@ -94,6 +94,166 @@ class MnistLoader:
         return self._num_batches
 
 
+class Cifar100Loader:
+    """JAX-compatible CIFAR-100 data loader using TensorFlow Datasets.
+
+    Loads the CIFAR-100 dataset (32x32 RGB images, 100 fine-grained classes)
+    and yields batches of (images, one_hot_labels).
+
+    Args:
+        split: Dataset split to load ('train' or 'test').
+        batch_size: Number of samples per batch.
+        shuffle: Whether to shuffle the data each epoch.
+        seed: Random seed for reproducibility.
+        tensor_format: 'NHWC' for (batch, 32, 32, 3) or 'flat' for (batch, 3072).
+        normalize_mean: Per-channel mean for normalization (default: CIFAR-100 mean).
+        normalize_std: Per-channel std for normalization (default: CIFAR-100 std).
+    """
+
+    def __init__(
+        self,
+        split: str,
+        batch_size: int,
+        shuffle: bool = True,
+        seed: int = None,
+        tensor_format: str = "NHWC",
+        normalize_mean: tuple = (0.5071, 0.4867, 0.4408),
+        normalize_std: tuple = (0.2675, 0.2565, 0.2761),
+    ):
+        import tensorflow_datasets as tfds
+        import tensorflow as tf
+
+        tf.config.set_visible_devices([], "GPU")
+
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.seed = seed
+        self.tensor_format = tensor_format
+        self.normalize_mean = np.array(normalize_mean, dtype=np.float32)
+        self.normalize_std = np.array(normalize_std, dtype=np.float32)
+
+        file_seed, buffer_seed = split_np_seed(seed, n=2)
+
+        read_config = tfds.ReadConfig(
+            shuffle_seed=file_seed,
+            interleave_cycle_length=1,
+        )
+
+        ds, info = tfds.load(
+            "cifar100",
+            split=split,
+            with_info=True,
+            as_supervised=True,
+            read_config=read_config,
+            shuffle_files=shuffle and seed is not None,
+        )
+        self.num_examples = info.splits[split].num_examples
+        self._num_batches = (self.num_examples + batch_size - 1) // batch_size
+
+        if shuffle:
+            ds = ds.shuffle(buffer_size=self.num_examples, seed=buffer_seed)
+        ds = ds.batch(batch_size, drop_remainder=False)
+        ds = ds.prefetch(tf.data.AUTOTUNE)
+
+        self.ds = ds
+
+    def __iter__(self):
+        for images, labels in self.ds:
+            images = images.numpy().astype(np.float32) / 255.0
+            # Per-channel normalization: (H, W, C) broadcast
+            images = (images - self.normalize_mean) / self.normalize_std
+
+            if self.tensor_format == "flat":
+                images = images.reshape(images.shape[0], -1)
+
+            labels = one_hot(labels.numpy(), num_classes=100)
+
+            yield images, labels
+
+    def __len__(self):
+        return self._num_batches
+
+
+class Cifar10Loader:
+    """JAX-compatible CIFAR-10 data loader using TensorFlow Datasets.
+
+    Loads the CIFAR-10 dataset (32x32 RGB images, 10 classes)
+    and yields batches of (images, one_hot_labels).
+
+    Args:
+        split: Dataset split to load ('train' or 'test').
+        batch_size: Number of samples per batch.
+        shuffle: Whether to shuffle the data each epoch.
+        seed: Random seed for reproducibility.
+        tensor_format: 'NHWC' for (batch, 32, 32, 3) or 'flat' for (batch, 3072).
+        normalize_mean: Per-channel mean for normalization (default: CIFAR-10 mean).
+        normalize_std: Per-channel std for normalization (default: CIFAR-10 std).
+    """
+
+    def __init__(
+        self,
+        split: str,
+        batch_size: int,
+        shuffle: bool = True,
+        seed: int = None,
+        tensor_format: str = "NHWC",
+        normalize_mean: tuple = (0.4914, 0.4822, 0.4465),
+        normalize_std: tuple = (0.2470, 0.2435, 0.2616),
+    ):
+        import tensorflow_datasets as tfds
+        import tensorflow as tf
+
+        tf.config.set_visible_devices([], "GPU")
+
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.seed = seed
+        self.tensor_format = tensor_format
+        self.normalize_mean = np.array(normalize_mean, dtype=np.float32)
+        self.normalize_std = np.array(normalize_std, dtype=np.float32)
+
+        file_seed, buffer_seed = split_np_seed(seed, n=2)
+
+        read_config = tfds.ReadConfig(
+            shuffle_seed=file_seed,
+            interleave_cycle_length=1,
+        )
+
+        ds, info = tfds.load(
+            "cifar10",
+            split=split,
+            with_info=True,
+            as_supervised=True,
+            read_config=read_config,
+            shuffle_files=shuffle and seed is not None,
+        )
+        self.num_examples = info.splits[split].num_examples
+        self._num_batches = (self.num_examples + batch_size - 1) // batch_size
+
+        if shuffle:
+            ds = ds.shuffle(buffer_size=self.num_examples, seed=buffer_seed)
+        ds = ds.batch(batch_size, drop_remainder=False)
+        ds = ds.prefetch(tf.data.AUTOTUNE)
+
+        self.ds = ds
+
+    def __iter__(self):
+        for images, labels in self.ds:
+            images = images.numpy().astype(np.float32) / 255.0
+            # Per-channel normalization: (H, W, C) broadcast
+            images = (images - self.normalize_mean) / self.normalize_std
+
+            if self.tensor_format == "flat":
+                images = images.reshape(images.shape[0], -1)
+
+            labels = one_hot(labels.numpy(), num_classes=10)
+
+            yield images, labels
+
+    def __len__(self):
+        return self._num_batches
+
+
 class CharDataLoader:
     """JAX-compatible character-level dataloader using TFDS.
 
@@ -193,3 +353,212 @@ class CharDataLoader:
     def decode(self, indices) -> str:
         """Convert an array of character indices back to a string."""
         return "".join(self.idx_to_char[int(i)] for i in indices)
+
+
+class FashionMnistLoader:
+    """JAX-compatible Fashion-MNIST data loader using TensorFlow Datasets.
+
+    Drop-in replacement for MnistLoader with the Fashion-MNIST dataset
+    (28x28 grayscale, 10 clothing categories).
+
+    Args:
+        split: Dataset split ('train' or 'test').
+        batch_size: Number of samples per batch.
+        shuffle: Whether to shuffle the data each epoch.
+        seed: Random seed for reproducibility.
+        tensor_format: 'NHWC' for (batch, 28, 28, 1) or 'flat' for (batch, 784).
+        normalize_mean: Mean for normalization (default: Fashion-MNIST mean).
+        normalize_std: Std for normalization (default: Fashion-MNIST std).
+    """
+
+    def __init__(
+        self,
+        split: str,
+        batch_size: int,
+        shuffle: bool = True,
+        seed: int = None,
+        tensor_format: str = "NHWC",
+        normalize_mean: float = 0.2860,
+        normalize_std: float = 0.3530,
+    ):
+        import tensorflow_datasets as tfds
+        import tensorflow as tf
+
+        tf.config.set_visible_devices([], "GPU")
+
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.seed = seed
+        self.tensor_format = tensor_format
+        self.normalize_mean = normalize_mean
+        self.normalize_std = normalize_std
+
+        file_seed, buffer_seed = split_np_seed(seed, n=2)
+
+        read_config = tfds.ReadConfig(
+            shuffle_seed=file_seed,
+            interleave_cycle_length=1,
+        )
+
+        ds, info = tfds.load(
+            "fashion_mnist",
+            split=split,
+            with_info=True,
+            as_supervised=True,
+            read_config=read_config,
+            shuffle_files=shuffle and seed is not None,
+        )
+        self.num_examples = info.splits[split].num_examples
+        self._num_batches = (self.num_examples + batch_size - 1) // batch_size
+
+        if shuffle:
+            ds = ds.shuffle(buffer_size=self.num_examples, seed=buffer_seed)
+        ds = ds.batch(batch_size, drop_remainder=False)
+        ds = ds.prefetch(tf.data.AUTOTUNE)
+
+        self.ds = ds
+
+    def __iter__(self):
+        for images, labels in self.ds:
+            images = images.numpy().astype(np.float32) / 255.0
+            images = (images - self.normalize_mean) / self.normalize_std
+
+            if self.tensor_format == "flat":
+                images = images.reshape(images.shape[0], -1)
+
+            labels = one_hot(labels.numpy(), num_classes=10)
+
+            yield images, labels
+
+    def __len__(self):
+        return self._num_batches
+
+
+class FewShotLoader:
+    """Class-balanced K-shot data loader using TensorFlow Datasets.
+
+    Loads a full dataset, subsamples exactly K examples per class
+    (deterministically via seed), and yields shuffled minibatches.
+    Both arms in an A/B experiment receive identical training data
+    when given the same seed.
+
+    Args:
+        dataset_name: TFDS dataset name (e.g., 'fashion_mnist', 'mnist:3.0.1').
+        split: Dataset split ('train' or 'test').
+        k_per_class: Number of examples to keep per class.
+        batch_size: Number of samples per batch.
+        num_classes: Number of classes in the dataset (default: 10).
+        shuffle: Whether to shuffle the subsample each epoch.
+        seed: Random seed for both subsampling and shuffling.
+        tensor_format: 'NHWC' or 'flat'.
+        normalize_mean: Mean for normalization.
+        normalize_std: Std for normalization.
+    """
+
+    def __init__(
+        self,
+        dataset_name: str,
+        split: str,
+        k_per_class: int,
+        batch_size: int,
+        num_classes: int = 10,
+        shuffle: bool = True,
+        seed: int = None,
+        tensor_format: str = "flat",
+        normalize_mean: float = 0.2860,
+        normalize_std: float = 0.3530,
+    ):
+        import tensorflow_datasets as tfds
+        import tensorflow as tf
+
+        tf.config.set_visible_devices([], "GPU")
+
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.seed = seed
+        self.tensor_format = tensor_format
+        self.normalize_mean = normalize_mean
+        self.normalize_std = normalize_std
+        self.num_classes = num_classes
+        self._epoch = 0
+
+        # Load entire dataset into memory
+        ds = tfds.load(dataset_name, split=split, as_supervised=True)
+        all_images = []
+        all_labels = []
+        for img, label in ds:
+            all_images.append(img.numpy())
+            all_labels.append(int(label.numpy()))
+
+        all_images = np.array(all_images, dtype=np.float32) / 255.0
+        all_images = (all_images - self.normalize_mean) / self.normalize_std
+        all_labels = np.array(all_labels, dtype=np.int32)
+
+        # Class-balanced subsampling
+        rng = np.random.default_rng(seed)
+        selected_indices = []
+        for c in range(num_classes):
+            class_indices = np.where(all_labels == c)[0]
+            if len(class_indices) < k_per_class:
+                chosen = class_indices  # use all if fewer than K
+            else:
+                chosen = rng.choice(class_indices, size=k_per_class, replace=False)
+            selected_indices.append(chosen)
+        selected_indices = np.concatenate(selected_indices)
+
+        self.images = all_images[selected_indices]
+        self.labels = all_labels[selected_indices]
+        self.num_samples = len(selected_indices)
+        self._num_batches = self.num_samples // batch_size
+
+    def __iter__(self):
+        indices = np.arange(self.num_samples)
+        if self.shuffle:
+            epoch_seed = (
+                self.seed + 10000 + self._epoch if self.seed is not None else None
+            )
+            rng = np.random.default_rng(epoch_seed)
+            rng.shuffle(indices)
+        self._epoch += 1
+
+        for start in range(0, self.num_samples - self.batch_size + 1, self.batch_size):
+            batch_idx = indices[start : start + self.batch_size]
+            images = self.images[batch_idx]
+
+            if self.tensor_format == "flat":
+                images = images.reshape(images.shape[0], -1)
+
+            labels = one_hot(self.labels[batch_idx], num_classes=self.num_classes)
+            yield images, labels
+
+    def __len__(self):
+        return self._num_batches
+
+
+class NoisyTestLoader:
+    """Wrapper that adds Gaussian noise to a base loader's images at test time.
+
+    Useful for evaluating noise robustness of trained models. Noise is
+    applied after normalization, so noise_std is in normalized units.
+
+    Args:
+        base_loader: Any iterable loader yielding (images, labels) batches.
+        noise_std: Standard deviation of Gaussian noise (0.0 = no noise).
+        seed: Random seed for reproducible noise.
+    """
+
+    def __init__(self, base_loader, noise_std: float = 0.0, seed: int = None):
+        self.base_loader = base_loader
+        self.noise_std = noise_std
+        self.seed = seed
+
+    def __iter__(self):
+        rng = np.random.default_rng(self.seed)
+        for images, labels in self.base_loader:
+            if self.noise_std > 0:
+                noise = rng.normal(0, self.noise_std, images.shape).astype(np.float32)
+                images = images + noise
+            yield images, labels
+
+    def __len__(self):
+        return len(self.base_loader)

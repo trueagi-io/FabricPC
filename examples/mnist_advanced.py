@@ -4,14 +4,19 @@ Predictive Coding Network — Advanced MNIST
 
 Custom training loop with optimizer selection and progress monitoring.
 
+Architecture::
+
+    pixels(784) ──→ h1(256) ──→ h2(128) ──→ h3(64) ──→ class(10)
+     Identity       Sigmoid     Sigmoid     Sigmoid     Sigmoid
+
 Usage:
     PYTHONPATH=. python examples/mnist_advanced.py --optimizer adamw
     FABRICPC_OPTIMIZER=ngd_diag PYTHONPATH=. python examples/mnist_advanced.py
 """
 
-from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+from jax_setup import set_jax_flags_before_importing_jax
 
-set_jax_flags_before_importing_jax(jax_platforms="cuda")
+set_jax_flags_before_importing_jax()
 
 import os
 import argparse

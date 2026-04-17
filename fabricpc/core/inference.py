@@ -160,7 +160,7 @@ class InferenceBase(ABC):
             # Update the graph state with node state containing errors and energy
             state = state._replace(nodes={**state.nodes, node_name: node_state})
 
-            # Accumulate gradient contributions to this node's sources (local backward pass to in-neighbors)
+            # Accumulate gradient contributions to pre-synaptic nodes (local backward pass to in-neighbors)
             for edge_key, grad in inedge_grads.items():
                 source_name = structure.edges[edge_key].source
                 latent_grad = state.nodes[source_name].latent_grad + grad
@@ -187,6 +187,7 @@ class InferenceBase(ABC):
         for node_name in structure.nodes:
             node_state = state.nodes[node_name]
 
+            # Use the inference algorithm's compute_new_latent() method to get the updated z_latent
             if node_name not in clamps:
                 new_z_latent = cls.compute_new_latent(
                     node_name,
@@ -253,7 +254,7 @@ class InferenceSGD(InferenceBase):
     This is the default inference algorithm for predictive coding networks.
 
     Args:
-        eta_infer: Inference learning rate (default: 0.1)
+        eta_infer: Inference rate (default: 0.1)
         infer_steps: Number of inference iterations (default: 20)
     """
 
@@ -284,7 +285,7 @@ class InferenceSGDNormClip(InferenceBase):
     Uses safe division with epsilon to handle zero gradients.
 
     Args:
-        eta_infer: Inference learning rate (default: 0.1)
+        eta_infer: Inference rate (default: 0.1)
         infer_steps: Number of inference iterations (default: 20)
         max_norm: Maximum gradient norm per node (default: 1.0)
         eps: Small constant for numerical stability (default: 1e-8)

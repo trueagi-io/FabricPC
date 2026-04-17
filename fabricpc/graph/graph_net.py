@@ -101,7 +101,7 @@ def initialize_params(
 
     for node_name, node in structure.nodes.items():
         node_info = node.node_info
-        # Skip source nodes (no parameters)
+        # Skip terminal input nodes (no parameters)
         if node_info.in_degree == 0:
             node_params[node_name] = NodeParams(weights={}, biases={})
             continue

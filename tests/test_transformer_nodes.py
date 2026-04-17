@@ -417,6 +417,47 @@ class TestTransformerBlock:
         assert jnp.abs(output).mean() > 0.0
 
 
+class TestEvaluateTransformer:
+
+    def test_smoke(self, rng_key):
+        """evaluate_transformer returns expected keys with finite values."""
+        from fabricpc.training.train import evaluate_transformer
+
+        vocab_size = 20
+        seq_len = 6
+        embed_dim = 16
+
+        structure = create_deep_transformer(
+            depth=1,
+            embed_dim=embed_dim,
+            num_heads=2,
+            mlp_dim=32,
+            seq_len=seq_len,
+            vocab_size=vocab_size,
+            inference=InferenceSGD(eta_infer=0.1, infer_steps=2),
+        )
+        params = initialize_params(structure, rng_key)
+
+        batch_size = 4
+        x_data = jax.random.randint(
+            rng_key, (batch_size, seq_len), 0, vocab_size
+        ).astype(jnp.float32)
+        y_data = jax.random.randint(rng_key, (batch_size, seq_len), 0, vocab_size)
+
+        test_loader = [{"x": x_data, "y": y_data}]
+
+        metrics = evaluate_transformer(params, structure, test_loader, {}, rng_key)
+
+        assert set(metrics.keys()) == {
+            "accuracy",
+            "cross_entropy",
+            "perplexity",
+            "energy",
+        }
+        for k, v in metrics.items():
+            assert np.isfinite(v), f"{k} is not finite: {v}"
+
+
 if __name__ == "__main__":
     import sys
 

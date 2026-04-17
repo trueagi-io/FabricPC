@@ -1,8 +1,14 @@
 """
 Hyperparameter Tuning — Transformer on Tiny Shakespeare (multi-GPU)
+
+Architecture (auto-tuned via Optuna)::
+
+    input ──→ Embedding ──→ [MhaResidual ──→ LnMlp1 ──→ Mlp2Residual] x depth ──→ VocabProjection
+
+    Tunable: embed_dim, mlp_dim, num_heads, depth, infer_steps, eta_infer, lr, weight_init_std
 """
 
-from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+from jax_setup import set_jax_flags_before_importing_jax
 
 set_jax_flags_before_importing_jax()
 
@@ -12,10 +18,7 @@ import optuna
 from fabricpc.graph import initialize_params
 from fabricpc.core.inference import InferenceSGD
 from fabricpc.nodes.transformer_v2 import create_deep_transformer
-from fabricpc.training.multi_gpu import (
-    train_pcn_multi_gpu,
-    evaluate_transformer_multi_gpu,
-)
+from fabricpc.training import train_pcn, evaluate_transformer
 from fabricpc.tuning.bayesian_tuner import BayesianTuner
 from fabricpc.utils.data import CharDataLoader
 
@@ -104,7 +107,7 @@ def multi_gpu_train_eval(params, structure, train_loader, val_loader, config, rn
     lr = config.get("lr", 1e-3)
     optimizer = optax.adam(lr)
 
-    trained_params = train_pcn_multi_gpu(
+    trained_params, _, _ = train_pcn(
         params=params,
         structure=structure,
         train_loader=train_loader,
@@ -112,9 +115,10 @@ def multi_gpu_train_eval(params, structure, train_loader, val_loader, config, rn
         config=config,
         rng_key=train_key,
         verbose=False,
+        use_tqdm=False,
     )
 
-    metrics = evaluate_transformer_multi_gpu(
+    metrics = evaluate_transformer(
         trained_params, structure, val_loader, config, eval_key
     )
 

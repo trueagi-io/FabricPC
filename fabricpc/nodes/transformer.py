@@ -8,11 +8,11 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-from fabricpc.nodes.base import NodeBase, NodeParams, SlotSpec
+from fabricpc.nodes.base import NodeBase, SlotSpec
 from fabricpc.core.activations import IdentityActivation, GeluActivation
 from fabricpc.core.energy import GaussianEnergy
 from fabricpc.core.initializers import NormalInitializer, KaimingInitializer, initialize
-from fabricpc.core.types import NodeState, NodeInfo
+from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from typing import Dict, Optional, Tuple, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -29,21 +29,32 @@ def precompute_freqs_cis(
     head_dim: int, max_seq_len: int, theta: float = 10000.0
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
-    Precompute the frequency tensor for RoPE (Rotary Position Embeddings).
+      Precompute the frequency tensor for RoPE (Rotary Position Embeddings).
 
-    RoPE encodes position by rotating pairs of dimensions in the embedding space.
-    Each pair (2i, 2i+1) is rotated by angle θ_i * position, where θ_i decreases
-    geometrically with dimension index.
+      RoPE encodes position by rotating pairs of dimensions in the embedding space.
+      Each pair (2i, 2i+1) is rotated by angle θ_i * position, where θ_i decreases
+      geometrically with dimension index.
 
-    θ_i = 1 / (theta^(2i/d))
+      θ_i = 1 / (theta^(2i/d))
 
-    Args:
-        head_dim: Dimension of each attention head (must be even)
-        max_seq_len: Maximum sequence length to precompute
-        theta: Base for the geometric progression of frequencies (default 10000)
+      Args:
+          head_dim: Dimension of each attention head (must be even)
+          max_seq_len: Maximum sequence length to precompute
+          theta: Base for the geometric progression of frequencies (default 10000)
 
-    Returns:
-        Tuple of (cos, sin) arrays of shape (max_seq_len, head_dim // 2)
+      Returns:
+          Tuple of (cos, sin) arrays of shape (max_seq_len, head_dim // 2)
+
+      Variance Control
+      The transofmrer block node encapsulates many operations and needs variance scaling internal to the node. muPC scaling handles variance control at the network graph level. It's necessary to have graph skip connections for muPC to work.
+    1. Position-dependent softmax variance compensation (was √seq_len only when muPC active):
+      - With mask: computes effective context length per position from the mask (eff_ctx = [1, 2, ..., S] for causal), scales attention output by √eff_ctx[t]
+      - Without mask: uses √seq_len (correct for full attention)
+      - Why: The old √seq_len was position-independent — at position 0 (context=1 token), it amplified variance by seq_len instead of restoring to 1. This made early-position attention output dominate the skip signal by up to 128x.
+    2. 1/√2 residual scaling (was only when muPC active):
+      - Both residual adds now always scale by 1/√2
+      - Why: Raw skip + branch doubles variance. The 1/√2 factor maintains Var≈1 when both branches have Var≈1.
+
     """
     assert head_dim % 2 == 0, "head_dim must be even for RoPE"
 
@@ -170,8 +181,21 @@ class TransformerBlock(NodeBase):
     def get_slots():
         return {
             "in": SlotSpec(name="in", is_multi_input=False),  # Input to the block
-            "mask": SlotSpec(name="mask", is_multi_input=False),  # Optional mask
+            "mask": SlotSpec(
+                name="mask", is_multi_input=False, is_variance_scalable=False
+            ),  # Optional mask (binary data, not a signal)
         }
+
+    @staticmethod
+    def get_weight_fan_in(source_shape: Tuple[int, ...], config: Dict[str, Any]) -> int:
+        """Return embed_dim as fan_in for muPC scaling.
+
+        Pre-norm LayerNorm absorbs the external muPC forward_scale a
+        (LN(a*x) = LN(x)), so forward_learning() compensates by scaling
+        weight gradients by a. We return embed_dim so muPC computes the
+        correct a for this node's width.
+        """
+        return source_shape[-1]
 
     @staticmethod
     def initialize_params(
@@ -179,8 +203,10 @@ class TransformerBlock(NodeBase):
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
         weight_init: Optional[InitializerBase] = None,
-        config: Dict[str, Any] = {},
+        config: Optional[Dict[str, Any]] = None,
     ) -> NodeParams:
+        if config is None:
+            config = {}
 
         num_heads = config.get("num_heads", 8)
         embed_dim = node_shape[-1]
@@ -191,22 +217,23 @@ class TransformerBlock(NodeBase):
 
         keys = jax.random.split(key, 8)
 
-        # N = number of blocks in the architecture, used for residual stream variance control.
+        # Weight initialization for muPC-compatible unit variance propagation.
+        # Residual variance is controlled by forward() scaling (1/sqrt(2) per
+        # residual add when muPC is active), not by output projection init.
         """
-        Weight      | Init std                    | Rationale
-        ------------|-----------------------------|---------------------------------
-        W_q         | 1/√d_model                  | Unit variance Q after projection
-        W_k         | 1/√d_model                  | Unit variance K after projection  
-        W_v         | 1/√d_model                  | Unit variance V after projection
-        W_o         | 1/(√d_model · √(2N))        | Residual stream variance control
-        W_ff1       | √(2/d_model)  [He]          | Compensate for ReLU/GELU zeroing
-        W_ff2       | 1/(√d_ff · √(2N))           | Residual stream variance control
-        ln*_gamma   | 1.0 (ones)                  | Identity at init
-        ln*_beta    | 0.0 (zeros)                 | No shift at init
-        all biases  | 0.0 (zeros)                 | No variance contribution at init
+        Weight      | Init std          | Rationale
+        ------------|-------------------|-------------------------------------------
+        W_q         | 1/√d              | Unit variance Q after projection
+        W_k         | 1/√d              | Unit variance K after projection
+        W_v         | 1/√d              | Unit variance V after projection
+        W_o         | 1/√d              | Xavier fan-in; residual scaling in forward()
+        W_ff1       | √(2/d)  [He]      | Compensate for GELU zeroing
+        W_ff2       | 1/√d_ff           | Xavier fan-in; residual scaling in forward()
+        ln*_gamma   | 1.0 (ones)        | Identity at init
+        ln*_beta    | 0.0 (zeros)       | No shift at init
+        all biases  | 0.0 (zeros)       | No variance contribution at init
         """
 
-        n_blocks = 1  # TODO - make this dynamic based on config
         return NodeParams(
             weights={
                 # Attention weights
@@ -228,14 +255,14 @@ class TransformerBlock(NodeBase):
                 "W_o": initialize(
                     keys[3],
                     (embed_dim, embed_dim),
-                    NormalInitializer(std=1.0 / jnp.sqrt(embed_dim * 2 * n_blocks)),
+                    NormalInitializer(std=1.0 / jnp.sqrt(embed_dim)),
                 ),
                 # FFN weights
                 "W_ff1": initialize(keys[4], (embed_dim, ff_dim), KaimingInitializer()),
                 "W_ff2": initialize(
                     keys[5],
                     (ff_dim, embed_dim),
-                    NormalInitializer(std=1.0 / jnp.sqrt(ff_dim * 2 * n_blocks)),
+                    NormalInitializer(std=1.0 / jnp.sqrt(ff_dim)),
                 ),
                 # LayerNorm parameters
                 "ln1_gamma": jnp.ones((1, 1, embed_dim)),
@@ -289,6 +316,8 @@ class TransformerBlock(NodeBase):
             input_tensor, params.weights["ln1_gamma"], params.biases["ln1_beta"]
         )
 
+        inv_sqrt2 = jnp.float32(1.0 / jnp.sqrt(2.0))
+
         # Multi-Head Attention
         attn_output = TransformerBlock._mha(
             x_norm1,
@@ -307,8 +336,25 @@ class TransformerBlock(NodeBase):
             rope_theta=config.get("rope_theta", 10000.0),
         )
 
-        # Residual connection 1
-        x_res1 = input_tensor + attn_output
+        # Compensate for softmax averaging variance contraction.
+        # At init with near-uniform attention, position t attending to c(t)
+        # keys contracts Var by 1/c(t). Multiply by sqrt(c(t)) to restore
+        # unit variance after the W_o projection.
+        if mask is not None:
+            # Position-dependent: count attended keys per query position.
+            # For a causal mask this gives [1, 2, ..., seq_len].
+            # mask shape: (batch, 1, seq_len, seq_len)
+            eff_ctx = jnp.maximum(
+                jnp.sum(mask[0, 0] != 0, axis=-1, dtype=jnp.float32), 1.0
+            )
+            attn_output = attn_output * jnp.sqrt(eff_ctx)[None, :, None]
+        else:
+            # Full (non-causal) attention: all positions attend to all keys.
+            attn_output = attn_output * jnp.sqrt(jnp.float32(seq_len))
+
+        # Residual connection 1: balanced 1/sqrt(2) scaling so
+        # Var(sum) ≈ 1 when both branches have Var ≈ 1.
+        x_res1 = inv_sqrt2 * (input_tensor + attn_output)
 
         # LayerNorm 2
         x_norm2 = TransformerBlock._layernorm(
@@ -325,7 +371,7 @@ class TransformerBlock(NodeBase):
         )
 
         # Residual connection 2
-        z_mu = x_res1 + ff_output
+        z_mu = inv_sqrt2 * (x_res1 + ff_output)
 
         pre_activation = z_mu
         error = state.z_latent - z_mu
@@ -342,6 +388,38 @@ class TransformerBlock(NodeBase):
 
         total_energy = jnp.sum(state.energy)
         return total_energy, state
+
+    @staticmethod
+    def forward_learning(
+        params: NodeParams,
+        inputs: Dict[str, jnp.ndarray],
+        state: NodeState,
+        node_info: NodeInfo,
+    ) -> Tuple[NodeState, NodeParams]:
+        node_class = node_info.node_class
+        scaled_inputs = node_class._apply_forward_scaling(inputs, node_info)
+
+        (total_energy, new_state), params_grad = jax.value_and_grad(
+            node_class.forward, argnums=0, has_aux=True
+        )(params, scaled_inputs, state, node_info)
+
+        # Compensate for layernorm absorption by multiplying weight gradients by the "in" edge's forward_scale.
+        # LN(a*x) = LN(x) absorbs muPC forward scaling, so dE/dW is
+        # independent of a — making weight gradients ~1/a too large vs
+        # Linear nodes where dE/dW ∝ a*x. Multiply by a to compensate.
+        if node_info.scaling_config is not None:
+            a = 1.0
+            for edge_key, scale in node_info.scaling_config.forward_scale.items():
+                if edge_key.endswith(":in"):
+                    a = scale
+                    break
+            if a != 1.0:
+                scaled_weights = {k: g * a for k, g in params_grad.weights.items()}
+                params_grad = NodeParams(
+                    weights=scaled_weights, biases=params_grad.biases
+                )
+
+        return new_state, params_grad
 
     @staticmethod
     def _layernorm(

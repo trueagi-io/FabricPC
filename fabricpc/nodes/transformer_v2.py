@@ -1,5 +1,11 @@
 """
 Transformer components for JAX predictive coding networks.
+
+Decomposed transformer pipeline — each stage is a separate PC node:
+
+  tokens → Embedding → MhaResidual(+) → LnMlp1 → Mlp2Residual(+) → VocabProjection → logits
+                        │ (skip)   ↑              │ (skip)    ↑
+                        └──────────┘              └───────────┘
 """
 
 from typing import Dict, Any, Tuple, Optional
@@ -101,6 +107,11 @@ class EmbeddingNode(NodeBase):
         return jnp.sum(state.energy), state
 
     @staticmethod
+    def _apply_forward_scaling(inputs, node_info):
+        """No-op: indices are discrete tokens, not continuous signals."""
+        return inputs
+
+    @staticmethod
     def forward_inference(params, inputs, state, node_info, is_clamped=False):
         _, new_state = node_info.node_class.forward(params, inputs, state, node_info)
         input_grads = {
@@ -148,7 +159,10 @@ class MhaResidualNode(NodeBase):
 
     @staticmethod
     def get_slots():
-        return {"in": SlotSpec("in", False), "mask": SlotSpec("mask", False)}
+        return {
+            "in": SlotSpec("in", False),
+            "mask": SlotSpec("mask", False, is_variance_scalable=False),
+        }
 
     @staticmethod
     def initialize_params(key, node_shape, input_shapes, weight_init, config):
@@ -324,7 +338,12 @@ class Mlp2ResidualNode(NodeBase):
 
     @staticmethod
     def get_slots():
-        return {"in": SlotSpec("in", False), "residual": SlotSpec("residual", False)}
+        return {
+            "in": SlotSpec("in", False),
+            "residual": SlotSpec(
+                "residual", False, is_variance_scalable=False, is_skip_connection=True
+            ),
+        }
 
     @staticmethod
     def initialize_params(key, node_shape, input_shapes, weight_init, config):

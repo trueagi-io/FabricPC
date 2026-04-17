@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0] - 2026-04-17
+- muPC scaling supports arbitrary DAG topologies with correct per-edge scaling, per-slot computation. Scaling formula is `a = gain / sqrt(fan_in * K_slot * L)` where K_slot is the per-slot in-degree and L is the residual depth (number of nodes with skip connection slots along the longest path).
+- Stable training demonstrated on networks with 100+ layers with muPC scaling. 
+- Associative memory is now a composable network component with `StorkeyHopfield` node: combines PC prediction-error energy with Hopfield attractor energy.
+- Consolidated multi-GPU trainer into `train.py`.
+- Comprehensive documentation in docs/user_guides folder.
+- Added `is_variance_scalable` and `is_skip_connection` attributes to `SlotSpec` for fine-grained control over which edges receive muPC scaling.
+- Added `SkipConnection` node: passthrough node with `is_variance_scalable=False` for residual/skip paths. Prevents exponential signal decay in deep residual networks.
+- Added `LinearResidual` node: combines linear transform and +skip sum in one PC node with dual slots ("in" scaled, "skip" unscaled). Halves graph depth compared to Linear + SkipConnection pattern.
+- Added `jacobian_gain()` to activation functions for gradient compensation in deep networks with saturating activations (tanh, GELU, HardTanh).
+- Improved internal variance scaling in TransformerBlock with 1/sqrt(2) residual connections and position-dependent attention variance compensation.
+
 ## [0.2.9] - 2026-03-17
 - Added transformer_v2 nodes and example decomposing transformer blocks to use PC inference at the attention and feedfordward layers. See examples/transformer_v2_demo.py for details.
 - Improved training stability and inference convergence of the v1 transformer block by gradient clipping and residual connections. See examples/transformer_demo.py for details.

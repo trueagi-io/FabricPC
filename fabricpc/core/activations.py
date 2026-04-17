@@ -35,6 +35,7 @@ Activations are instantiated with their parameters:
     z_mu = type(act).forward(x, act.config)
 """
 
+import math
 import types
 from abc import ABC, abstractmethod
 from typing import Dict, Any
@@ -113,6 +114,43 @@ class ActivationBase(ABC):
         """
         pass
 
+    @staticmethod
+    def variance_gain(config: Dict[str, Any] = None) -> float:
+        """
+        Return the Kaiming-style gain for variance preservation.
+
+        This is the factor g such that when pre-activations have
+        Var(z) = g^2, the post-activation output has Var(f(z)) ≈ 1.
+        Used by muPC to compensate for activation-induced variance
+        contraction in the forward scaling formula:
+
+            a = gain / sqrt(fan_in * K)
+
+        Subclasses should override with activation-specific values.
+        Default returns 1.0 (no correction, appropriate for identity).
+        """
+        return 1.0
+
+    @staticmethod
+    def jacobian_gain(config: Dict[str, Any] = None) -> float:
+        """
+        Return the Jacobian compensation factor for muPC topdown gradient scaling.
+
+        In local PC inference, topdown gradients propagate one hop per step
+        through the Jacobian diag(act'(z)) @ (a*W). The per-hop gradient
+        attenuation is approximately variance_gain * rms(act'(z)), where
+        z ~ N(0, variance_gain^2). This factor compensates:
+
+            jacobian_gain = 1 / (variance_gain * rms(act'(z)))
+
+        so that topdown_grad_scale = a * jacobian_gain yields ~1.0 per-hop
+        gradient propagation factor.
+
+        Default returns 1.0 (exact for identity, ReLU, LeakyReLU where
+        variance_gain * rms(act') = 1.0 by construction).
+        """
+        return 1.0
+
 
 # =============================================================================
 # Built-in Activations
@@ -165,6 +203,16 @@ class TanhActivation(ActivationBase):
         t = jnp.tanh(x)
         return 1 - t**2
 
+    @staticmethod
+    def variance_gain(config: Dict[str, Any] = None) -> float:
+        return math.sqrt(5.0 / 3.0)
+
+    @staticmethod
+    def jacobian_gain(config: Dict[str, Any] = None) -> float:
+        # rms(tanh'(z)) ≈ 0.6144 for z ~ N(0, 5/3)
+        # jacobian_gain = 1 / (sqrt(5/3) * 0.6144) ≈ 1.261
+        return 1.261
+
 
 class ReLUActivation(ActivationBase):
     """ReLU activation: max(0, x)"""
@@ -179,6 +227,10 @@ class ReLUActivation(ActivationBase):
     @staticmethod
     def derivative(x: jnp.ndarray, config: Dict[str, Any] = None) -> jnp.ndarray:
         return (x > 0).astype(jnp.float32)
+
+    @staticmethod
+    def variance_gain(config: Dict[str, Any] = None) -> float:
+        return math.sqrt(2.0)
 
 
 class LeakyReLUActivation(ActivationBase):
@@ -201,6 +253,11 @@ class LeakyReLUActivation(ActivationBase):
     def derivative(x: jnp.ndarray, config: Dict[str, Any] = None) -> jnp.ndarray:
         alpha = config.get("alpha", 0.01) if config else 0.01
         return jnp.where(x > 0, 1.0, alpha)
+
+    @staticmethod
+    def variance_gain(config: Dict[str, Any] = None) -> float:
+        alpha = config.get("alpha", 0.01) if config else 0.01
+        return math.sqrt(2.0 / (1.0 + alpha**2))
 
 
 class GeluActivation(ActivationBase):
@@ -226,6 +283,16 @@ class GeluActivation(ActivationBase):
         )
         return apx_norm_cdf + x * norm_cdf_prime
 
+    @staticmethod
+    def variance_gain(config: Dict[str, Any] = None) -> float:
+        return math.sqrt(2.0)
+
+    @staticmethod
+    def jacobian_gain(config: Dict[str, Any] = None) -> float:
+        # rms(gelu'(z)) ≈ 0.605 for z ~ N(0, 2)
+        # jacobian_gain = 1 / (sqrt(2) * 0.605) ≈ 1.168
+        return 1.168
+
 
 class SoftmaxActivation(ActivationBase):
     """Softmax activation: exp(x) / sum(exp(x)) along the last axis"""
@@ -243,9 +310,9 @@ class SoftmaxActivation(ActivationBase):
     @staticmethod
     def derivative(x: jnp.ndarray, config: Dict[str, Any] = None) -> jnp.ndarray:
         s = SoftmaxActivation.forward(x)
-        return s * (
-            1 - s
-        )  # Note: This is a simplification; full Jacobian is more complex
+        # Diagonal of the Jacobian diag(s) - s @ s.T.
+        # The off-diagonal terms are omitted; valid for element-wise PC gradients.
+        return s * (1 - s)
 
 
 class HardTanhActivation(ActivationBase):
@@ -271,3 +338,13 @@ class HardTanhActivation(ActivationBase):
         min_val = config.get("min_val", -1.0) if config else -1.0
         max_val = config.get("max_val", 1.0) if config else 1.0
         return ((x > min_val) & (x < max_val)).astype(jnp.float32)
+
+    @staticmethod
+    def variance_gain(config: Dict[str, Any] = None) -> float:
+        return math.sqrt(5.0 / 3.0)
+
+    @staticmethod
+    def jacobian_gain(config: Dict[str, Any] = None) -> float:
+        # rms(hardtanh'(z)) ≈ 0.749 for z ~ N(0, 5/3)
+        # jacobian_gain = 1 / (sqrt(5/3) * 0.749) ≈ 1.035
+        return 1.035

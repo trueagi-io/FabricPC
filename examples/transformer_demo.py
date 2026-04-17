@@ -2,16 +2,44 @@
 Transformer Predictive Coding Demo
 
 Character-level language modeling on TinyShakespeare with PC or backprop training.
-PC training is not yet tuned — treat as a starting point for experimentation.
+PC training still suffers from some poor variance scaling — treat as a starting point for experimentation.
+
+Architecture (per block: TransformerBlock + SkipConnection)::
+
+    input ──→ Embedding ──→ TransformerBlock_0 ──→ SkipConnection_0 ──→ ... ──→ output
+                                  │                   ↑
+                                  └── (skip) ─────────┘
+
+    Each SkipConnection sums the transformer output with the previous
+    node's output (identity skip path), both at scale 1.0.
+
+Usage:
+    python examples/transformer_demo.py
+    python examples/transformer_demo.py --mode backprop --lr 1e-3 --num_epochs 3
+    python examples/transformer_demo.py --mode pc --num_blocks 2
+
+Results: PC training
+Final train energy: 221.06
+Final test loss: 2.5351, Perplexity: 12.62
+Prompt: 'ROMEO: '
+----------------------------------------
+ROMEO: asharshar'dsheameara
+----------------------------------------
+
+Backprop Training
+Final test loss: 1.6892, Perplexity: 5.41
+Prompt: 'ROMEO: '
+----------------------------------------
+ROMEO: go,
+bound this merry
+----------------------------------------
 """
 
-use_pcn = True  # Set to True to use predictive coding training, False for backprop
-use_extra_skip_connections = True  # Add extra skip connections from embedding to all transformer blocks (can help PC inference convergence)
-
-from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+from jax_setup import set_jax_flags_before_importing_jax
 
 set_jax_flags_before_importing_jax()
 
+import argparse
 import math
 import jax
 import jax.numpy as jnp
@@ -20,21 +48,26 @@ import time
 from typing import Tuple, Dict, List, Optional, Any
 from tqdm.auto import tqdm
 
-from fabricpc.nodes import Linear, TransformerBlock, IdentityNode
+from fabricpc.nodes import (
+    Linear,
+    TransformerBlock,
+    IdentityNode,
+    SkipConnection,
+    EmbeddingNode,
+)
 from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.graph import initialize_params, FeedforwardStateInit
+from fabricpc.core.mupc import MuPCConfig
 from fabricpc.core.activations import (
-    IdentityActivation,
     SoftmaxActivation,
     GeluActivation,
 )
 from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.core.initializers import (
     NormalInitializer,
-    KaimingInitializer,
-    XavierInitializer,
+    MuPCInitializer,
 )
-from fabricpc.core.inference import InferenceSGDNormClip, InferenceSGD
+from fabricpc.core.inference import InferenceSGDNormClip
 import optax
 from fabricpc.training.train_autoregressive import (
     train_step_autoregressive,
@@ -62,6 +95,51 @@ jax.config.update("jax_default_prng_impl", "threefry2x32")
 TRACKED_NODES = ["embed", "transformer_0"]
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Transformer PC/Backprop demo on TinyShakespeare"
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["pc", "backprop"],
+        default="pc",
+        help="Training mode: predictive coding or backpropagation (default: pc)",
+    )
+    parser.add_argument("--seq_len", type=int, default=128, help="Sequence length")
+    parser.add_argument(
+        "--embed_dim", type=int, default=128, help="Embedding dimension"
+    )
+    parser.add_argument(
+        "--num_heads", type=int, default=8, help="Number of attention heads"
+    )
+    parser.add_argument(
+        "--num_blocks", type=int, default=1, help="Number of transformer blocks"
+    )
+    parser.add_argument(
+        "--ff_dim", type=int, default=512, help="Feed-forward hidden dimension"
+    )
+    parser.add_argument("--rope_theta", type=float, default=500.0, help="RoPE theta")
+    parser.add_argument("--batch_size", type=int, default=128, help="Batch size")
+    parser.add_argument(
+        "--num_epochs",
+        type=float,
+        default=1.0,
+        help="Number of epochs (supports fractional)",
+    )
+    parser.add_argument(
+        "--infer_steps",
+        type=int,
+        default=None,
+        help="PC inference steps (default: auto)",
+    )
+    parser.add_argument(
+        "--eta_infer", type=float, default=0.1, help="PC inference step size"
+    )
+    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    return parser.parse_args()
+
+
 # --- Model Configuration ---
 
 
@@ -74,15 +152,22 @@ def create_transformer_model(
     ff_dim: int,
     rope_theta: float,
     rng_key: jax.Array,
-    infer_steps: int = 10,
-    eta_infer: float = 0.01,
+    infer_steps: int = None,
+    eta_infer: float = 0.1,
 ) -> Tuple:
     """Create a transformer language model. Returns (structure, params)."""
-    input_node = IdentityNode(shape=(seq_len, vocab_size), name="input")
-    embed = Linear(
+    if infer_steps is None:
+        infer_steps = 3 * (2 * num_blocks + 2)
+
+    input_node = IdentityNode(shape=(seq_len,), name="input")
+    # Use EmbeddingNode (table lookup) instead of Linear with one-hot input.
+    # Linear + one-hot + muPC produces Var ~ 1/V (embedding variance collapse)
+    # because muPC assumes dense input with fan_in active features. Use unit normal weight initialization and no muPC scaling for the embedding node.
+    embed = EmbeddingNode(
         shape=(seq_len, embed_dim),
-        activation=IdentityActivation(),
-        weight_init=NormalInitializer(std=1.0 / jnp.sqrt(vocab_size)),
+        vocab_size=vocab_size,
+        embed_dim=embed_dim,
+        weight_init=NormalInitializer(std=1.0),
         name="embed",
     )
     mask_node = IdentityNode(shape=(1, seq_len, seq_len), name="mask")
@@ -90,58 +175,33 @@ def create_transformer_model(
     nodes = [input_node, embed, mask_node]
     edges = [Edge(source=input_node, target=embed.slot("in"))]
 
-    xmfr_blocks = []
-    block_skip_nodes = []
-    summing_nodes = []
-    for i in range(num_blocks):
-        xmfr_blocks.append(
-            TransformerBlock(
-                shape=(seq_len, embed_dim),
-                num_heads=num_heads,
-                ff_dim=ff_dim,
-                internal_activation=GeluActivation(),
-                rope_theta=rope_theta,
-                name=f"transformer_{i}",
-            )
-        )
-        block_skip_nodes.append(
-            IdentityNode(
-                shape=(seq_len, embed_dim),
-                name=f"block_skip_{i}",
-                scale=(1.0 / num_blocks),
-            )
-        )
-        summing_nodes.append(
-            IdentityNode(
-                shape=(seq_len, embed_dim),
-                name=f"summing_skip_{i}",
-                scale=(0.1 / (1 + num_blocks)),
-            )
-        )
-    nodes = nodes + xmfr_blocks
-    if use_extra_skip_connections:
-        nodes = nodes + summing_nodes  # + block_skip_nodes
-
     prev_node = embed
     for i in range(num_blocks):
-        edges.append(Edge(source=prev_node, target=xmfr_blocks[i].slot("in")))
-        edges.append(Edge(source=mask_node, target=xmfr_blocks[i].slot("mask")))
-
-        if use_extra_skip_connections:
-            edges.append(
-                Edge(source=xmfr_blocks[i], target=summing_nodes[i].slot("in"))
-            )
-            for j in range(i, num_blocks):
-                edges.append(Edge(source=prev_node, target=summing_nodes[j].slot("in")))
-            prev_node = summing_nodes[i]
-        else:
-            prev_node = xmfr_blocks[i]
+        new_block = TransformerBlock(
+            shape=(seq_len, embed_dim),
+            num_heads=num_heads,
+            ff_dim=ff_dim,
+            internal_activation=GeluActivation(),
+            rope_theta=rope_theta,
+            name=f"transformer_{i}",
+        )
+        new_skip = SkipConnection(
+            shape=(seq_len, embed_dim),
+            name=f"skip_{i}",
+        )
+        nodes.append(new_block)
+        edges.append(Edge(source=prev_node, target=new_block.slot("in")))
+        edges.append(Edge(source=mask_node, target=new_block.slot("mask")))
+        nodes.append(new_skip)
+        edges.append(Edge(source=prev_node, target=new_skip.slot("in")))
+        edges.append(Edge(source=new_block, target=new_skip.slot("in")))
+        prev_node = new_skip
 
     output_node = Linear(
         shape=(seq_len, vocab_size),
         activation=SoftmaxActivation(),
         energy=CrossEntropyEnergy(),
-        weight_init=NormalInitializer(std=1.0 / jnp.sqrt(embed_dim)),
+        weight_init=NormalInitializer(std=np.sqrt(1.0 / embed_dim)),
         name="output",
     )
     nodes.append(output_node)
@@ -153,8 +213,9 @@ def create_transformer_model(
         task_map=TaskMap(x=input_node, y=output_node, causal_mask=mask_node),
         graph_state_initializer=FeedforwardStateInit(),
         inference=InferenceSGDNormClip(
-            eta_infer=eta_infer, infer_steps=infer_steps, max_norm=0.5, latent_decay=0.0
+            eta_infer=eta_infer, infer_steps=infer_steps, max_norm=5.0, latent_decay=0.0
         ),
+        scaling=MuPCConfig(include_output=False),
     )
     params = initialize_params(structure, rng_key)
     return structure, params
@@ -225,7 +286,7 @@ def generate_text(
 class TrainingProgressBar:
     """Manage per-epoch tqdm bars during training."""
 
-    def __init__(self, total_batches: int, num_epochs: int, mode_label: str):
+    def __init__(self, total_batches: int, num_epochs: float, mode_label: str):
         self.total_batches = total_batches
         self.num_epochs = num_epochs
         self.mode_label = mode_label
@@ -237,7 +298,7 @@ class TrainingProgressBar:
         self.current_epoch = epoch_idx
         self._bar = tqdm(
             total=self.total_batches,
-            desc=f"{self.mode_label} Epoch {epoch_idx + 1}/{self.num_epochs}",
+            desc=f"{self.mode_label} Epoch {epoch_idx + 1}/{math.ceil(self.num_epochs)}",
             dynamic_ncols=True,
             leave=False,
         )
@@ -262,36 +323,28 @@ class TrainingProgressBar:
             self._bar = None
 
 
-def main():
-    SEQ_LEN = 128
-    EMBED_DIM = 128
-    NUM_HEADS = 8
-    NUM_BLOCKS = 1
-    FF_DIM = 512
-    ROPE_THETA = 500.0
-    BATCH_SIZE = 128
-    NUM_EPOCHS = 1.0
-    INFER_STEPS = 11
-    ETA_INFER = 0.05
-    LR = 1e-3
+def main(args=None):
+    if args is None:
+        args = parse_args()
 
-    master_key = jax.random.PRNGKey(42)
+    use_pc = args.mode == "pc"
+
+    master_key = jax.random.PRNGKey(args.seed)
     graph_key, train_key, gen_key = jax.random.split(master_key, 3)
 
     # Data
     train_loader = CharDataLoader(
-        "train", seq_len=SEQ_LEN, batch_size=BATCH_SIZE, shuffle=True, seed=0
+        "train", seq_len=args.seq_len, batch_size=args.batch_size, shuffle=True, seed=0
     )
     test_loader = CharDataLoader(
-        "test", seq_len=SEQ_LEN, batch_size=BATCH_SIZE, shuffle=False
+        "test", seq_len=args.seq_len, batch_size=args.batch_size, shuffle=False
     )
 
-    # Linear embedding requires one-hot x; wrap loaders accordingly.
+    # EmbeddingNode takes integer indices directly (cast to float for JAX).
     vocab_size = train_loader.vocab_size
-    eye = np.eye(vocab_size, dtype=np.float32)
 
-    class _OneHotLoader:
-        """Thin wrapper that one-hot encodes x from CharDataLoader."""
+    class _IndexLoader:
+        """Thin wrapper: passes integer token indices as x, one-hot as y."""
 
         def __init__(self, base):
             self.base = base
@@ -301,10 +354,10 @@ def main():
 
         def __iter__(self):
             for x_idx, y_oh in self.base:
-                yield {"x": eye[x_idx], "y": y_oh}
+                yield {"x": x_idx.astype(np.float32), "y": y_oh}
 
-    train_loader_oh = _OneHotLoader(train_loader)
-    test_loader_oh = _OneHotLoader(test_loader)
+    train_loader_oh = _IndexLoader(train_loader)
+    test_loader_oh = _IndexLoader(test_loader)
 
     print(
         f"Vocab: {vocab_size}, Train batches: {len(train_loader)}, Test batches: {len(test_loader)}"
@@ -313,15 +366,15 @@ def main():
     # Model
     structure, params = create_transformer_model(
         vocab_size=train_loader.vocab_size,
-        seq_len=SEQ_LEN,
-        embed_dim=EMBED_DIM,
-        num_heads=NUM_HEADS,
-        num_blocks=NUM_BLOCKS,
-        ff_dim=FF_DIM,
-        rope_theta=ROPE_THETA,
+        seq_len=args.seq_len,
+        embed_dim=args.embed_dim,
+        num_heads=args.num_heads,
+        num_blocks=args.num_blocks,
+        ff_dim=args.ff_dim,
+        rope_theta=args.rope_theta,
         rng_key=graph_key,
-        infer_steps=INFER_STEPS,
-        eta_infer=ETA_INFER,
+        infer_steps=args.infer_steps,
+        eta_infer=args.eta_infer,
     )
 
     total_params = sum(p.size for p in jax.tree_util.tree_leaves(params))
@@ -332,7 +385,7 @@ def main():
     if is_aim_available():
         tracking_config = TrackingConfig(
             experiment_name="transformer_pc_shakespeare",
-            run_name=f"{'PC' if use_pcn else 'BP'}_{NUM_BLOCKS}blk_{EMBED_DIM}d",
+            run_name=f"{'PC' if use_pc else 'BP'}_{args.num_blocks}blk_{args.embed_dim}d",
             track_energy=True,
             track_weight_distributions=True,
             track_state_distributions=True,
@@ -344,21 +397,20 @@ def main():
         tracker.log_hyperparams(
             {
                 "model_config": {
-                    "seq_len": SEQ_LEN,
-                    "embed_dim": EMBED_DIM,
-                    "num_heads": NUM_HEADS,
-                    "num_blocks": NUM_BLOCKS,
-                    "ff_dim": FF_DIM,
-                    "rope_theta": ROPE_THETA,
+                    "seq_len": args.seq_len,
+                    "embed_dim": args.embed_dim,
+                    "num_heads": args.num_heads,
+                    "num_blocks": args.num_blocks,
+                    "ff_dim": args.ff_dim,
+                    "rope_theta": args.rope_theta,
                     "total_params": total_params,
-                    "use_extra_skip_connections": use_extra_skip_connections,
                 },
-                "training_method": "PC" if use_pcn else "Backprop",
-                "batch_size": BATCH_SIZE,
-                "num_epochs": NUM_EPOCHS,
-                "infer_steps": INFER_STEPS,
-                "eta_infer": ETA_INFER,
-                "lr": LR,
+                "training_method": "PC" if use_pc else "Backprop",
+                "batch_size": args.batch_size,
+                "num_epochs": args.num_epochs,
+                "infer_steps": args.infer_steps,
+                "eta_infer": args.eta_infer,
+                "lr": args.lr,
             }
         )
         tracker.log_graph_structure(structure)
@@ -368,16 +420,16 @@ def main():
     # Training
     optimizer = optax.chain(
         optax.clip_by_global_norm(1.0),
-        optax.adamw(LR, weight_decay=0.1),
+        optax.adamw(args.lr, weight_decay=0.1),
     )
     train_config = {
-        "num_epochs": NUM_EPOCHS,
+        "num_epochs": args.num_epochs,
         "use_causal_mask": True,  # Enable causal masking for autoregressive
     }
 
-    def create_eval_callback(use_pc: bool):
+    def create_eval_callback(use_pc_mode: bool):
         """Create appropriate eval callback based on training method."""
-        if use_pc:
+        if use_pc_mode:
 
             def eval_callback(epoch_idx, params, structure, config, rng_key):
                 eval_rng = jax.random.fold_in(rng_key, epoch_idx)
@@ -415,15 +467,15 @@ def main():
 
         return eval_callback
 
-    eval_callback = create_eval_callback(use_pcn)
+    eval_callback = create_eval_callback(use_pc)
     progress_bar = TrainingProgressBar(
         total_batches=len(train_loader_oh),
-        num_epochs=NUM_EPOCHS,
-        mode_label="PC" if use_pcn else "BP",
+        num_epochs=args.num_epochs,
+        mode_label="PC" if use_pc else "BP",
     )
 
-    def create_iter_callback(use_pc: bool):
-        if use_pc:
+    def create_iter_callback(use_pc_mode: bool):
+        if use_pc_mode:
 
             def iter_callback(epoch_idx, batch_idx, energy):
                 del batch_idx
@@ -442,10 +494,10 @@ def main():
 
         return iter_callback
 
-    iter_callback = create_iter_callback(use_pcn)
+    iter_callback = create_iter_callback(use_pc)
 
     print(
-        f"\nTraining ({'PC' if use_pcn else 'Backprop'}, {NUM_EPOCHS} epochs, lr={LR})..."
+        f"\nTraining ({'PC' if use_pc else 'Backprop'}, {args.num_epochs} epochs, lr={args.lr})..."
     )
 
     start_time = time.time()
@@ -457,7 +509,7 @@ def main():
     frac = num_epochs - math.floor(num_epochs)
     use_causal_mask = train_config.get("use_causal_mask", True)
 
-    if use_pcn:
+    if use_pc:
         jit_train_step = jax.jit(
             lambda p, o, b, k: train_step_autoregressive(
                 p,
@@ -497,7 +549,7 @@ def main():
 
                 batch = {k: jnp.array(v) for k, v in batch_data.items()}
 
-                if use_pcn:
+                if use_pc:
                     params, opt_state, energy, ce_loss, final_state = jit_train_step(
                         params, opt_state, batch, batch_keys[batch_idx]
                     )
@@ -576,16 +628,16 @@ def main():
     train_time = time.time() - start_time
 
     print(
-        f"\nTraining completed in {train_time:.1f}s ({train_time/NUM_EPOCHS:.1f}s per epoch)"
+        f"\nTraining completed in {train_time:.1f}s ({train_time/args.num_epochs:.1f}s per epoch)"
     )
 
     # Generate samples
     prompts = [
+        "ROMEO: ",
         "Know, Rome, that",
         "MENENIUS:",
         "the more virtuous",
         "by his looks",
-        "ROMEO: ",
         "To be or not to be",
         "The king",
     ]
@@ -610,15 +662,16 @@ def main():
         tracker.close()
 
     # Results
-    print(f"\nFinal train loss: {energy_history[-1][-1]:.4f}")
+    print(f"\nFinal train energy: {energy_history[-1][-1]:.4f}")
     if eval_results and eval_results[-1]:
         final_eval = eval_results[-1]
         print(
-            f"Final test loss: {final_eval['loss']:.4f}, Perplexity: {final_eval['perplexity']:.2f}"
+            f"Test loss: {final_eval['loss']:.4f}, Perplexity: {final_eval['perplexity']:.2f}"
         )
 
     return trained_params, structure, train_loader, test_loader
 
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main(args)

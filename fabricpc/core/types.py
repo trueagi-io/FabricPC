@@ -4,10 +4,16 @@ Core JAX types for predictive coding networks.
 All types are immutable and registered as JAX pytrees for automatic differentiation.
 """
 
-from typing import Dict, Any, Tuple, NamedTuple
+from __future__ import annotations
+
+from typing import Dict, Any, Optional, Tuple, NamedTuple, TYPE_CHECKING
 import jax.numpy as jnp
 from jax import tree_util
 from dataclasses import dataclass
+
+if TYPE_CHECKING:
+    from fabricpc.nodes.base import NodeBase
+    from fabricpc.core.mupc import MuPCScalingFactors
 
 
 @dataclass(frozen=True)
@@ -17,6 +23,10 @@ class SlotInfo:
     name: str  # Slot name (e.g., "in")
     parent_node: str  # Name of the parent node
     is_multi_input: bool  # True if slot accepts multiple edges, False for single edge
+    is_variance_scalable: (
+        bool  # muPC scales edges to this slot (True) or leaves at 1.0 (False)
+    )
+    is_skip_connection: bool  # Identity bypass path that counts toward muPC depth L
     in_neighbors: Tuple[str, ...]  # Tuple of node names connecting to this slot
 
 
@@ -37,7 +47,7 @@ class NodeInfo:
     name: str
     shape: Tuple[int, ...]  # Output shape excluding batch dimension
     node_type: str  # "linear", "transformer", etc. (kept for debugging/display)
-    node_class: type  # The node class (Linear, TransformerBlock, etc.)
+    node_class: NodeBase  # The node class (Linear, TransformerBlock, etc.)
     node_config: Dict[str, Any]  # Extra config (use_bias, flatten_input, etc.)
     activation: Any  # ActivationBase instance
     energy: Any  # EnergyFunctional instance
@@ -48,6 +58,9 @@ class NodeInfo:
     out_degree: int  # Number of outgoing edges
     in_edges: Tuple[str, ...]  # Tuple of edge keys
     out_edges: Tuple[str, ...]  # Tuple of edge keys
+    scaling_config: Optional["MuPCScalingFactors"] = (
+        None  # MuPCScalingFactors instance for muPC parameterization, or None
+    )
 
 
 @dataclass(frozen=True)

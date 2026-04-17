@@ -3,8 +3,18 @@ Statistical Comparison: Graph Cycles vs Standard MLP on MNIST
 =====================================================================
 
 Compares two predictive coding architectures:
-- Cyclic: 6-node graph with cycles between hidden layers
+- Cyclic: 5-node graph with cycles between hidden layers
 - MLP: 4-node standard feedforward network (baseline)
+
+Architecture::
+
+    Cyclic:
+        pixels ──→ hidden1 ──→ hidden2 ──→ class
+                     ↑            │
+                     └── h2_lat ←─┘  (cycle)
+
+    MLP:
+        pixels ──→ hidden1 ──→ hidden2 ──→ class
 
 Both are trained with identical PC hyperparameters to isolate the effect
 of cyclic structure on classification accuracy.
@@ -15,9 +25,9 @@ Usage:
     python examples/mnist_cyclic_graph.py --verbose       # show per-epoch output
 """
 
-from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+from jax_setup import set_jax_flags_before_importing_jax
 
-set_jax_flags_before_importing_jax(jax_platforms="cuda")  # "cpu", "cuda" or "tpu"
+set_jax_flags_before_importing_jax()
 
 import jax
 import argparse

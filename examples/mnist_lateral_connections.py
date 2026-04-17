@@ -6,6 +6,16 @@ Compares two predictive coding architectures:
 - Lateral: 6-node graph with lateral connections between hidden layers
 - MLP: 4-node standard feedforward network (baseline)
 
+Architecture::
+
+    Lateral:
+        pixels ──→ hidden1 ──────────→ hidden2 ──→ class
+          │           ↑                    ↑
+          └──→ h1_lateral ──→ h2_lateral ──┘
+
+    MLP:
+        pixels ──→ hidden1 ──→ hidden2 ──→ class
+
 Both are trained with identical PC hyperparameters to isolate the effect
 of lateral connectivity on classification accuracy.
 
@@ -15,9 +25,9 @@ Usage:
     python examples/mnist_lateral_connections.py --verbose       # show per-epoch output
 """
 
-from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+from jax_setup import set_jax_flags_before_importing_jax
 
-set_jax_flags_before_importing_jax(jax_platforms="cuda")  # "cpu", "cuda" or "tpu"
+set_jax_flags_before_importing_jax()
 
 import jax
 import argparse

@@ -4,12 +4,25 @@ Predictive Coding Network — MNIST Demo
 
 Train a small predictive coding network on MNIST using the object API.
 
+Architecture::
+
+    pixels(784) ──→ hidden1(256) ──→ hidden2(64) ──→ class(10)
+     Identity        Sigmoid          Sigmoid        Softmax+CE
+
 For optimizer selection and advanced controls, see mnist_advanced.py.
+
+Results:
+Avg training time: 1.37s per epoch
+20 epochs
+Test Accuracy: 98.14%
+4 nodes, 3 edges, 218,058 parameters
 """
 
-from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+from jax_setup import set_jax_flags_before_importing_jax
 
-set_jax_flags_before_importing_jax(jax_platforms="cuda")
+set_jax_flags_before_importing_jax(
+    jax_platforms="cuda"
+)  # options: "cpu", "cuda", "tpu"
 
 import jax
 from fabricpc.nodes import Linear, IdentityNode
@@ -101,7 +114,6 @@ if __name__ == "__main__":
         trained_params, structure, test_loader, train_config, eval_key
     )
     print(f"Test Accuracy: {metrics['accuracy'] * 100:.2f}%")
-    print(f"Test Energy:   {metrics['energy']:.4f}")
 
     print(
         f"\n{len(structure.nodes)} nodes, {len(structure.edges)} edges, "

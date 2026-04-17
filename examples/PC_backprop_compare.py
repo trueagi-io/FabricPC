@@ -5,6 +5,11 @@ Statistical Comparison: Predictive Coding vs Backpropagation on MNIST
 Runs multiple independent training trials for both PC and backprop,
 then performs statistical analysis to compare test accuracies.
 
+Architecture (identical topology, different activations)::
+
+    PC:      pixels(784) ──→ hidden1(256,sigmoid) ──→ hidden2(64,sigmoid) ──→ class(10,softmax)
+    Backprop: pixels(784) ──→ hidden1(256,relu) ──→ hidden2(64,relu) ──→ class(10,softmax)
+
 Reports:
 - Per-trial accuracy results table
 - Mean +/- standard error for each method
@@ -18,9 +23,9 @@ Usage:
     python examples/PC_backprop_compare.py --verbose       # show per-epoch output
 """
 
-from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+from jax_setup import set_jax_flags_before_importing_jax
 
-set_jax_flags_before_importing_jax(jax_platforms="cuda")  # "cpu", "cuda" or "tpu"
+set_jax_flags_before_importing_jax()  # "cpu", "cuda" or "tpu"
 
 import jax
 import argparse
