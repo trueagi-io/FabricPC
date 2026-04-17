@@ -605,6 +605,7 @@ def evaluate_pcn(
 
         pmap_inference = jax.pmap(inference_fn, axis_name="devices")
 
+        total_energy = 0.0
         total_correct = 0
         total_samples = 0
 
@@ -614,18 +615,42 @@ def evaluate_pcn(
 
             batch_size = next(iter(batch.values())).shape[0]
             if batch_size % n_devices != 0:
-                continue
+                pad_size = n_devices - (batch_size % n_devices)
+                batch = {
+                    k: jnp.concatenate(
+                        [v, jnp.zeros((pad_size,) + v.shape[1:], dtype=v.dtype)]
+                    )
+                    for k, v in batch.items()
+                }
+            else:
+                pad_size = 0
 
             batch_sharded = shard_batch(batch, n_devices)
             final_states = pmap_inference(
                 replicated_params, batch_sharded, batch_key_for_step
             )
 
+            # Compute energy (matching training: only nodes with in_degree > 0)
+            batch_energy = 0.0
+            for node_name in structure.nodes:
+                if structure.nodes[node_name].node_info.in_degree > 0:
+                    node_energy = final_states.nodes[node_name].energy
+                    # Reshape from (n_devices, per_device_batch, ...) to flat
+                    node_energy = node_energy.reshape(-1, *node_energy.shape[2:])
+                    # Only count non-padded samples
+                    node_energy = node_energy[:batch_size]
+                    batch_energy += float(jnp.sum(node_energy))
+
+            total_energy += batch_energy
+
             if "y" in structure.task_map:
                 y_node = structure.task_map["y"]
                 predictions = final_states.nodes[y_node].z_mu
-                predictions = predictions.reshape(batch_size, -1)
-                targets = batch["y"]
+                padded_batch_size = batch_size + pad_size
+                predictions = predictions.reshape(padded_batch_size, -1)
+                # Trim padded samples
+                predictions = predictions[:batch_size]
+                targets = batch["y"][:batch_size]
 
                 pred_labels = jnp.argmax(predictions, axis=1)
                 true_labels = jnp.argmax(targets, axis=1)
@@ -634,8 +659,9 @@ def evaluate_pcn(
                 total_correct += int(correct)
                 total_samples += batch_size
 
+        avg_energy = total_energy / total_samples if total_samples > 0 else 0.0
         accuracy = total_correct / total_samples if total_samples > 0 else 0.0
-        return {"accuracy": accuracy}
+        return {"energy": avg_energy, "accuracy": accuracy}
 
     else:
         # ── JIT eval path ──

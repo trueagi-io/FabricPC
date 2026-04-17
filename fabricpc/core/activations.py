@@ -310,9 +310,9 @@ class SoftmaxActivation(ActivationBase):
     @staticmethod
     def derivative(x: jnp.ndarray, config: Dict[str, Any] = None) -> jnp.ndarray:
         s = SoftmaxActivation.forward(x)
-        return s * (
-            1 - s
-        )  # Note: This is a simplification; full Jacobian is more complex
+        # Diagonal of the Jacobian diag(s) - s @ s.T.
+        # The off-diagonal terms are omitted; valid for element-wise PC gradients.
+        return s * (1 - s)
 
 
 class HardTanhActivation(ActivationBase):
