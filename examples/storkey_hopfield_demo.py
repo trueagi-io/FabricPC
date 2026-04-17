@@ -24,11 +24,28 @@ Usage:
     python examples/storkey_hopfield_demo.py --k_values 50 --noise_levels 0.0 --n_trials 2 --num_epochs 1
 
 Results:
-python examples/storkey_hopfield_demo.py --k_values "50" --noise_levels "2.0" --strength "2.0"
-     K    Noise    Hopfield%         MLP%     Delta%    p-value   Sig        d
-------------------------------------------------------------------------------
-    50      2.0 61.25+/-0.22 58.17+/-0.19      +3.08     0.0000     *    4.745
-------------------------------------------------------------------------------
+python examples/storkey_hopfield_demo.py --k_values 500 --noise_levels 2.0 --strength 2.0 --n_trials 5 --num_epochs 5
+     K    Noise    Hopfield Accuracy %         MLP Accuracy %     Delta%    p-value   Sig        d
+---------------------------------------------------------------------------------------------------
+   500      2.0          65.17+/-0.42            61.36+/-0.32      +3.80     0.0001     *    6.885
+---------------------------------------------------------------------------------------------------
+
+python examples/storkey_hopfield_demo.py --k_values 5,10,20,50,100,500 --noise_levels 0.0,0.5,1.0,1.5,2.0 --strength 1.0 --n_trials 10 --num_epochs 5
+RESULTS SUMMARY (sweep K examples per class, Gaussian noise with std n):
+  Hopfield strength: 1.0
+  Trials: 10, Epochs: 5
+Delta Accuracy Heatmap (Hopfield - MLP, percentage points):
+
+     K  n=0.0  n=0.5  n=1.0  n=1.5  n=2.0
+-----------------------------------------
+     5  -1.2   -0.9   -0.7   -0.5   -0.5
+    10  -1.5   -1.1   -0.8   -0.3   -0.1
+    20  -0.1   -0.0   +0.7   +1.7*  +2.4*
+    50  -0.8*  -0.4   +0.7*  +1.7*  +2.6*
+   100  -0.4*  +0.0   +1.0*  +1.9*  +3.0*
+   500  +0.2   +0.7*  +1.9*  +2.9*  +3.8*
+
+  * = significant at p<0.05
 """
 
 from jax_setup import set_jax_flags_before_importing_jax
@@ -72,32 +89,32 @@ def parse_args():
     parser.add_argument(
         "--k_values",
         type=str,
-        default="5,10,20,50,100,500",
-        help="Comma-separated K (shots per class) values (default: 5,10,20,50,100,500)",
+        default="500",
+        help="Comma-separated K (shots per class) values (default: 500)",
     )
     parser.add_argument(
         "--noise_levels",
         type=str,
-        default="0.0,0.5,1.0,1.5,2.0",
-        help="Comma-separated noise std values (default: 0.0,0.5,1.0,1.5,2.0)",
+        default="2.0",
+        help="Comma-separated noise std values (default: 2.0)",
     )
     parser.add_argument(
         "--n_trials",
         type=int,
-        default=10,
+        default=5,
         help="Number of paired trials per condition (default: 10)",
     )
     parser.add_argument(
         "--num_epochs",
         type=int,
-        default=5,
-        help="Training epochs per trial (default: 5)",
+        default=1,
+        help="Training epochs per trial (default: 1)",
     )
     parser.add_argument(
         "--strength",
         type=str,
-        default="1.0",
-        help="Hopfield strength: float >=0 or 'None' for learnable (default: 1.0)",
+        default="2.0",
+        help="Hopfield strength: float >=0 or 'None' for learnable (default: 2.0)",
     )
     parser.add_argument(
         "--verbose",

@@ -522,13 +522,122 @@ class TestSkipConnectionScaling:
         a_h1 = structure.nodes["h1"].node_info.scaling_config.forward_scale[h1_edge]
         assert abs(a_h1 - 1.0 / math.sqrt(10)) < 1e-10
 
-    def test_apply_variance_scaling_property(self):
-        """NodeBase has apply_variance_scaling=True, SkipConnection has False."""
+    def test_slot_is_variance_scalable_property(self):
+        """Linear slots are scalable, SkipConnection slots are not."""
         from fabricpc.nodes.skip_connection import SkipConnection
 
-        assert Linear.apply_variance_scaling is True
-        assert IdentityNode.apply_variance_scaling is True
-        assert SkipConnection.apply_variance_scaling is False
+        linear_slots = Linear.get_slots()
+        assert linear_slots["in"].is_variance_scalable is True
+        assert linear_slots["in"].is_skip_connection is False
+
+        identity_slots = IdentityNode.get_slots()
+        assert identity_slots["in"].is_variance_scalable is True
+        assert identity_slots["in"].is_skip_connection is False
+
+        skip_slots = SkipConnection.get_slots()
+        assert skip_slots["in"].is_variance_scalable is False
+        assert skip_slots["in"].is_skip_connection is True
+
+    def test_is_skip_connection_forces_unscalable(self):
+        """is_skip_connection=True auto-forces is_variance_scalable=False."""
+        from fabricpc.nodes.base import SlotSpec
+
+        slot = SlotSpec(name="skip", is_multi_input=True, is_skip_connection=True)
+        assert slot.is_skip_connection is True
+        assert slot.is_variance_scalable is False
+
+        # Explicit is_variance_scalable=True gets overridden
+        slot2 = SlotSpec(
+            name="skip",
+            is_multi_input=True,
+            is_variance_scalable=True,
+            is_skip_connection=True,
+        )
+        assert slot2.is_variance_scalable is False
+
+    def test_metadata_slot_does_not_inflate_depth(self):
+        """A non-scalable metadata slot (is_skip_connection=False) should not inflate L."""
+        from fabricpc.nodes.base import NodeBase, SlotSpec
+
+        class MetadataNode(NodeBase):
+            """Node with a metadata slot (like a mask) that is not a skip connection."""
+
+            @staticmethod
+            def get_slots():
+                return {
+                    "in": SlotSpec(name="in", is_multi_input=False),
+                    "meta": SlotSpec(
+                        name="meta", is_multi_input=False, is_variance_scalable=False
+                    ),
+                }
+
+            @staticmethod
+            def get_weight_fan_in(source_shape, config):
+                return source_shape[-1]
+
+            @staticmethod
+            def initialize_params(key, node_shape, input_shapes, weight_init, config):
+                from fabricpc.core.types import NodeParams
+                import jax
+
+                weights = {}
+                for edge_key, in_shape in input_shapes.items():
+                    if ":in" in edge_key:
+                        weights[edge_key] = jax.random.normal(
+                            key, (in_shape[-1], node_shape[-1])
+                        )
+                return NodeParams(weights, {})
+
+            @staticmethod
+            def forward(params, inputs, state, node_info):
+                import jax.numpy as jnp
+
+                x = inputs[next(k for k in inputs if k.endswith(":in"))]
+                edge_key = next(k for k in params.weights if ":in" in k)
+                z_mu = jnp.matmul(x, params.weights[edge_key])
+                error = state.z_latent - z_mu
+                state = state._replace(z_mu=z_mu, error=error)
+                state = node_info.node_class.energy_functional(state, node_info)
+                return jnp.sum(state.energy), state
+
+        # Build graph: x -> meta_node (with meta slot) -> y
+        # Also connect a "meta" source to meta_node's meta slot
+        x = IdentityNode(shape=(10,), name="x")
+        meta_src = IdentityNode(shape=(10,), name="meta_src")
+        mn = MetadataNode(
+            shape=(10,),
+            name="mn",
+            weight_init=MuPCInitializer(),
+        )
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, meta_src, mn, y],
+            edges=[
+                Edge(source=x, target=mn.slot("in")),
+                Edge(source=meta_src, target=mn.slot("meta")),
+                Edge(source=mn, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(),
+        )
+        # L should be 1 (no skip connections), NOT 2
+        # mn: fan_in=10, K=1, L=1 -> a = 1/sqrt(10)
+        mn_in_edge = next(
+            e for e in structure.nodes["mn"].node_info.in_edges if ":in" in e
+        )
+        a_mn = structure.nodes["mn"].node_info.scaling_config.forward_scale[mn_in_edge]
+        expected_a = 1.0 / math.sqrt(10)
+        assert abs(a_mn - expected_a) < 1e-10
+
+        # Meta edge should be unscaled (1.0)
+        mn_meta_edge = next(
+            e for e in structure.nodes["mn"].node_info.in_edges if ":meta" in e
+        )
+        a_meta = structure.nodes["mn"].node_info.scaling_config.forward_scale[
+            mn_meta_edge
+        ]
+        assert a_meta == 1.0
 
 
 # ============================================================================

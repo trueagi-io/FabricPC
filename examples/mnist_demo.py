@@ -5,6 +5,12 @@ Predictive Coding Network — MNIST Demo
 Train a small predictive coding network on MNIST using the object API.
 
 For optimizer selection and advanced controls, see mnist_advanced.py.
+
+Results:
+Avg training time: 1.37s per epoch
+20 epochs
+Test Accuracy: 98.14%
+4 nodes, 3 edges, 218,058 parameters
 """
 
 from jax_setup import set_jax_flags_before_importing_jax

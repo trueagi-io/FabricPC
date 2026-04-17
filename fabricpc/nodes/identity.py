@@ -140,7 +140,7 @@ class IdentityNode(NodeBase):
                 z_mu = z_mu + x
 
         z_mu = (
-            z_mu * node_info.node_config["scale"]
+            z_mu * node_info.node_config["gain"]
         )  # Apply fixed scaling factor (default is 1.0)
 
         # For identity node, pre_activation equals z_mu (no activation transform)
