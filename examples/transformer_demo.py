@@ -2,22 +2,28 @@
 Transformer Predictive Coding Demo
 
 Character-level language modeling on TinyShakespeare with PC or backprop training.
-PC training is not yet tuned — treat as a starting point for experimentation.
+PC training still suffers from some poor variance scaling — treat as a starting point for experimentation.
 
 Usage:
-    PYTHONPATH=. python examples/transformer_demo.py
-    PYTHONPATH=. python examples/transformer_demo.py --mode backprop --lr 1e-3 --num_epochs 3
-    PYTHONPATH=. python examples/transformer_demo.py --mode pc --num_blocks 2
+    python examples/transformer_demo.py
+    python examples/transformer_demo.py --mode backprop --lr 1e-3 --num_epochs 3
+    python examples/transformer_demo.py --mode pc --num_blocks 2
 
 Results: PC training
-Final train loss: 321.3981
-Final test loss: 2.6311, Perplexity: 13.89
+Final train energy: 221.06
+Final test loss: 2.5351, Perplexity: 12.62
 Prompt: 'ROMEO: '
 ----------------------------------------
-ROMEO: ashoos WIIINigat wat
+ROMEO: asharshar'dsheameara
 ----------------------------------------
-Removing graph skip connections, but added improve internal variance scaling:
-Final test loss: 3.3160, Perplexity: 27.55
+
+Backprop Training
+Final test loss: 1.6892, Perplexity: 5.41
+Prompt: 'ROMEO: '
+----------------------------------------
+ROMEO: go,
+bound this merry
+----------------------------------------
 """
 
 from jax_setup import set_jax_flags_before_importing_jax
@@ -33,12 +39,17 @@ import time
 from typing import Tuple, Dict, List, Optional, Any
 from tqdm.auto import tqdm
 
-from fabricpc.nodes import Linear, TransformerBlock, IdentityNode, SkipConnection
+from fabricpc.nodes import (
+    Linear,
+    TransformerBlock,
+    IdentityNode,
+    SkipConnection,
+    EmbeddingNode,
+)
 from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.graph import initialize_params, FeedforwardStateInit
 from fabricpc.core.mupc import MuPCConfig
 from fabricpc.core.activations import (
-    IdentityActivation,
     SoftmaxActivation,
     GeluActivation,
 )
@@ -107,10 +118,13 @@ def parse_args():
         help="Number of epochs (supports fractional)",
     )
     parser.add_argument(
-        "--infer_steps", type=int, default=11, help="PC inference steps"
+        "--infer_steps",
+        type=int,
+        default=None,
+        help="PC inference steps (default: auto)",
     )
     parser.add_argument(
-        "--eta_infer", type=float, default=0.05, help="PC inference step size"
+        "--eta_infer", type=float, default=0.1, help="PC inference step size"
     )
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -129,15 +143,22 @@ def create_transformer_model(
     ff_dim: int,
     rope_theta: float,
     rng_key: jax.Array,
-    infer_steps: int = 10,
-    eta_infer: float = 0.01,
+    infer_steps: int = None,
+    eta_infer: float = 0.1,
 ) -> Tuple:
     """Create a transformer language model. Returns (structure, params)."""
-    input_node = IdentityNode(shape=(seq_len, vocab_size), name="input")
-    embed = Linear(
+    if infer_steps is None:
+        infer_steps = 3 * (2 * num_blocks + 2)
+
+    input_node = IdentityNode(shape=(seq_len,), name="input")
+    # Use EmbeddingNode (table lookup) instead of Linear with one-hot input.
+    # Linear + one-hot + muPC produces Var ~ 1/V (embedding variance collapse)
+    # because muPC assumes dense input with fan_in active features. Use unit normal weight initialization and no muPC scaling for the embedding node.
+    embed = EmbeddingNode(
         shape=(seq_len, embed_dim),
-        activation=IdentityActivation(),
-        weight_init=MuPCInitializer(),
+        vocab_size=vocab_size,
+        embed_dim=embed_dim,
+        weight_init=NormalInitializer(std=1.0),
         name="embed",
     )
     mask_node = IdentityNode(shape=(1, seq_len, seq_len), name="mask")
@@ -171,7 +192,7 @@ def create_transformer_model(
         shape=(seq_len, vocab_size),
         activation=SoftmaxActivation(),
         energy=CrossEntropyEnergy(),
-        weight_init=NormalInitializer(std=1.0 / jnp.sqrt(embed_dim)),
+        weight_init=MuPCInitializer(),
         name="output",
     )
     nodes.append(output_node)
@@ -183,7 +204,7 @@ def create_transformer_model(
         task_map=TaskMap(x=input_node, y=output_node, causal_mask=mask_node),
         graph_state_initializer=FeedforwardStateInit(),
         inference=InferenceSGDNormClip(
-            eta_infer=eta_infer, infer_steps=infer_steps, max_norm=0.5, latent_decay=0.0
+            eta_infer=eta_infer, infer_steps=infer_steps, max_norm=5.0, latent_decay=0.0
         ),
         scaling=MuPCConfig(include_output=False),
     )
@@ -310,12 +331,11 @@ def main(args=None):
         "test", seq_len=args.seq_len, batch_size=args.batch_size, shuffle=False
     )
 
-    # Linear embedding requires one-hot x; wrap loaders accordingly.
+    # EmbeddingNode takes integer indices directly (cast to float for JAX).
     vocab_size = train_loader.vocab_size
-    eye = np.eye(vocab_size, dtype=np.float32)
 
-    class _OneHotLoader:
-        """Thin wrapper that one-hot encodes x from CharDataLoader."""
+    class _IndexLoader:
+        """Thin wrapper: passes integer token indices as x, one-hot as y."""
 
         def __init__(self, base):
             self.base = base
@@ -325,10 +345,10 @@ def main(args=None):
 
         def __iter__(self):
             for x_idx, y_oh in self.base:
-                yield {"x": eye[x_idx], "y": y_oh}
+                yield {"x": x_idx.astype(np.float32), "y": y_oh}
 
-    train_loader_oh = _OneHotLoader(train_loader)
-    test_loader_oh = _OneHotLoader(test_loader)
+    train_loader_oh = _IndexLoader(train_loader)
+    test_loader_oh = _IndexLoader(test_loader)
 
     print(
         f"Vocab: {vocab_size}, Train batches: {len(train_loader)}, Test batches: {len(test_loader)}"
@@ -633,11 +653,11 @@ def main(args=None):
         tracker.close()
 
     # Results
-    print(f"\nFinal train loss: {energy_history[-1][-1]:.4f}")
+    print(f"\nFinal train energy: {energy_history[-1][-1]:.4f}")
     if eval_results and eval_results[-1]:
         final_eval = eval_results[-1]
         print(
-            f"Final test loss: {final_eval['loss']:.4f}, Perplexity: {final_eval['perplexity']:.2f}"
+            f"Test loss: {final_eval['loss']:.4f}, Perplexity: {final_eval['perplexity']:.2f}"
         )
 
     return trained_params, structure, train_loader, test_loader

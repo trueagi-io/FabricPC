@@ -437,6 +437,9 @@ def train_pcn(
             else:
                 batch_energies.append(energy)
 
+            progress.set_postfix(
+                energy=f"{energy:.4f}", epoch=f"{epoch_idx + 1}/{total_epochs}"
+            )
             progress.update(1)
 
         iter_results.append(batch_energies)

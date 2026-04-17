@@ -181,20 +181,19 @@ class TransformerBlock(NodeBase):
     def get_slots():
         return {
             "in": SlotSpec(name="in", is_multi_input=False),  # Input to the block
-            "mask": SlotSpec(name="mask", is_multi_input=False),  # Optional mask
+            "mask": SlotSpec(
+                name="mask", is_multi_input=False, is_variance_scalable=False
+            ),  # Optional mask (binary data, not a signal)
         }
 
     @staticmethod
     def get_weight_fan_in(source_shape: Tuple[int, ...], config: Dict[str, Any]) -> int:
         """Return embed_dim as fan_in for muPC scaling.
 
-        The TransformerBlock uses pre-norm LayerNorm as its first operation.
-        Since LN(a*x) = LN(x) for scalar a > 0, the external muPC
-        forward_scale is absorbed — it affects neither the forward variance
-        nor the topdown gradient (the chain-rule factor 'a' cancels with
-        LN's 1/a Jacobian scaling). All internal variance control is
-        handled inside forward(). We return embed_dim for consistency
-        with the framework's per-edge fan_in convention.
+        Pre-norm LayerNorm absorbs the external muPC forward_scale a
+        (LN(a*x) = LN(x)), so forward_learning() compensates by scaling
+        weight gradients by a. We return embed_dim so muPC computes the
+        correct a for this node's width.
         """
         return source_shape[-1]
 
@@ -389,6 +388,38 @@ class TransformerBlock(NodeBase):
 
         total_energy = jnp.sum(state.energy)
         return total_energy, state
+
+    @staticmethod
+    def forward_learning(
+        params: NodeParams,
+        inputs: Dict[str, jnp.ndarray],
+        state: NodeState,
+        node_info: NodeInfo,
+    ) -> Tuple[NodeState, NodeParams]:
+        node_class = node_info.node_class
+        scaled_inputs = node_class._apply_forward_scaling(inputs, node_info)
+
+        (total_energy, new_state), params_grad = jax.value_and_grad(
+            node_class.forward, argnums=0, has_aux=True
+        )(params, scaled_inputs, state, node_info)
+
+        # Compensate for layernorm absorption by multiplying weight gradients by the "in" edge's forward_scale.
+        # LN(a*x) = LN(x) absorbs muPC forward scaling, so dE/dW is
+        # independent of a — making weight gradients ~1/a too large vs
+        # Linear nodes where dE/dW ∝ a*x. Multiply by a to compensate.
+        if node_info.scaling_config is not None:
+            a = 1.0
+            for edge_key, scale in node_info.scaling_config.forward_scale.items():
+                if edge_key.endswith(":in"):
+                    a = scale
+                    break
+            if a != 1.0:
+                scaled_weights = {k: g * a for k, g in params_grad.weights.items()}
+                params_grad = NodeParams(
+                    weights=scaled_weights, biases=params_grad.biases
+                )
+
+        return new_state, params_grad
 
     @staticmethod
     def _layernorm(

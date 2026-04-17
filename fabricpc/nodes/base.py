@@ -57,6 +57,15 @@ class SlotSpec:
     is_variance_scalable: bool = (
         True  # False = muPC leaves edges to this slot unscaled (scale 1.0)
     )
+    is_skip_connection: bool = (
+        False  # True = identity bypass path that counts toward muPC depth L
+    )
+
+    def __post_init__(self):
+        if self.is_skip_connection and self.is_variance_scalable:
+            raise ValueError(
+                "is_skip_connection and is_variance_scalable were both set to True, but skip connection slots should NOT be subject to muPC variance scaling"
+            )
 
 
 @dataclass(frozen=True)
@@ -151,15 +160,6 @@ class NodeBase(ABC):
     Subclasses set concrete default instances for activation, energy, latent_init,
     and weight_init in their ``__init__`` parameter defaults.
     """
-
-    # Whether muPC variance scaling is applied to edges arriving at this node.
-    # True (default): edges into this node are scaled by muPC (gain/sqrt(fan_in*K)).
-    # False: edges into this node are NOT scaled (pass-through at scale 1.0).
-    # SkipConnection sets this to False so the identity mapping is preserved
-    # through deep residual networks, preventing exponential signal decay.
-    # Post-synaptic nodes count their in_degree scaling factor only for nodes that set apply_variance_scaling=True.
-    # TODO deprecate this attribute - mupc now handles scaling by edge and input slot than by node output.
-    apply_variance_scaling: bool = True
 
     def __init__(
         self,

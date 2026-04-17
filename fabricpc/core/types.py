@@ -26,6 +26,7 @@ class SlotInfo:
     is_variance_scalable: (
         bool  # muPC scales edges to this slot (True) or leaves at 1.0 (False)
     )
+    is_skip_connection: bool  # Identity bypass path that counts toward muPC depth L
     in_neighbors: Tuple[str, ...]  # Tuple of node names connecting to this slot
 
 

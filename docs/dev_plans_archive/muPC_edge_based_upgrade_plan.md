@@ -344,3 +344,24 @@ N blocks → N+2 nodes (vs 2N+2), 2N+1 edges (vs 3N+2). Graph depth halved.
   │ K_slot          │ 1              │ 1              │                                                                                                                                                                                                                                                    
   └─────────────────┴────────────────┴────────────────┘
   
+Removed apply_variance_scaling from the codebase. 
+  - fabricpc/nodes/base.py: Removed class attribute and comment block from NodeBase                                                                                                                                                                                                                        
+  - fabricpc/nodes/skip_connection.py: Removed apply_variance_scaling: bool = False and updated docstrings to reference is_variance_scalable on the slot
+  - fabricpc/core/mupc.py: Removed legacy fallback checks in both _count_unscalable_depth() and compute_mupc_scalings()                                                                                                                                                                                    
+  - tests/test_mupc.py: Replaced test_apply_variance_scaling_property with test_slot_is_variance_scalable_property that tests the slot-level flag        
+
+Add new SlotSpec attribute is_skip_connection as condition for muPC depth scaling
+  Core dataclass changes:
+  - fabricpc/nodes/base.py — Added is_skip_connection: bool = False to SlotSpec with __post_init__ that auto-forces is_variance_scalable=False
+  - fabricpc/core/types.py — Added is_skip_connection: bool to SlotInfo
+  - fabricpc/builder/graph_builder.py — Propagates is_skip_connection from SlotSpec to SlotInfo
+
+  muPC logic:
+  - fabricpc/core/mupc.py — Renamed _count_unscalable_depth() to _count_skip_connections_depth(), now checks s.is_skip_connection instead of not s.is_variance_scalable. Updated docstrings.
+
+  Node slot updates:
+  - SkipConnection — is_skip_connection=True (replaces explicit is_variance_scalable=False)
+  - LinearResidual skip slot — is_skip_connection=True
+  - Mlp2ResidualNode residual slot — is_skip_connection=True
+  - MhaResidualNode mask slot — is_variance_scalable=False (bug fix, was missing)
+  - TransformerBlock mask — unchanged (already correct)

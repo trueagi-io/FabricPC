@@ -28,6 +28,14 @@ Usage:
     for d in 8 16 32 64 128; do
       python examples/mupc_demo.py --mode linear_residual --num_blocks $d
     done
+
+| Depth   | accuracy   |
+|---------|------------|
+| 8       | 90.8       |
+| 16      | 89.7%      |
+| 32      | 82.4%      |
+| 64      | 77.1%      |
+| 128     | 70.1%      |
 """
 
 import sys

@@ -484,7 +484,7 @@ class TestIdentityNode:
                 "name": "node",
                 "shape": node_shape,
                 "type": "identity",
-                "scale": 1.0,
+                "gain": 1.0,
             },
             activation=IdentityActivation(),
             energy=GaussianEnergy(),

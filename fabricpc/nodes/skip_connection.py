@@ -2,7 +2,7 @@
 Skip connection node for residual architectures.
 
 SkipConnection is identical to IdentityNode in behavior — it sums inputs
-and passes them through — but sets ``apply_variance_scaling = False``.
+and passes them through — but its slot has ``is_variance_scalable=False``.
 This tells muPC to leave edges into this node unscaled (scale = 1.0),
 preserving the identity mapping that carries signal through deep networks.
 
@@ -45,15 +45,13 @@ class SkipConnection(NodeBase):
     Skip connection node: sums inputs without muPC variance scaling.
 
     Identical to IdentityNode in forward behavior (sums all inputs, no
-    learnable parameters), but ``apply_variance_scaling = False`` tells
-    muPC to leave incoming edges at scale 1.0.
+    learnable parameters). Its slot has ``is_variance_scalable=False``,
+    so muPC leaves incoming edges at scale 1.0.
 
     This preserves the identity mapping through deep residual networks.
     Without this, muPC's in-degree formula scales skip edges by
     1/sqrt(K), causing exponential signal decay (0.707^L for K=2).
     """
-
-    apply_variance_scaling: bool = False
 
     def __init__(
         self,
@@ -74,7 +72,12 @@ class SkipConnection(NodeBase):
     @staticmethod
     def get_slots() -> Dict[str, SlotSpec]:
         return {
-            "in": SlotSpec(name="in", is_multi_input=True, is_variance_scalable=False)
+            "in": SlotSpec(
+                name="in",
+                is_multi_input=True,
+                is_skip_connection=True,
+                is_variance_scalable=False,
+            )
         }
 
     @staticmethod
@@ -107,11 +110,11 @@ class SkipConnection(NodeBase):
             else:
                 pre_activation = pre_activation + x
 
-        z_mu = pre_activation  # no activation function, so pre_activation = z_mu
+        z_mu = pre_activation  # no activation function applied: z_mu = pre_activation
         error = state.z_latent - z_mu
         state = state._replace(
             pre_activation=pre_activation,
-            z_mu=z_mu,  # no activation function, so pre_activation = z_mu
+            z_mu=z_mu,
             error=error,
         )
 

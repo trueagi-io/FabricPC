@@ -25,10 +25,12 @@ Scaling is computed per in-edge, based on the target slot's properties:
     through deep residual networks.
 
 Residual depth L is the number of nodes along the longest path that have
-at least one slot with is_variance_scalable=False. These are the
+at least one slot with is_skip_connection=True. These are the
 variance-accumulating merge points where skip and compute paths sum.
-For pure sequential chains (no non-scalable slots), L=1. For residual
-networks with D blocks, L=D.
+For pure sequential chains (no skip connections), L=1. For residual
+networks with D blocks, L=D. Slots with is_variance_scalable=False but
+is_skip_connection=False (e.g., metadata like attention masks) do not
+contribute to L.
 
 Top-down gradient scaling combines chain rule correction with Jacobian
 compensation for deep gradient propagation:
@@ -140,21 +142,21 @@ class MuPCConfig:
             )
 
 
-def _count_unscalable_depth(
+def _count_skip_connections_depth(
     nodes: Dict[str, Any],
     edges: Dict[str, Any],
     node_order: List[str],
 ) -> int:
     """
-    Count the number of nodes with non-scalable slots along the longest
+    Count the number of nodes with skip connection slots along the longest
     path in the graph. This is the "residual depth" — the number of
     variance-accumulating merge points where skip and compute paths sum.
 
     A node counts as a merge point if it has at least one slot with
-    is_variance_scalable=False, OR if it has the legacy node-level
-    apply_variance_scaling=False flag.
+    is_skip_connection=True. Slots that are merely non-scalable (e.g.,
+    metadata like attention masks) do not count.
 
-    In a pure sequential chain (no non-scalable slots), returns 0.
+    In a pure sequential chain (no skip connections), returns 0.
     In a ResNet with D residual blocks, returns D.
 
     The caller uses max(skip_depth, 1) as L in the scaling formula so that
@@ -165,7 +167,6 @@ def _count_unscalable_depth(
     for node_name in node_order:
         node = nodes[node_name]
         node_info = node.node_info
-        node_class = node_info.node_class
 
         if node_info.in_degree == 0:
             skip_counts[node_name] = 0
@@ -178,15 +179,10 @@ def _count_unscalable_depth(
             pred_skips = skip_counts.get(edge_info.source, 0)
             max_pred_skips = max(max_pred_skips, pred_skips)
 
-        # Check if this node has any non-scalable slot
-        has_unscalable = any(
-            not s.is_variance_scalable for s in node_info.slots.values()
-        )
-        # Legacy fallback: node-level apply_variance_scaling=False
-        if not getattr(node_class, "apply_variance_scaling", True):
-            has_unscalable = True
+        # Check if this node has any skip connection slot
+        has_skip = any(s.is_skip_connection for s in node_info.slots.values())
 
-        if has_unscalable:
+        if has_skip:
             skip_counts[node_name] = max_pred_skips + 1
         else:
             skip_counts[node_name] = max_pred_skips
@@ -242,7 +238,7 @@ def compute_mupc_scalings(
     # along the longest path. For pure chains this is 0, for ResNets it's
     # the number of residual blocks. Using max(depth, 1) ensures
     # pure chains degenerate to the original a = gain/sqrt(fan_in * K).
-    skip_depth = _count_unscalable_depth(nodes, edges, iteration_order)
+    skip_depth = _count_skip_connections_depth(nodes, edges, iteration_order)
     L = max(skip_depth, 1)
 
     scalings = {}
@@ -263,22 +259,6 @@ def compute_mupc_scalings(
         is_output = node_name in output_nodes
         if is_output and not config.include_output:
             scalings[node_name] = None
-            continue
-
-        # Legacy: node-level apply_variance_scaling=False overrides all slots
-        applies_scaling = getattr(node_class, "apply_variance_scaling", True)
-
-        if not applies_scaling:
-            forward_scale = {ek: 1.0 for ek in node_info.in_edges}
-            topdown_grad_scale = {ek: 1.0 for ek in node_info.in_edges}
-            weight_grad_scale = {ek: 1.0 for ek in node_info.in_edges}
-
-            scalings[node_name] = MuPCScalingFactors(
-                forward_scale=forward_scale,
-                self_grad_scale=1.0,
-                topdown_grad_scale=topdown_grad_scale,
-                weight_grad_scale=weight_grad_scale,
-            )
             continue
 
         node_config = node_info.node_config
