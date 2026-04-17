@@ -83,7 +83,7 @@ with GraphNamespace("encoder"):
 
 **Single-input slot receiving multiple edges**
 
-If a slot has `is_multi_input=False` (e.g., StorkeyHopfield's `"probe"`), it accepts only one edge. Use `IdentityNode` as a merge point if you need to combine multiple sources.
+If a slot has `is_multi_input=False` (e.g., StorkeyHopfield's `"in"`), it accepts only one edge. Use `IdentityNode` as a merge point if you need to combine multiple sources.
 
 ---
 

@@ -334,7 +334,9 @@ class Mlp2ResidualNode(NodeBase):
     def get_slots():
         return {
             "in": SlotSpec("in", False),
-            "residual": SlotSpec("residual", False, is_skip_connection=True),
+            "residual": SlotSpec(
+                "residual", False, is_variance_scalable=False, is_skip_connection=True
+            ),
         }
 
     @staticmethod

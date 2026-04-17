@@ -87,7 +87,12 @@ class LinearResidual(FlattenInputMixin, NodeBase):
     def get_slots() -> Dict[str, SlotSpec]:
         return {
             "in": SlotSpec(name="in", is_multi_input=True, is_variance_scalable=True),
-            "skip": SlotSpec(name="skip", is_multi_input=True, is_skip_connection=True),
+            "skip": SlotSpec(
+                name="skip",
+                is_multi_input=True,
+                is_variance_scalable=False,
+                is_skip_connection=True,
+            ),
         }
 
     @staticmethod

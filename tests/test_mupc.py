@@ -539,21 +539,30 @@ class TestSkipConnectionScaling:
         assert skip_slots["in"].is_skip_connection is True
 
     def test_is_skip_connection_forces_unscalable(self):
-        """is_skip_connection=True auto-forces is_variance_scalable=False."""
+        """is_skip_connection=True requires is_variance_scalable=False."""
         from fabricpc.nodes.base import SlotSpec
 
-        slot = SlotSpec(name="skip", is_multi_input=True, is_skip_connection=True)
+        slot = SlotSpec(
+            name="skip",
+            is_multi_input=True,
+            is_skip_connection=True,
+            is_variance_scalable=False,
+        )
         assert slot.is_skip_connection is True
         assert slot.is_variance_scalable is False
 
-        # Explicit is_variance_scalable=True gets overridden
-        slot2 = SlotSpec(
-            name="skip",
-            is_multi_input=True,
-            is_variance_scalable=True,
-            is_skip_connection=True,
-        )
-        assert slot2.is_variance_scalable is False
+        # is_skip_connection=True with default is_variance_scalable (True) raises
+        with pytest.raises(ValueError):
+            SlotSpec(name="skip", is_multi_input=True, is_skip_connection=True)
+
+        # is_skip_connection=True with explicit is_variance_scalable=True raises
+        with pytest.raises(ValueError):
+            SlotSpec(
+                name="skip",
+                is_multi_input=True,
+                is_variance_scalable=True,
+                is_skip_connection=True,
+            )
 
     def test_metadata_slot_does_not_inflate_depth(self):
         """A non-scalable metadata slot (is_skip_connection=False) should not inflate L."""
