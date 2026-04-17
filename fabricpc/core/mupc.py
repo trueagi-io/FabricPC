@@ -32,6 +32,11 @@ networks with D blocks, L=D. Slots with is_variance_scalable=False but
 is_skip_connection=False (e.g., metadata like attention masks) do not
 contribute to L.
 
+  input → h1 → skip1(+) → h2 → skip2(+) → h3 → skip3(+) → output
+           │      ↑         │      ↑         │      ↑
+           └──────┘         └──────┘         └──────┘
+              L=1              L=2              L=3
+
 Top-down gradient scaling combines chain rule correction with Jacobian
 compensation for deep gradient propagation:
 

@@ -152,6 +152,14 @@ SkipConnection is functionally identical to IdentityNode — it sums inputs and 
 
 Use SkipConnection for residual/skip paths. Use IdentityNode for summation points where all inputs are independent and should be variance-scaled.
 
+```
+prev ──→ Linear(h1) ──→ SkipConnection(res1) ──→ next
+  │       (transform)     (sums at scale 1.0)
+  │                              ↑
+  └──────────────────────────────┘
+           (identity skip, unscaled)
+```
+
 ```python
 from fabricpc.nodes import Linear, SkipConnection
 
@@ -179,6 +187,19 @@ z_mu = activation(W @ x_in + b) + x_skip
 - `"skip"` (multi-input, `is_skip_connection=True`): Receives the identity skip path. No weight matrix, passes through at scale 1.0.
 
 LinearResidual halves graph depth compared to the Linear + SkipConnection pattern (one PC node per residual block instead of two).
+
+```
+              ┌─────────────────────────────────────┐
+              │         LinearResidual node         │
+              │                                     │
+prev ─────────┤  slot("in")  → W @ x + b → act()    │
+              │                             ↓       │
+              │                            (+) ──→ z_mu ──→ next
+              │                             ↑       │
+prev ─────────┤  slot("skip") ──────────────┘       │
+              │   (identity, unscaled)              │
+              └─────────────────────────────────────┘
+```
 
 ```python
 from fabricpc.nodes import LinearResidual
@@ -234,6 +255,15 @@ Fine-grained transformer components for deeper PC inference. Instead of a monoli
 - `LnMlp1Node`: Layer norm and first MLP layer
 - `Mlp2ResidualNode`: Second MLP layer with residual connection
 - `VocabProjectionNode`: Final projection to vocabulary
+
+```
+                         ┌───────────────────────────── one transformer block ────────────┐
+                         │                                                                │
+tokens → EmbeddingNode ──┼──→ MhaResidualNode(+) ──→ LnMlp1Node ──→ Mlp2ResidualNode(+) ──┼──→ VocabProjectionNode → logits
+                         │    │      (skip)   ↑                     │      (skip)    ↑    │
+                         │    └───────────────┘                     └────────────────┘    │
+                         └────────────────────────────────────────────────────────────────┘
+```
 
 This decomposition allows PC inference to optimize each stage separately, potentially enabling more fine-grained credit assignment.
 
@@ -330,6 +360,10 @@ FabricPC supports arbitrary graph topologies beyond simple feedforward chains.
 
 Standard layer-by-layer architecture:
 
+```
+input ──→ hidden1 ──→ hidden2 ──→ output
+```
+
 ```python
 nodes = [input, hidden1, hidden2, output]
 edges = [
@@ -343,15 +377,28 @@ edges = [
 
 Edges that bypass layers. Multi-input slots automatically sum contributions:
 
+```
+input ──→ hidden1 ──→ sum_node ──→ output
+  └──────────────────────┘
+          (skip)
+```
+
 ```python
 # Direct connection from input to hidden2
-Edge(source=pixels, target=hidden2.slot("in"))
+Edge(source=hidden1, target=sum_node.slot("in"))
+Edge(source=pixels, target=sum_node.slot("in"))
 
-# hidden2 now receives:
+# output now receives:
 # hidden1_output + pixels_output
 ```
 
 ResNet-style architectures are straightforward:
+
+```
+input ──→ hidden1 ──→ hidden2(+) ──→ output
+  └───────────────────────┘
+          (skip)
+```
 
 ```python
 # Residual block: hidden2 receives both the transformed signal
@@ -359,29 +406,43 @@ ResNet-style architectures are straightforward:
 edges = [
     Edge(source=input, target=hidden1.slot("in")),
     Edge(source=hidden1, target=hidden2.slot("in")),
-    Edge(source=input, target=hidden2.slot("in")),  # skip connection
+    Edge(source=input, target=hidden2.slot("skip")),  # skip connection
 ]
 ```
 
-For deep muPC-scaled networks, use `SkipConnection` or `LinearResidual` nodes instead of plain multi-input slots. These nodes mark their skip slots as `is_variance_scalable=False`, preventing muPC from attenuating the identity path — which is essential for training networks with many residual blocks. See the [Initialization and Scaling guide](05_initialization_and_scaling.md#skip-connections-and-residual-networks) for details.
+For identity pass though use `SkipConnection` or `LinearResidual` nodes. These nodes mark their skip slots as `is_variance_scalable=False`, preventing muPC from attenuating the identity path — which is essential for training networks with many residual blocks. See the [Initialization and Scaling guide](05_initialization_and_scaling.md#skip-connections-and-residual-networks) for details.
 
 ### Lateral Connections
 
-Edges between nodes at the same depth level:
+Edges between nodes at the same or different depth level:
+
+```
+input ──→ path_a ──→ output_a
+             ↕
+input ──→ path_b ──→ output_b
+```
 
 ```python
 # Two parallel processing paths that communicate
 Edge(source=path_a_node, target=path_b_node.slot("in"))
 Edge(source=path_b_node, target=path_a_node.slot("in"))
 ```
+In highly connected graphs, where each in-edge is intended to be transformed to a common embedding space, Linear node accepts multiple inputs for this purpose, allocating a weight matrix to each in-edge.
 
 ### Cyclic Graphs
 
 Edges that create loops are supported:
 
+```
+input ──→ hidden1 ──→ hidden2 ──→ output
+            ↑                   │ 
+            └───────────────────┘
+```
+
 ```python
-# Recurrent connection
-Edge(source=hidden, target=hidden.slot("in"))
+# Cyclic connection
+Edge(source=hidden1, target=hidden2.slot("in"))
+Edge(source=hidden2, target=hidden1.slot("in"))
 ```
 
 The builder will emit a warning about topological sort when cycles are detected. Cyclic graphs may require more inference steps for information to propagate around the loops and reach equilibrium.

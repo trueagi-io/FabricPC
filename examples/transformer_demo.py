@@ -624,11 +624,11 @@ def main(args=None):
 
     # Generate samples
     prompts = [
+        "ROMEO: ",
         "Know, Rome, that",
         "MENENIUS:",
         "the more virtuous",
         "by his looks",
-        "ROMEO: ",
         "To be or not to be",
         "The king",
     ]
