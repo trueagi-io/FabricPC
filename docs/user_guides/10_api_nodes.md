@@ -129,6 +129,80 @@ where `s = softplus(raw_strength)` if `hopfield_strength=None` (learnable), othe
 
 ---
 
+## SkipConnection
+
+`fabricpc.nodes.SkipConnection`
+
+Passthrough node for residual/skip paths. Sums all inputs without muPC variance scaling. Functionally identical to `IdentityNode`, but its slot has `is_variance_scalable=False` and `is_skip_connection=True`, telling muPC to leave incoming edges at scale 1.0.
+
+```python
+from fabricpc.nodes import SkipConnection
+
+skip = SkipConnection(shape=(128,), name="res1")
+# Connect with: Edge(source, skip.slot("in"))
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `shape` | `Tuple[int, ...]` | required | Output shape excluding batch |
+| `name` | `str` | required | Node name |
+| `activation` | `ActivationBase` | `IdentityActivation()` | Activation function |
+| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
+| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+
+**Slots:** `"in"` (multi-input, `is_variance_scalable=False`, `is_skip_connection=True`)
+
+**muPC fan_in:** Always returns `1` (weightless node).
+
+**Difference from IdentityNode:** IdentityNode's `"in"` slot has `is_variance_scalable=True`, so muPC scales incoming edges by `1/sqrt(K_slot)`. SkipConnection leaves all edges unscaled, preserving the identity mapping through deep residual networks.
+
+---
+
+## LinearResidual
+
+`fabricpc.nodes.LinearResidual`
+
+Linear residual node: `z_mu = activation(W @ x_in + b) + x_skip`. Combines a linear transformation (on the `"in"` slot) with an identity residual connection (on the `"skip"` slot) in one PC node.
+
+```python
+from fabricpc.nodes import LinearResidual
+
+res = LinearResidual(
+    shape=(128,),
+    name="res1",
+    activation=TanhActivation(),
+    weight_init=MuPCInitializer(),
+)
+# Connect with:
+# Edge(source, res.slot("in"))    — transform path (scaled)
+# Edge(source, res.slot("skip"))  — identity skip (unscaled)
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `shape` | `Tuple[int, ...]` | required | Output shape excluding batch |
+| `name` | `str` | required | Node name |
+| `activation` | `ActivationBase` | `IdentityActivation()` | Activation function |
+| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
+| `use_bias` | `bool` | `True` | Whether to include a bias term |
+| `flatten_input` | `bool` | `False` | If True, flatten all input dims for dense behavior |
+| `weight_init` | `InitializerBase` | `KaimingInitializer()` | Weight initializer |
+| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+
+**Slots:**
+- `"in"` (multi-input, `is_variance_scalable=True`): Transform path with weight matrix, scaled by muPC.
+- `"skip"` (multi-input, `is_variance_scalable=False`, `is_skip_connection=True`): Identity skip path, no weight matrix, passes through at scale 1.0.
+
+**Weight shape:** Same as Linear — `(in_features, out_features)` or `(in_numel, out_numel)` if `flatten_input=True`. Only `"in"` slot edges get weight matrices.
+
+**muPC fan_in:** Same as Linear — `source_shape[-1]` or `prod(source_shape)` if `flatten_input=True`.
+
+---
+
 ## TransformerBlock
 
 `fabricpc.nodes.TransformerBlock`
@@ -168,7 +242,7 @@ block = TransformerBlock(
 ```
 x → LayerNorm → MHA → + → LayerNorm → FFN → +
 └─────────────────────┘ └────────────────────┘
-     (residual)              (residual)
+        (skip)                 (skip)
 ```
 
 ---

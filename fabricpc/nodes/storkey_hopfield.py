@@ -160,7 +160,7 @@ class StorkeyHopfield(NodeBase):
 
     @staticmethod
     def get_slots() -> Dict[str, SlotSpec]:
-        """One single-input slot (probe). Input shape must match node output shape (D)."""
+        """One single-input slot. Input shape must match node output shape (D)."""
         return {"in": SlotSpec(name="in", is_multi_input=False)}
 
     @staticmethod

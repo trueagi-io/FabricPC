@@ -111,13 +111,22 @@ W ~ U(minval, maxval)
 
 **muPC (Maximal Update Parameterization for Predictive Coding)** is the recommended initialization and scaling strategy for networks with more than a few layers. It maintains O(1) activations, errors, and gradients across arbitrary graph topologies, from 2 layers to 100+ layers.
 
+muPC achieves this through four complementary scaling mechanisms:
+
+1. **Kaiming fan_in scaling** — normalizes for weight matrix width
+2. **Per-slot in-degree scaling (K_slot)** — normalizes for multiple inputs summing into a slot
+3. **Residual depth scaling (L)** — normalizes for variance accumulation across residual+skip merge points
+4. **Saturative activation compensation** — normalizes gradients for activations like tanh and GELU whose derivatives are < 1
+
+These are combined in a single per-edge scaling factor computed automatically from the graph topology, enabling stable training of networks with 100+ layers.
+
 ### Key Idea
 
 muPC decouples weight initialization from forward pass scaling:
 
 1. **Initialization**: Weights are drawn from a simple distribution (e.g., `N(0, 1)`) independent of network width or depth.
 
-2. **Forward scaling**: Width and depth scaling is applied during the forward pass via per-edge scaling factors computed automatically from the graph topology.
+2. **Forward scaling**: Width and depth scaling is applied during the forward pass via per-edge scaling factors computed automatically from the graph topology. Each edge is scaled based on the properties of its target slot, not the whole node.
 
 This separation allows the same initialization to work across different network depths and widths without retuning hyperparameters.
 
@@ -149,55 +158,241 @@ structure = graph(
 
 ### The Scaling Formula
 
-muPC computes a scaling factor `a` for each edge based on the target node type.
+muPC computes a scaling factor `a` for each incoming edge based on the target node and slot.
 
 #### Hidden Nodes
 
-For edges into hidden nodes:
+For edges into hidden nodes with `is_variance_scalable=True`:
 
 ```
-a = gain / sqrt(fan_in * K)
+a = gain / sqrt(fan_in * K_slot * L)
 ```
 
 where:
 - `gain`: The activation function's variance gain (e.g., `sqrt(5/3)` for tanh, `sqrt(2)` for ReLU)
-- `fan_in`: The input dimension of the weight matrix (source node's flattened shape)
-- `K`: The target node's in-degree (number of incoming edges)
+- `fan_in`: The weight matrix fan_in (from `get_weight_fan_in()` — see Kaiming Fan_in below)
+- `K_slot`: The in-degree of the **specific slot** receiving this edge (not the whole node's in-degree)
+- `L`: The residual depth — number of nodes with skip connection slots along the longest path (see Residual Depth below)
 
 This scaling ensures:
-- Width invariance: O(1) activations as `fan_in` increases
-- Depth invariance: O(1) activations as the number of layers increases
-- Multi-input handling: Correct normalization when multiple edges sum into a node
+- **Width invariance**: O(1) activations as `fan_in` increases
+- **Multi-input invariance**: O(1) activations when multiple edges sum into a slot
+- **Depth invariance**: O(1) activations as the number of residual blocks increases
+- **Activation invariance**: Correct variance preservation for any activation function
+
+For edges into slots with `is_variance_scalable=False` (e.g., skip connections, attention masks), the scaling factor is 1.0 — the input passes through unmodified.
 
 #### Output Nodes
 
 For edges into output nodes (when `include_output=True`):
 
 ```
-a = gain / (fan_in * sqrt(K))
+a = gain / (fan_in * sqrt(K_slot * L))
 ```
 
 The stronger `1/fan_in` scaling (instead of `1/sqrt(fan_in)`) is used because output nodes typically don't have downstream dependencies that would amplify variance. This scaling is optimal for regression tasks with identity activation and Gaussian energy (MSE loss).
 
-### Top-Down Gradient Scaling
+### Kaiming Fan_in Scaling
 
-muPC also scales gradients flowing backward through the network during learning:
+Each node class implements `get_weight_fan_in()` to report the input dimension of its weight matrix:
+
+| Node Type | fan_in | Notes |
+|-----------|--------|-------|
+| Linear (`flatten_input=False`) | `source_shape[-1]` | Last-axis features |
+| Linear (`flatten_input=True`) | `prod(source_shape)` | All dims flattened |
+| LinearResidual | Same as Linear | Only "in" slot has weights |
+| TransformerBlock | `embed_dim` | Last axis of input shape |
+| IdentityNode | 1 | No weight matrix |
+| SkipConnection | 1 | No weight matrix |
+
+For weighted nodes, this is the standard Kaiming convention — the number of input features to each output neuron. For weightless nodes, `fan_in=1` so the formula reduces to `a = gain / sqrt(K_slot * L)`.
+
+### Per-Slot In-Degree Scaling (K_slot)
+
+Unlike simple per-node in-degree scaling, muPC computes K (in-degree) independently for each **slot** on a node. This matters for nodes with multiple input slots like `LinearResidual`:
+
+```python
+# LinearResidual has two slots:
+#   "in"   — receives transform path (is_variance_scalable=True)
+#   "skip" — receives identity path  (is_variance_scalable=False)
+
+res = LinearResidual(shape=(128,), activation=TanhActivation(),
+                     weight_init=MuPCInitializer(), name="res1")
+
+edges = [
+    Edge(source=prev, target=res.slot("in")),    # K_slot = 1 for "in"
+    Edge(source=prev, target=res.slot("skip")),   # not scaled (skip slot)
+]
+```
+
+Here, the "in" slot has `K_slot=1` (one incoming edge) and gets the full muPC formula. The "skip" slot has `is_variance_scalable=False`, so its edge passes through at scale 1.0 regardless of how many edges connect to it.
+
+If multiple edges connect to the same scalable slot, each is scaled by `1/sqrt(K_slot)`:
+
+```python
+# Two edges into the same "in" slot: K_slot = 2
+Edge(source=a, target=node.slot("in"))
+Edge(source=b, target=node.slot("in"))
+# Each edge scaled by gain / sqrt(fan_in * 2 * L)
+```
+
+### Residual Depth Scaling (L)
+
+In residual networks, the identity (skip) path preserves signal at scale 1.0 while each residual block adds variance from the compute path. Without depth scaling, total variance grows linearly with the number of blocks.
+
+**L** is the number of nodes with at least one `is_skip_connection=True` slot along the longest path in the graph. It represents the number of variance-accumulating merge points.
+
+| Topology | L | Effect |
+|----------|---|--------|
+| Pure sequential chain | 1 | No depth factor: `a = gain / sqrt(fan_in * K_slot)` |
+| ResNet with D blocks | D | Each block's compute path scaled by `1/sqrt(L)` |
+| Mixed architecture | max skip depth | Computed from the longest skip-connection path |
+
+With L in the denominator, each residual block contributes `O(1/L)` variance. Over L blocks, total variance grows as `(1 + 1/L)^L`, which is bounded by approximately **e** (~2.72) — stable regardless of depth.
+
+**What counts toward L**: Only slots with `is_skip_connection=True`. Slots that are merely non-scalable (like attention mask slots with `is_variance_scalable=False, is_skip_connection=False`) do **not** contribute to L.
+
+### Activation Gain and Jacobian Compensation
+
+muPC uses two activation-dependent factors to maintain proper signal and gradient flow.
+
+#### Variance Gain
+
+The `variance_gain()` method returns the Kaiming-style gain for each activation — the factor needed to preserve unit variance through the activation function:
+
+| Activation | `variance_gain()` | Rationale |
+|------------|-------------------|-----------|
+| Identity | 1.0 | Linear passthrough |
+| ReLU | sqrt(2) | Zeroes negative half |
+| LeakyReLU(α) | sqrt(2 / (1 + α²)) | Attenuates negative half |
+| GELU | sqrt(2) | Similar to ReLU |
+| Tanh | sqrt(5/3) | Saturating compression |
+| HardTanh | sqrt(5/3) | Saturating compression |
+| Sigmoid | 1.0 | — |
+| Softmax | 1.0 | — |
+
+This gain appears in the forward scaling formula, ensuring that `Var(activation(a * W @ x))` remains O(1).
+
+#### Jacobian Gain
+
+The `jacobian_gain()` method compensates for saturating activations that cause per-hop gradient decay. The per-hop Jacobian `diag(act'(z)) @ (a*W)` has RMS singular value proportional to `gain * rms(act'(z))`. For saturating activations, `rms(act'(z)) < 1`, causing gradients to shrink as `(gain * rms(act'))^L` over L hops.
+
+The Jacobian gain normalizes this to ~1.0 per hop:
+
+```
+jacobian_gain = 1 / (gain * rms(act'(z)))
+```
+
+| Activation | `jacobian_gain()` | `rms(act'(z))` |
+|------------|-------------------|-----------------|
+| Identity | 1.0 | 1.0 |
+| ReLU | 1.0 | 1/sqrt(2) |
+| LeakyReLU(α) | 1.0 | sqrt((1+α²)/2) |
+| GELU | 1.168 | ~0.606 |
+| Tanh | 1.261 | ~0.614 |
+| HardTanh | 1.261 | ~0.614 |
+
+For non-saturating activations (Identity, ReLU, LeakyReLU), `jacobian_gain = 1.0` — gradients propagate without decay. For saturating activations (Tanh, GELU, HardTanh), the Jacobian gain is > 1, compensating for the activation's slope being < 1 on average.
+
+### Gradient Scaling
+
+muPC scales three types of gradients to maintain O(1) magnitude across depth.
+
+#### Top-Down (Latent) Gradient Scaling
+
+During inference, gradients flow from downstream nodes back to upstream nodes to update latent states. muPC scales these gradients per edge:
 
 ```
 c_td = a * jacobian_gain
 ```
 
-where:
-- `a`: The forward scaling factor
-- `jacobian_gain`: The activation's average Jacobian magnitude (e.g., `1/sqrt(3)` for tanh)
+This combines two corrections:
 
-This scaling combines two corrections:
+1. **Chain rule correction (a)**: The forward scaling pre-multiplies inputs (`x → a*x`) before the `value_and_grad` closure. Autodiff yields `dE/d(a*x)`; multiplying by `a` restores the correct gradient `dE/dx`.
 
-1. **Chain rule correction**: Compensates for the forward scaling `a` to maintain correct gradients.
+2. **Jacobian compensation (jacobian_gain)**: Normalizes the per-hop gradient propagation factor to ~1.0, preventing exponential gradient vanishing in deep networks with saturating activations.
 
-2. **Jacobian compensation**: Accounts for the average slope of the activation function, preventing exponential gradient vanishing in deep networks with saturating activations (tanh, GELU, sigmoid).
+For edges into non-scalable slots (`is_variance_scalable=False`), the top-down gradient scale is 1.0.
 
-Together, these factors ensure O(1) gradients across depth.
+#### Self-Gradient Scaling
+
+The self-gradient `dE/dz` from a node's energy functional is already O(1) when forward scaling maintains O(1) activations. The self-gradient scale is always **1.0**.
+
+#### Weight Gradient Scaling
+
+Weight gradient scaling is currently **1.0** per edge — the optimizer's learning rate handles gradient magnitude. This is a placeholder for future exploration of per-edge learning rate adaptation.
+
+### Skip Connections and Residual Networks
+
+Deep residual networks require special handling to prevent muPC from attenuating the identity (skip) path. FabricPC uses the `SlotSpec` attributes `is_variance_scalable` and `is_skip_connection` to control this.
+
+#### The Problem with Naive In-Degree Scaling
+
+Consider a residual block where both the skip and transform paths feed into a node with in-degree K=2. Without special handling, both paths would be scaled by `1/sqrt(2)` ≈ 0.707. Over L blocks, the skip path's signal decays as `0.707^L` — destroying the identity mapping that makes residual networks trainable.
+
+#### SlotSpec Attributes
+
+Each input slot on a node has two muPC-relevant flags:
+
+- **`is_variance_scalable`**: When `True` (default), muPC applies the full scaling formula. When `False`, the edge passes through at scale 1.0.
+
+- **`is_skip_connection`**: When `True`, the slot is a variance-accumulating merge point and contributes to the residual depth L. This flag implies `is_variance_scalable=False` — setting both to `True` raises a `ValueError`.
+
+#### SkipConnection Node
+
+`SkipConnection` is a passthrough node identical to `IdentityNode` in behavior — it sums inputs and passes them through. Its slot has `is_variance_scalable=False` and `is_skip_connection=True`, so muPC leaves all incoming edges at scale 1.0.
+
+```python
+from fabricpc.nodes import Linear, SkipConnection
+
+linear = Linear(shape=(128,), activation=TanhActivation(),
+                weight_init=MuPCInitializer(), name="h1")
+skip = SkipConnection(shape=(128,), name="res1")
+
+edges = [
+    Edge(source=prev, target=linear.slot("in")),   # scaled by muPC
+    Edge(source=prev, target=skip.slot("in")),      # unscaled (skip)
+    Edge(source=linear, target=skip.slot("in")),    # unscaled (skip)
+]
+```
+
+#### LinearResidual Node
+
+`LinearResidual` combines a linear transform and a residual sum in a single PC node, using two slots with different scaling behavior:
+
+- **"in"** slot (`is_variance_scalable=True`): Receives the transform path. Has a weight matrix. Scaled by muPC.
+- **"skip"** slot (`is_skip_connection=True`): Receives the identity path. No weight matrix. Passes through at scale 1.0.
+
+```python
+from fabricpc.nodes import LinearResidual
+
+prev = stem
+for i in range(num_blocks):
+    res = LinearResidual(shape=(W,), activation=TanhActivation(),
+                         weight_init=MuPCInitializer(), name=f"res{i}")
+    edges += [
+        Edge(source=prev, target=res.slot("in")),    # transform path (scaled)
+        Edge(source=prev, target=res.slot("skip")),   # identity skip (unscaled)
+    ]
+    prev = res
+```
+
+#### When to Use Which
+
+- **SkipConnection** (2 nodes per block): More PC inference flexibility — each block has two latent variables to optimize. Better for architectures where skip and transform paths need independent inference dynamics.
+
+- **LinearResidual** (1 node per block): More efficient — halves the number of PC nodes and inference steps. Better when you want a compact residual network.
+
+### Arbitrary Graph Support
+
+muPC works on any DAG topology, not just sequential chains or ResNets. Per-edge scaling based on slot properties handles:
+
+- **Multi-input nodes**: K_slot normalizes for multiple sources into one slot
+- **Skip connections**: Non-scalable slots preserve identity mappings
+- **Branching paths**: Each branch endpoint is independently scaled at its target
+- **Lateral connections**: Edges between parallel paths are scaled normally
+
+The residual depth L is a global property computed once from the full graph. The per-slot in-degree K_slot is a local property of each slot. Together, they provide correct scaling for any topology — feedforward chains, ResNets, U-Nets, multi-path architectures with lateral connections, and more.
 
 ### The `include_output` Flag
 
@@ -225,7 +420,7 @@ scaling = MuPCConfig(include_output=True)
 
 With muPC, you can train networks from 2 to 100+ layers without tuning the learning rate, weight initialization, or inference parameters based on depth. The same hyperparameters work across different architectures.
 
-Example: A 16-layer muPC network trains as stably as a 2-layer network with the same learning rate.
+The combination of depth L scaling, Jacobian compensation for saturating activations, and identity-preserving skip connections ensures that activations, prediction errors, and gradients all remain O(1) regardless of network depth. For example, a 128-block ResNet with muPC trains stably on MNIST with the same hyperparameters as an 8-block version.
 
 ## State Initialization Strategies
 

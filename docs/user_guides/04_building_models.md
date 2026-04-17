@@ -121,10 +121,10 @@ For muPC scaling purposes, identity nodes typically use `fan_in=1`.
 An associative memory node that blends a residual path with a learned projection:
 
 ```
-z_mu = activation(probe/(1+s) + (probe @ W)*s/(1+s) + bias)
+z_mu = activation(x/(1+s) + (x @ W)*s/(1+s) + bias)
 ```
 
-**Input slots**: `"probe"` (single-input, NOT `"in"`)
+**Input slots**: `"in"` (single-input)
 
 The `hopfield_strength` parameter `s` controls the blend between the identity path and the Hopfield projection. It is a learnable parameter wrapped in softplus to ensure positive values.
 
@@ -139,11 +139,60 @@ hopfield = StorkeyHopfield(
     hopfield_strength=1.0,
 )
 
-# Connect using the "probe" slot:
-Edge(source=source_node, target=hopfield.slot("probe"))
+Edge(source=source_node, target=hopfield.slot("in"))
 ```
 
-**Important**: StorkeyHopfield uses the `"probe"` slot, not the default `"in"` slot. You must explicitly specify `.slot("probe")` when creating edges.
+### SkipConnection
+
+A passthrough node for residual/skip paths with no learnable parameters.
+
+**Input slots**: `"in"` (multi-input, `is_variance_scalable=False`)
+
+SkipConnection is functionally identical to IdentityNode — it sums inputs and passes them through. The key difference is that its slot has `is_variance_scalable=False` and `is_skip_connection=True`, which tells muPC to leave incoming edges unscaled (scale 1.0). This preserves the identity mapping that carries signal through deep residual networks.
+
+Use SkipConnection for residual/skip paths. Use IdentityNode for summation points where all inputs are independent and should be variance-scaled.
+
+```python
+from fabricpc.nodes import Linear, SkipConnection
+
+linear = Linear(shape=(128,), activation=TanhActivation(),
+                weight_init=MuPCInitializer(), name="h1")
+skip = SkipConnection(shape=(128,), name="res1")
+
+edges = [
+    Edge(source=prev, target=linear.slot("in")),   # transform path (scaled)
+    Edge(source=prev, target=skip.slot("in")),      # skip path (unscaled)
+    Edge(source=linear, target=skip.slot("in")),    # transform -> sum (unscaled)
+]
+```
+
+### LinearResidual
+
+A linear transformation (residual) combined with a skip connection in a single PC node:
+
+```
+z_mu = activation(W @ x_in + b) + x_skip
+```
+
+**Input slots**:
+- `"in"` (multi-input, `is_variance_scalable=True`): Receives the transform path. Has a weight matrix, scaled by muPC.
+- `"skip"` (multi-input, `is_skip_connection=True`): Receives the identity skip path. No weight matrix, passes through at scale 1.0.
+
+LinearResidual halves graph depth compared to the Linear + SkipConnection pattern (one PC node per residual block instead of two).
+
+```python
+from fabricpc.nodes import LinearResidual
+
+prev = stem
+for i in range(num_blocks):
+    res = LinearResidual(shape=(W,), activation=TanhActivation(),
+                         weight_init=MuPCInitializer(), name=f"res{i}")
+    edges += [
+        Edge(source=prev, target=res.slot("in")),    # transform path
+        Edge(source=prev, target=res.slot("skip")),   # identity skip
+    ]
+    prev = res
+```
 
 ### TransformerBlock
 
@@ -207,8 +256,8 @@ Edge(source=hidden1, target=hidden2)  # implicit .slot("in")
 Some nodes require explicit slot specification:
 
 ```python
-# StorkeyHopfield uses "probe" slot
-Edge(source=encoder, target=hopfield.slot("probe"))
+# StorkeyHopfield uses "in" slot (single-input)
+Edge(source=encoder, target=hopfield.slot("in"))
 
 # TransformerBlock has "in" and "mask" slots
 Edge(source=embeddings, target=block.slot("in"))
@@ -313,6 +362,8 @@ edges = [
     Edge(source=input, target=hidden2.slot("in")),  # skip connection
 ]
 ```
+
+For deep muPC-scaled networks, use `SkipConnection` or `LinearResidual` nodes instead of plain multi-input slots. These nodes mark their skip slots as `is_variance_scalable=False`, preventing muPC from attenuating the identity path — which is essential for training networks with many residual blocks. See the [Initialization and Scaling guide](05_initialization_and_scaling.md#skip-connections-and-residual-networks) for details.
 
 ### Lateral Connections
 
