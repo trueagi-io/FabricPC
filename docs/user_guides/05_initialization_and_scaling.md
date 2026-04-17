@@ -160,6 +160,23 @@ structure = graph(
 
 muPC computes a scaling factor `a` for each incoming edge based on the target node and slot.
 
+```
+                        Per-Edge Scaling Overview
+
+  source ──────── edge ──────── target:slot
+                    │
+                    ↓
+          ┌───────────────────────┐
+          │ is_variance_scalable? │
+          │                       │
+          │  Yes:                 │   No (skip/mask):
+          │  a = gain             │   a = 1.0
+          │     / sqrt(fan_in     │   (pass through)
+          │           * K_slot    │
+          │           * L)        │
+          └───────────────────────┘
+```
+
 #### Hidden Nodes
 
 For edges into hidden nodes with `is_variance_scalable=True`:
@@ -241,6 +258,18 @@ Edge(source=b, target=node.slot("in"))
 In residual networks, the identity (skip) path preserves signal at scale 1.0 while each residual block adds variance from the compute path. Without depth scaling, total variance grows linearly with the number of blocks.
 
 **L** is the number of nodes with at least one `is_skip_connection=True` slot along the longest path in the graph. It represents the number of variance-accumulating merge points.
+
+```
+How L is counted (ResNet with 3 blocks):
+
+input ──→ h1 ──→ skip1(+) ──→ h2 ──→ skip2(+) ──→ h3 ──→ skip3(+) ──→ output
+           │        ↑           │        ↑           │        ↑
+           └────────┘           └────────┘           └────────┘
+                L=1                 L=2                 L=3
+
+Only nodes with is_skip_connection=True slots count toward L.
+Nodes like h1, h2, h3 (no skip slots) do not increment L.
+```
 
 | Topology | L | Effect |
 |----------|---|--------|
@@ -329,6 +358,18 @@ Deep residual networks require special handling to prevent muPC from attenuating
 #### The Problem with Naive In-Degree Scaling
 
 Consider a residual block where both the skip and transform paths feed into a node with in-degree K=2. Without special handling, both paths would be scaled by `1/sqrt(2)` ≈ 0.707. Over L blocks, the skip path's signal decays as `0.707^L` — destroying the identity mapping that makes residual networks trainable.
+
+```
+Skip signal amplitude through 10 residual blocks:
+
+  With naive scaling (both paths × 0.707):    Without skip scaling (muPC):
+  Block 1:  ████████████████████  1.00         ████████████████████  1.00
+  Block 2:  ██████████████        0.71         ████████████████████  1.00
+  Block 3:  ██████████            0.50         ████████████████████  1.00
+  Block 4:  ███████               0.35         ████████████████████  1.00
+       ...     ...                 ...              ...               ...
+  Block 10: █                     0.03         ████████████████████  1.00
+```
 
 #### SlotSpec Attributes
 

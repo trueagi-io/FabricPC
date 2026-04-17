@@ -1,5 +1,11 @@
 """
 Transformer components for JAX predictive coding networks.
+
+Decomposed transformer pipeline — each stage is a separate PC node:
+
+  tokens → Embedding → MhaResidual(+) → LnMlp1 → Mlp2Residual(+) → VocabProjection → logits
+                        │ (skip)   ↑              │ (skip)    ↑
+                        └──────────┘              └───────────┘
 """
 
 from typing import Dict, Any, Tuple, Optional

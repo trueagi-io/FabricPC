@@ -14,6 +14,30 @@ FabricPC implements this framework as an iterative optimization process over a g
 
 Predictive coding operates as a **bilevel optimization** process with two nested loops:
 
+```
+ ┌─ Outer Loop: Learning ─────────────────────────────────────┐
+ │                                                            │
+ │   ┌─ Inner Loop: Inference ──────────────────────┐         │
+ │   │                                              │         │
+ │   │   clamp x, y                                 │         │
+ │   │       ↓                                      │         │
+ │   │                                              │         │
+ │   │   z ← z - η_infer · ∂E/∂z   (repeat N)       │         │
+ │   │                                              │         │
+ │   │       ↓                                      │         │
+ │   │   converged z*                               │         │
+ │   │                                              │         │
+ │   └──────────────────────────────────────────────┘         │
+ │       ↓                                                    │
+ │                                                            │
+ │   ∂E/∂W computed locally at each node from z*              │
+ │       ↓                                                    │
+ │                                                            │ 
+ │   W ← W - η_learn · optimizer(∂E/∂W)                       │
+ │                                                            │
+ └────────────────────────────────────────────────────────────┘
+```
+
 ### Inner Loop: Inference
 
 The **inference loop** minimizes energy by updating latent states `z_latent` while keeping weights fixed. This is gradient descent on the energy landscape:

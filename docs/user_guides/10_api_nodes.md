@@ -197,6 +197,19 @@ res = LinearResidual(
 - `"in"` (multi-input, `is_variance_scalable=True`): Transform path with weight matrix, scaled by muPC.
 - `"skip"` (multi-input, `is_variance_scalable=False`, `is_skip_connection=True`): Identity skip path, no weight matrix, passes through at scale 1.0.
 
+```
+              ┌─────────────────────────────────────┐
+              │         LinearResidual node         │
+              │                                     │
+prev ─────────┤  slot("in")  → W @ x + b → act()    │
+              │                             ↓       │
+              │                            (+) ──→ z_mu
+              │                             ↑       │
+prev ─────────┤  slot("skip") ──────────────┘       │
+              │   (identity, unscaled)              │
+              └─────────────────────────────────────┘
+```
+
 **Weight shape:** Same as Linear — `(in_features, out_features)` or `(in_numel, out_numel)` if `flatten_input=True`. Only `"in"` slot edges get weight matrices.
 
 **muPC fan_in:** Same as Linear — `source_shape[-1]` or `prod(source_shape)` if `flatten_input=True`.
@@ -256,5 +269,14 @@ Fine-grained transformer components in `fabricpc.nodes.transformer_v2`. Each com
 - **`LnMlp1Node`** — LayerNorm + first MLP projection
 - **`Mlp2ResidualNode`** — Second MLP projection with residual
 - **`VocabProjectionNode`** — Project back to vocabulary dimension
+
+```
+                         ┌───────────────────────────── one transformer block ────────────┐
+                         │                                                                │
+tokens → EmbeddingNode ──┼──→ MhaResidualNode(+) ──→ LnMlp1Node ──→ Mlp2ResidualNode(+) ──┼──→ VocabProjectionNode → logits
+                         │    │      (skip)   ↑                     │      (skip)    ↑    │
+                         │    └───────────────┘                     └────────────────┘    │
+                         └────────────────────────────────────────────────────────────────┘
+```
 
 See `fabricpc.nodes.transformer_v2` module for detailed API.
