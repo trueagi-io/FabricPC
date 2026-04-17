@@ -9,12 +9,13 @@ from the graph topology — no manual scaling needed.
 
 Two residual block styles are supported (--mode flag):
 
-  skip (default): Linear + SkipConnection (2 PC nodes per block)
+  skip: Linear + SkipConnection (2 PC nodes per block)
       prev -> Linear(W, Tanh) -> SkipConnection(sum)
         |                              ^
         +------------------------------+  (identity skip path)
 
-  linear_residual: LinearResidual (1 PC node per block, half graph depth)
+
+  linear_residual (default): LinearResidual (1 PC node per block, half graph depth)
       prev -> LinearResidual(W, Tanh, skip=prev)
 
 Both use edge-based muPC scaling: "in" slot edges get full variance
@@ -22,11 +23,11 @@ scaling, "skip" slot edges pass through at scale 1.0.
 
 Usage:
     python examples/mupc_demo.py
-    python examples/mupc_demo.py --mode linear_residual --num_blocks 32
+    python examples/mupc_demo.py --mode skip --num_blocks 32
     python examples/mupc_demo.py --num_blocks 4 --verbose
 
     for d in 8 16 32 64 128; do
-      python examples/mupc_demo.py --mode linear_residual --num_blocks $d
+      python examples/mupc_demo.py --num_blocks $d
     done
 
 | Depth   | accuracy   |
@@ -120,9 +121,9 @@ def parse_args():
     parser.add_argument(
         "--mode",
         choices=["skip", "linear_residual"],
-        default="skip",
+        default="linear_residual",
         help="Residual block style: 'skip' (Linear+SkipConnection, 2 nodes/block) "
-        "or 'linear_residual' (LinearResidual, 1 node/block). Default: skip",
+        "or 'linear_residual' (LinearResidual, 1 node/block). Default: linear_residual",
     )
     parser.add_argument(
         "--verbose",

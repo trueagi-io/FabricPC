@@ -3,6 +3,11 @@ Custom Conv2D Node — MNIST Demo
 
 Create a custom node type by subclassing NodeBase, implementing a
 forward pass with JAX's lax.conv, and training on MNIST.
+
+Architecture::
+
+    input(28,28,1) ──→ conv1(26,26,16) ──→ conv2(24,24,32) ──→ output(10)
+                        3x3, ReLU           3x3, ReLU         flatten, Sigmoid
 """
 
 from jax_setup import set_jax_flags_before_importing_jax

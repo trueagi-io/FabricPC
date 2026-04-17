@@ -4,6 +4,14 @@ FabricPC Transformer V2 Execution Script
 Trains the decomposed PC Transformer model on the Tiny Shakespeare dataset,
 evaluates its performance, and generates sample text using temperature sampling.
 
+Architecture (each transformer block decomposed into separate PC nodes)::
+
+    input ──→ Embedding ──→ MhaResidual_0 ──→ LnMlp1_0 ──→ Mlp2Residual_0 ──→ ... ──→ VocabProjection
+                                  ↑                              ↑
+                             mask │                       (skip from MhaResidual)
+
+    Each block: MhaResidual(in + mask) ──→ LnMlp1 ──→ Mlp2Residual(in + skip)
+
 Supports two training modes:
   - Predictive Coding (PC): Local Hebbian learning with multi-GPU pmap support
   - Backpropagation: Standard end-to-end gradient training (single device)

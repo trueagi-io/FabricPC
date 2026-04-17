@@ -4,6 +4,11 @@ Predictive Coding Network — Multi-GPU MNIST
 
 Data-parallel training across multiple GPUs using pmap.
 Works with 1 GPU (falls back to single-device) but benefits from 2+.
+
+Architecture (replicated across N GPUs)::
+
+    pixels(784) ──→ hidden1(256) ──→ hidden2(64) ──→ class(10)
+     Identity        Sigmoid          Sigmoid        Softmax+CE
 """
 
 from jax_setup import set_jax_flags_before_importing_jax

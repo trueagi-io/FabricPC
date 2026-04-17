@@ -4,6 +4,11 @@ Predictive Coding Network — Advanced MNIST
 
 Custom training loop with optimizer selection and progress monitoring.
 
+Architecture::
+
+    pixels(784) ──→ h1(256) ──→ h2(128) ──→ h3(64) ──→ class(10)
+     Identity       Sigmoid     Sigmoid     Sigmoid     Sigmoid
+
 Usage:
     PYTHONPATH=. python examples/mnist_advanced.py --optimizer adamw
     FABRICPC_OPTIMIZER=ngd_diag PYTHONPATH=. python examples/mnist_advanced.py

@@ -1,5 +1,11 @@
 """
 Hyperparameter Tuning — Transformer on Tiny Shakespeare (multi-GPU)
+
+Architecture (auto-tuned via Optuna)::
+
+    input ──→ Embedding ──→ [MhaResidual ──→ LnMlp1 ──→ Mlp2Residual] x depth ──→ VocabProjection
+
+    Tunable: embed_dim, mlp_dim, num_heads, depth, infer_steps, eta_infer, lr, weight_init_std
 """
 
 from jax_setup import set_jax_flags_before_importing_jax

@@ -4,6 +4,11 @@ MNIST with Aim Experiment Tracking
 Tracks batch/epoch energy, weight/latent distributions, per-node energy,
 and inference dynamics using Aim.
 
+Architecture::
+
+    pixels(784) ──→ h1(256) ──→ h2(64) ──→ h3(64) ──→ class(10)
+     Identity       Sigmoid     Sigmoid     Sigmoid    Softmax+CE
+
 After running, launch the Aim UI with:  aim up
 
 Requirements: pip install fabricpc[viz]

@@ -5,8 +5,10 @@ Hopfield Pattern Recall Demo
 Tests the StorkeyHopfield node's ability to recall stored patterns from noisy
 probes — the classical Hopfield network benchmark.
 
-Architecture (3-node graph):
-    IdentityNode("probe") -> StorkeyHopfield("hopfield") -> IdentityNode("output")
+Architecture (3-node graph)::
+
+    probe ──→ StorkeyHopfield ──→ output
+               (pattern recall via attractor dynamics)
 
 Training: clamp x=noisy_probe, y=clean_pattern. W learns associative structure
     via PC energy minimization.

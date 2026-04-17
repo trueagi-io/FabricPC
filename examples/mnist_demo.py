@@ -4,6 +4,11 @@ Predictive Coding Network — MNIST Demo
 
 Train a small predictive coding network on MNIST using the object API.
 
+Architecture::
+
+    pixels(784) ──→ hidden1(256) ──→ hidden2(64) ──→ class(10)
+     Identity        Sigmoid          Sigmoid        Softmax+CE
+
 For optimizer selection and advanced controls, see mnist_advanced.py.
 
 Results:
