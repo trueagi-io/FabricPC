@@ -1,0 +1,172 @@
+
+› Let's go ahead and do that full comparison with EWC added on top of this tuned causal setting please.
+
+
+• I’m running the next full 20-task comparison in cFabricPC with the improved causal setting plus EWC enabled, keeping the rest of the setup aligned with the prior runs. After it finishes I’ll compare all three
+  runs directly from the saved result files.
+
+• Updated Plan
+  └ Running a third full cFabricPC comparison with EWC added on top of the improved causal setting, then comparing all runs side by side.
+    □ Run full 20-task CIFAR-100 experiment with causal tuning plus EWC in cFabricPC
+    □ Compare baseline vs causal-only vs causal+EWC metrics
+    □ Summarize whether EWC should also become part of the default cFabricPC CIFAR setup
+
+• The EWC comparison run is started. I’ll let it establish the output directory and then monitor it like the prior two full runs so I can do a clean three-way comparison at the end.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --ewc
+
+• The run is in the long compute phase. I’m checking the live process and the new result directory so I can confirm it’s progressing with the intended configuration.
+
+• Ran ps -ef | rg 'python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --ewc'
+  └ ni        196718   22269 99 05:55 ?        00:06:41 python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --ewc
+    ni        201490   22269  0 06:01 ?        00:00:00 /bin/bash -c ps -ef | rg 'python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --ewc'
+    ni        201492  201490  0 06:01 ?        00:00:00 rg python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --ewc
+
+• Explored
+  └ List split_cifar100
+
+─ Worked for 5m 54s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The EWC run is active and writing to ../results/split_cifar100/split_cifar100_seed42_20260419_055524. I’m waiting for task-level output and then I’ll compare it against the baseline and causal-only runs.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --ewc
+
+• I’m still waiting on the first buffered chunk from the EWC run. Once it starts emitting task results, I’ll be able to see whether EWC is helping or over-constraining the column updates.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --ewc
+
+• Early EWC results look mixed: task 1 improves over causal-only, but tasks 2 and 5 are weaker, and each task now pays extra consolidation overhead. I’m still letting the full run finish so we can judge it on
+  the final matrix rather than on a few early-task snapshots.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --ewc
+
+• I’m checking how far the EWC run has progressed before the next wait.
+
+• Explored
+  └ List split_cifar100_seed42_20260419_055524
+
+• Ran ps -p 196718 -o pid,etime,%cpu,%mem,cmd
+  └     PID     ELAPSED %CPU %MEM CMD
+     196718       20:56  116 11.1 python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --ewc
+
+─ Worked for 15m 16s ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The EWC run is around task 9-10 based on checkpoints, so it still needs time. I’m continuing to let it run so the comparison stays apples-to-apples with the two completed full runs.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --ewc
+
+• I’m checking the EWC run again now so I can see whether it’s approaching completion.
+
+• Explored
+  └ List split_cifar100_seed42_20260419_055524
+
+• Ran ps -p 196718 -o pid,etime,%cpu,%mem,cmd
+  └     PID     ELAPSED %CPU %MEM CMD
+     196718       26:08  115 12.1 python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --ewc
+
+─ Worked for 5m 12s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The EWC run is just past task 11 now. I’m letting it finish so I can compare the final matrix and forgetting directly against the baseline and causal-only runs.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --ewc
+
+• The EWC run is now clearly slower per task and still mixed in quality: some later tasks are a bit better, but several earlier/mid tasks are not. I’m waiting for the final matrix before deciding whether the
+  retention gain, if any, is worth the added cost and rigidity.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --ewc
+
+• I’m checking the EWC run again now so I can see whether it’s into the final tasks yet.
+
+• Ran ps -p 196718 -o pid,etime,%cpu,%mem,cmd
+  └     PID     ELAPSED %CPU %MEM CMD
+     196718       36:22  115 16.5 python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --ewc
+
+• Explored
+  └ List split_cifar100_seed42_20260419_055524
+
+─ Worked for 10m 14s ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The EWC run is through task 16 checkpoints, so only the tail remains. I’m waiting for the completion chunk and then I’ll do the three-way comparison from the saved matrices.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --ewc
+
+• The late-task chunk makes the pattern look worse for EWC: several later tasks degrade versus causal-only, while runtime rises and the causal predictor itself becomes less accurate. I’m waiting for the final
+  summary so I can confirm that impression quantitatively.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --ewc
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --ewc
+  └ WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+    I0000 00:00:1776592522.406871  196718 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders.
+    … +955 lines (ctrl + t to view transcript)
+
+    Done!
+
+─ Worked for 6m 55s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The EWC run finished. I’m computing a direct three-way comparison now across baseline, causal-only, and causal+EWC so I can tell you whether EWC should stay on top of the tuned causal setting.
+
+
+✔ You approved codex to run source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <... this time
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import json, pathlib, numpy as np
+  │ runs = {
+  │ … +38 lines
+  └ baseline diag_mean 0.6185 final_mean 0.3096 forget 0.3089 avg_test 0.6185 avg_train 0.7145 mix_mean 0.0 time_sum 521.0
+    causal diag_mean 0.6316 final_mean 0.3428 forget 0.2888 avg_test 0.6316 avg_train 0.7352 mix_mean 0.2284 time_sum 533.3
+    … +10 lines (ctrl + t to view transcript)
+    causal [0.242, 0.394, 0.406, 0.524, 0.682]
+    causal_ewc [0.236, 0.23, 0.358, 0.356, 0.7]
+
+• Updated Plan
+  └ The full EWC comparison finished and the three-way result is clear: causal-only improves retention, while adding EWC on top hurts final retention despite a small gain in diagonal accuracy.
+    ✔ Run full 20-task CIFAR-100 experiment with causal tuning plus EWC in cFabricPC
+    ✔ Compare baseline vs causal-only vs causal+EWC metrics
+    ✔ Summarize whether EWC should also become part of the default cFabricPC CIFAR setup
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Ran the full third comparison in cFabricPC with the tuned causal setting plus --ewc.
+
+  Results:
+
+  - Baseline: results/split_cifar100/split_cifar100_seed42_20260419_032658
+  - Causal-only tuned: results/split_cifar100/split_cifar100_seed42_20260419_041559
+  - Causal + EWC: results/split_cifar100/split_cifar100_seed42_20260419_055524
+
+  Key comparison:
+
+  - Baseline: diag_mean 0.6185, final_mean 0.3096, forget 0.3089
+  - Causal-only: diag_mean 0.6316, final_mean 0.3428, forget 0.2888
+  - Causal+EWC: diag_mean 0.6356, final_mean 0.3183, forget 0.3173
+
+  Interpretation:
+
+  - EWC slightly improves diagonal task accuracy over causal-only: +0.0040
+  - But it hurts the metric that matters most for continual retention:
+      - final_row_mean: -0.0245 vs causal-only
+      - forgetting: +0.0285 vs causal-only
+  - It also increases summed task training time:
+      - causal-only: 533.3s
+      - causal+EWC: 584.9s
+
+  So the current conclusion is: keep the causal tuning, do not enable EWC by default for this CIFAR setup.
+
+  Notable retention difference on the oldest five tasks:
+
+  - causal-only: [0.308, 0.270, 0.388, 0.300, 0.344]
+  - causal+EWC: [0.320, 0.214, 0.214, 0.262, 0.318]
+
+  I did not change defaults to turn on EWC. Current useful code changes remain:
+
+  - cFabricPC/examples/split_cifar100_continual.py
+  - cFabricPC/fabricpc/utils/helpers.py
+  - cFabricPC/fabricpc/utils/__init__.py
+
+  Next sensible options:
+
+  1. Stage the migration+tuning fixes in cFabricPC.
+  2. Sweep EWC at lower lambda values instead of the current 5000.0.
+  3. Tune the causal setting further now that 0.5 is clearly better than 0.0.
+ 
