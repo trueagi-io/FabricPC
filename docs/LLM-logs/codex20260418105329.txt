@@ -1,0 +1,935 @@
+Next step is the result-invalidating mechanism work: replace fabricated causal audit gains with real swap evaluations, then replace synthetic TransWeave
+  registration with model-derived measurements.
+
+
+› Yes, let's please next replace fabricated causal audit gains with real swap evaluations, then replace synthetic TransWeave
+    registration with model-derived measurements
+
+
+• I’m moving to the mechanism fixes now. First I’ll replace the causal audit’s estimated swap gains with actual masked evaluations on bounded batches, then
+  I’ll switch TransWeave registration over to measured activations and real composer params where the architecture supports it.
+
+• Explored
+  └ Read trainer.py, transweave.py, nodes.py
+    Search task_queries|layer_0_q|output_proj|gate_proj|ComposerNode|PartitionedAggregator|current_attention in continual
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’ve got the extraction points. The next patch adds reusable state/metric helpers so the audit and TransWeave code both operate on real masked forward passes
+  instead of heuristics.
+
+• Edited FabricPC/fabricpc/continual/trainer.py (+257 -0)
+    1083
+    1084 +    def _collect_batches(
+    1085 +        self,
+    1086 +        loader,
+    1087 +        max_batches: int,
+    1088 +    ) -> List[Tuple[np.ndarray, np.ndarray]]:
+    1089 +        """Collect up to `max_batches` batches from a loader."""
+    1090 +        batches = []
+    1091 +        for batch_idx, batch_data in enumerate(loader):
+    1092 +            if batch_idx >= max_batches:
+    1093 +                break
+    1094 +            if isinstance(batch_data, (list, tuple)):
+    1095 +                images, labels = batch_data
+    1096 +            elif isinstance(batch_data, dict):
+    1097 +                images = batch_data.get("x")
+    1098 +                labels = batch_data.get("y")
+    1099 +            else:
+    1100 +                continue
+    1101 +            batches.append((np.asarray(images), np.asarray(labels)))
+    1102 +        return batches
+    1103 +
+    1104 +    def _coalesce_batches(
+    1105 +        self,
+    1106 +        batches: List[Tuple[np.ndarray, np.ndarray]],
+    1107 +    ) -> List[Tuple[np.ndarray, np.ndarray]]:
+    1108 +        """Collapse sampled batches into one large batch to bound evaluation cost."""
+    1109 +        if not batches:
+    1110 +            return []
+    1111 +        if len(batches) == 1:
+    1112 +            return list(batches)
+    1113 +        images = np.concatenate([images for images, _ in batches], axis=0)
+    1114 +        labels = np.concatenate([labels for _, labels in batches], axis=0)
+    1115 +        return [(images, labels)]
+    1116 +
+    1117 +    def _compute_batch_state(
+    1118 +        self,
+    1119 +        batch: Dict[str, jnp.ndarray],
+    1120 +        rng_key: jax.Array,
+    1121 +    ):
+    1122 +        """Compute a model state for a single batch under the current task context."""
+    1123 +        if self.training_mode == "backprop":
+    1124 +            from fabricpc.training.train_backprop import compute_forward_pass
+    1125 +
+    1126 +            return compute_forward_pass(self.params, self.structure, batch, rng_key)
+    1127 +
+    1128 +        from fabricpc.graph.state_initializer import initialize_graph_state
+    1129 +        from fabricpc.core.inference import run_inference
+    1130 +
+    1131 +        batch_size = batch["x"].shape[0]
+    1132 +        clamps = {}
+    1133 +        if "x" in self.structure.task_map:
+    1134 +            clamps[self.structure.task_map["x"]] = batch["x"]
+    1135 +
+    1136 +        state = initialize_graph_state(
+    1137 +            self.structure,
+    1138 +            batch_size,
+    1139 +            rng_key,
+    1140 +            clamps=clamps,
+    1141 +            params=self.params,
+    1142 +        )
+    1143 +        return run_inference(self.params, state, clamps, self.structure)
+    1144 +
+    1145 +    def _evaluate_loss_on_batches(
+    1146 +        self,
+    1147 +        batches: List[Tuple[np.ndarray, np.ndarray]],
+    1148 +        task_id: int,
+    1149 +        support_cols: Tuple[int, ...],
+    1150 +    ) -> float:
+    1151 +        """Evaluate loss on sampled batches under a specific support selection."""
+    1152 +        if not batches:
+    1153 +            return 0.0
+    1154 +
+    1155 +        eval_loader = self._coalesce_batches(batches)
+    1156 +        eval_key, self.rng_key = jax.random.split(self.rng_key)
+    1157 +        self._set_task_context(task_id, support_cols)
+    1158 +        eval_config = {"loss_type": "cross_entropy"}
+    1159 +
+    1160 +        if self.training_mode == "backprop":
+    1161 +            metrics = evaluate_backprop(
+    1162 +                self.params,
+    1163 +                self.structure,
+    1164 +                eval_loader,
+    1165 +                eval_config,
+    1166 +                eval_key,
+    1167 +            )
+    1168 +        else:
+    1169 +            metrics = evaluate_pcn(
+    1170 +                self.params,
+    1171 +                self.structure,
+    1172 +                eval_loader,
+    1173 +                eval_config,
+    1174 +                eval_key,
+    1175 +            )
+    1176 +
+    1177 +        return float(metrics.get("loss", 0.0))
+    1178 +
+    1179 +    def _default_shell_assignments(self) -> np.ndarray:
+    1180 +        """Create default contiguous shell assignments for a fresh column."""
+    1181 +        shell_sizes = self.config.shell_demotion_transweave.shell_sizes
+    1182 +        assignments = np.empty(sum(shell_sizes), dtype=np.int32)
+    1183 +        start = 0
+    1184 +        for shell_id, shell_size in enumerate(shell_sizes):
+    1185 +            assignments[start : start + shell_size] = shell_id
+    1186 +            start += shell_size
+    1187 +        return assignments
+    1188 +
+    1189 +    def _measure_column_activities(
+    1190 +        self,
+    1191 +        task_id: int,
+    1192 +        support_cols: Tuple[int, ...],
+    1193 +        batches: List[Tuple[np.ndarray, np.ndarray]],
+    1194 +    ) -> Dict[int, np.ndarray]:
+    1195 +        """Measure per-column neuron activity from real forward passes."""
+    1196 +        num_columns = self.config.columns.num_columns
+    1197 +        num_neurons = self.config.columns.memory_dim
+    1198 +        activity_sum = np.zeros((num_columns, num_neurons), dtype=np.float64)
+    1199 +        batch_count = 0
+    1200 +
+    1201 +        for images, labels in self._coalesce_batches(batches):
+    1202 +            batch = {"x": jnp.array(images), "y": jnp.array(labels)}
+    1203 +            batch_key, self.rng_key = jax.random.split(self.rng_key)
+    1204 +            self._set_task_context(task_id, support_cols)
+    1205 +            state = self._compute_batch_state(batch, batch_key)
+    1206 +            if "columns" not in state.nodes:
+    1207 +                continue
+    1208 +            column_z = np.asarray(state.nodes["columns"].z_mu)
+    1209 +            activity_sum += np.mean(np.abs(column_z), axis=0)
+    1210 +            batch_count += 1
+    1211 +
+    1212 +        if batch_count == 0:
+    1213 +            return {
+    1214 +                col_id: np.zeros((num_neurons,), dtype=np.float64)
+    1215 +                for col_id in range(num_columns)
+    1216 +            }
+    1217 +
+    1218 +        activity_mean = activity_sum / batch_count
+    1219 +        return {col_id: activity_mean[col_id] for col_id in range(num_columns)}
+    1220 +
+    1221 +    def _extract_composer_summary(
+    1222 +        self,
+    1223 +        task_id: int,
+    1224 +        support_cols: Tuple[int, ...],
+    1225 +        batches: List[Tuple[np.ndarray, np.ndarray]],
+    1226 +    ) -> Optional[Dict[str, Any]]:
+    1227 +        """Extract measured composer state from the trained aggregator."""
+    1228 +        aggregator_node = self.structure.nodes.get("aggregator")
+    1229 +        if aggregator_node is None:
+    1230 +            return None
+    1231 +
+    1232 +        node_class = aggregator_node.node_info.node_class
+    1233 +        if getattr(node_class, "__name__", "") != "ComposerNode":
+    1234 +            return None
+    1235 +
+    1236 +        params = self.params.nodes["aggregator"]
+    1237 +        config = aggregator_node.node_info.node_config
+    1238 +        hidden_dim = aggregator_node.node_info.shape[0]
+    1239 +        num_heads = config.get("num_heads", 2)
+    1240 +        num_layers = config.get("num_layers", 1)
+    1241 +        head_dim = hidden_dim // max(num_heads, 1)
+    1242 +        num_columns = self.config.columns.num_columns
+    1243 +
+    1244 +        attention_accum = []
+    1245 +        gate_accum = []
+    1246 +
+    1247 +        support_mask = np.zeros((num_columns,), dtype=np.float32)
+    1248 +        for col_idx in support_cols:
+    1249 +            if 0 <= col_idx < num_columns:
+    1250 +                support_mask[col_idx] = 1.0
+    1251 +
+    1252 +        for images, labels in self._coalesce_batches(batches):
+    1253 +            batch = {"x": jnp.array(images), "y": jnp.array(labels)}
+    1254 +            batch_key, self.rng_key = jax.random.split(self.rng_key)
+    1255 +            self._set_task_context(task_id, support_cols)
+    1256 +            state = self._compute_batch_state(batch, batch_key)
+    1257 +            if "columns" not in state.nodes:
+    1258 +                continue
+    1259 +
+    1260 +            x = np.asarray(state.nodes["columns"].z_mu)
+    1261 +            mask = np.broadcast_to(support_mask[None, :], (x.shape[0], num_columns))
+    1262 +
+    1263 +            x_proj = np.matmul(x, np.asarray(params.weights["input_proj"])) + np.asarray(
+    1264 +                params.biases["input_proj_bias"]
+    1265 +            )
+    1266 +            x_proj = np.asarray(
+    1267 +                node_class._layer_norm(
+    1268 +                    jnp.array(x_proj),
+    1269 +                    params.weights["ln_0_scale"],
+    1270 +                    params.biases["ln_0_shift"],
+    1271 +                )
+    1272 +            )
+    1273 +
+    1274 +            last_attn = None
+    1275 +            for layer in range(num_layers):
+    1276 +                q = np.matmul(x_proj, np.asarray(params.weights[f"layer_{layer}_q"]))
+    1277 +                k = np.matmul(x_proj, np.asarray(params.weights[f"layer_{layer}_k"]))
+    1278 +                v = np.matmul(x_proj, np.asarray(params.weights[f"layer_{layer}_v"]))
+    1279 +
+    1280 +                q = q.reshape(x.shape[0], num_columns, num_heads, head_dim).transpose(
+    1281 +                    0, 2, 1, 3
+    1282 +                )
+    1283 +                k = k.reshape(x.shape[0], num_columns, num_heads, head_dim).transpose(
+    1284 +                    0, 2, 1, 3
+    1285 +                )
+    1286 +                v = v.reshape(x.shape[0], num_columns, num_heads, head_dim).transpose(
+    1287 +                    0, 2, 1, 3
+    1288 +                )
+    1289 +
+    1290 +                scores = np.matmul(q, np.transpose(k, (0, 1, 3, 2))) / np.sqrt(
+    1291 +                    max(head_dim, 1)
+    1292 +                )
+    1293 +                scores = np.where(mask[:, None, None, :] > 0, scores, -1e9)
+    1294 +                attn = jax.nn.softmax(jnp.array(scores), axis=-1)
+    1295 +                last_attn = np.asarray(attn)
+    1296 +
+    1297 +                out = np.matmul(last_attn, v)
+    1298 +                out = out.transpose(0, 2, 1, 3).reshape(x.shape[0], num_columns, hidden_dim)
+    1299 +                out = np.matmul(
+    1300 +                    out, np.asarray(params.weights[f"layer_{layer}_out"])
+    1301 +                ) + np.asarray(params.biases[f"layer_{layer}_out_bias"])
+    1302 +                x_proj = np.asarray(
+    1303 +                    node_class._layer_norm(
+    1304 +                        jnp.array(x_proj + out),
+    1305 +                        params.weights[f"ln_{layer + 1}_scale"],
+    1306 +                        params.biases[f"ln_{layer + 1}_shift"],
+    1307 +                    )
+    1308 +                )
+    1309 +
+    1310 +            if last_attn is None:
+    1311 +                continue
+    1312 +
+    1313 +            gate_logits = np.matmul(x_proj, np.asarray(params.weights["gate_proj"])).squeeze(-1)
+    1314 +            gate_logits = np.where(mask > 0, gate_logits, -1e9)
+    1315 +            attention_accum.append(np.mean(last_attn, axis=0))
+    1316 +            gate_accum.append(np.mean(gate_logits, axis=0))
+    1317 +
+    1318 +        if not attention_accum:
+    1319 +            return None
+    1320 +
+    1321 +        final_layer = num_layers - 1
+    1322 +        query_proj = np.asarray(params.weights[f"layer_{final_layer}_q"]).reshape(
+    1323 +            hidden_dim, num_heads, head_dim
+    1324 +        ).transpose(1, 0, 2)
+    1325 +        key_proj = np.asarray(params.weights[f"layer_{final_layer}_k"]).reshape(
+    1326 +            hidden_dim, num_heads, head_dim
+    1327 +        ).transpose(1, 0, 2)
+    1328 +        value_proj = np.asarray(params.weights[f"layer_{final_layer}_v"]).reshape(
+    1329 +            hidden_dim, num_heads, head_dim
+    1330 +        ).transpose(1, 0, 2)
+    1331 +
+    1332 +        return {
+    1333 +            "attention_weights": np.mean(np.stack(attention_accum, axis=0), axis=0),
+    1334 +            "query_projections": query_proj,
+    1335 +            "key_projections": key_proj,
+    1336 +            "value_projections": value_proj,
+    1337 +            "output_projection": np.asarray(params.weights["output_proj"]),
+    1338 +            "gate_logits": np.mean(np.stack(gate_accum, axis=0), axis=0),
+    1339 +        }
+    1340 +
+    1341      def _run_support_swap_audit(
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The helpers are in. I’m replacing the audit’s fake gain path now with actual masked counterfactual evaluations, then I’ll rework TransWeave registration to
+  consume the measured batches and extracted states.
+
+• Edited FabricPC/fabricpc/continual/trainer.py (+44 -78)
+    1383          # Collect batches for evaluation
+    1384 -        current_batches = []
+    1385 -        for i, (images, labels) in enumerate(current_task_data.test_loader):
+    1386 -            current_batches.append((images, labels))
+    1387 -            if i + 1 >= max_batches:
+    1388 -                break
+    1389 -
+    1390 -        old_batches = []
+    1391 -        if old_task_data is not None:
+    1392 -            for i, (images, labels) in enumerate(old_task_data.test_loader):
+    1393 -                old_batches.append((images, labels))
+    1394 -                if i + 1 >= max_batches:
+    1395 -                    break
+    1396 -
+    1397 -        eval_config = {"loss_type": "cross_entropy"}
+    1398 -
+    1399 -        def coalesce_batches(batches):
+    1400 -            """Collapse sampled audit batches into a single larger batch."""
+    1401 -            if not batches:
+    1402 -                return []
+    1403 -            if len(batches) == 1:
+    1404 -                return list(batches)
+    1405 -            images = np.concatenate([images for images, _ in batches], axis=0)
+    1406 -            labels = np.concatenate([labels for _, labels in batches], axis=0)
+    1407 -            return [(images, labels)]
+    1408 -
+    1409 -        def eval_loss_on_batches(batches):
+    1410 -            """Evaluate loss on a list of batches."""
+    1411 -            if not batches:
+    1412 -                return 0.0
+    1413 -            eval_loader = coalesce_batches(batches)
+    1414 -            eval_key, _ = jax.random.split(self.rng_key)
+    1415 -            if self.training_mode == "backprop":
+    1416 -                metrics = evaluate_backprop(
+    1417 -                    self.params,
+    1418 -                    self.structure,
+    1419 -                    eval_loader,
+    1420 -                    eval_config,
+    1421 -                    eval_key,
+    1422 -                )
+    1423 -            else:
+    1424 -                metrics = evaluate_pcn(
+    1425 -                    self.params,
+    1426 -                    self.structure,
+    1427 -                    eval_loader,
+    1428 -                    eval_config,
+    1429 -                    eval_key,
+    1430 -                )
+    1431 -            return float(metrics.get("loss", 0.0))
+    1384 +        current_batches = self._collect_batches(current_task_data.test_loader, max_batches)
+    1385 +        old_batches = (
+    1386 +            self._collect_batches(old_task_data.test_loader, max_batches)
+    1387 +            if old_task_data is not None
+    1388 +            else []
+    1389 +        )
+    1390
+    1391          # Baseline loss with current support
+    1434 -        baseline_current_loss = eval_loss_on_batches(current_batches)
+    1435 -        baseline_old_loss = eval_loss_on_batches(old_batches) if old_batches else 0.0
+    1392 +        baseline_support = self.current_state.active_all
+    1393 +        baseline_current_loss = self._evaluate_loss_on_batches(
+    1394 +            current_batches, current_task_id, baseline_support
+    1395 +        )
+    1396 +        baseline_old_loss = (
+    1397 +            self._evaluate_loss_on_batches(old_batches, current_task_id, baseline_support)
+    1398 +            if old_batches
+    1399 +            else 0.0
+    1400 +        )
+    1401
+         ⋮
+    1419              return []
+    1455 -
+    1456 -        # Use dense column statistics to estimate contribution for all swaps at once.
+    1457 -        # This remains an approximation, but the ranking path is now vectorized.
+    1458 -        col_mean_acc = self.support_manager.support_bank.get_mean_accuracy_by_column(
+    1459 -            self.config.columns.num_columns
+    1460 -        )
+    1461 -        default_acc = np.full_like(col_mean_acc, 0.5, dtype=np.float64)
+    1462 -        has_history = col_mean_acc > 0
+    1463 -        effective_acc = np.where(has_history, col_mean_acc, default_acc)
+    1420
+    1465 -        swap_out_score = effective_acc[flat_swap_out]
+    1466 -        swap_in_score = effective_acc[flat_swap_in]
+    1467 -        noise = np.random.normal(0.0, 0.01, size=flat_swap_out.shape[0])
+    1468 -        estimated_gain = (swap_in_score - swap_out_score) * 0.1 + noise
+    1469 -
+    1470 -        alt_current_loss = baseline_current_loss - estimated_gain
+    1471 -        alt_old_loss = baseline_old_loss - estimated_gain * 0.5
+    1472 -
+    1473 -        current_gain = baseline_current_loss - alt_current_loss
+    1474 -        old_gain = baseline_old_loss - alt_old_loss
+    1475 -
+    1421          current_weight = self.config.audit.support_audit_current_weight
+    1422          old_weight = self.config.audit.support_audit_old_weight
+    1478 -        combined_gain = current_weight * current_gain + old_weight * old_gain
+    1423
+         ⋮
+    1427          for i in range(flat_swap_out.shape[0]):
+    1428 +            alt_nonshared = list(chosen)
+    1429 +            swap_out = int(flat_swap_out[i])
+    1430 +            swap_in = int(flat_swap_in[i])
+    1431 +            swap_out_idx = alt_nonshared.index(swap_out)
+    1432 +            alt_nonshared[swap_out_idx] = swap_in
+    1433 +            alt_nonshared = tuple(sorted(alt_nonshared))
+    1434 +            alt_support = tuple(range(self.config.columns.shared_columns)) + alt_nonshared
+    1435 +
+    1436 +            alt_current_loss = self._evaluate_loss_on_batches(
+    1437 +                current_batches, current_task_id, alt_support
+    1438 +            )
+    1439 +            alt_old_loss = (
+    1440 +                self._evaluate_loss_on_batches(old_batches, current_task_id, alt_support)
+    1441 +                if old_batches
+    1442 +                else 0.0
+    1443 +            )
+    1444 +
+    1445 +            current_gain = baseline_current_loss - alt_current_loss
+    1446 +            old_gain = baseline_old_loss - alt_old_loss
+    1447 +            combined_gain = current_weight * current_gain + old_weight * old_gain
+    1448 +
+    1449              audit_rows.append(
+    1450                  {
+    1486 -                    "swap_in": int(flat_swap_in[i]),
+    1487 -                    "swap_out": int(flat_swap_out[i]),
+    1451 +                    "swap_in": swap_in,
+    1452 +                    "swap_out": swap_out,
+    1453                      "chosen_current_loss": float(baseline_current_loss),
+    1489 -                    "alt_current_loss": float(alt_current_loss[i]),
+    1454 +                    "alt_current_loss": float(alt_current_loss),
+    1455                      "chosen_old_loss": float(baseline_old_loss),
+    1491 -                    "alt_old_loss": float(alt_old_loss[i]),
+    1492 -                    "current_gain": float(current_gain[i]),
+    1493 -                    "old_gain": float(old_gain[i]),
+    1494 -                    "combined_gain": float(combined_gain[i]),
+    1456 +                    "alt_old_loss": float(alt_old_loss),
+    1457 +                    "current_gain": float(current_gain),
+    1458 +                    "old_gain": float(old_gain),
+    1459 +                    "combined_gain": float(combined_gain),
+    1460                      "current_task_id": current_task_id,
+         ⋮
+    1462                      "chosen_support": chosen_tuple,
+    1463 +                    "alt_support": alt_support,
+    1464                  }
+
+• Edited FabricPC/fabricpc/continual/trainer.py (+2 -0)
+    1466
+    1467 +        self._set_task_context(current_task_id, baseline_support)
+    1468 +
+    1469          if verbose:
+
+• Edited FabricPC/fabricpc/continual/trainer.py (+1 -1)
+    853          # Register end-of-task state with TransWeave for transfer learning
+    854 -        transweave_stats = self._register_transweave_task_end(task_id)
+    854 +        transweave_stats = self._register_transweave_task_end(task_data)
+    855
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’m rewriting the TransWeave registration now. This change will make shell demotion use measured column activities, and composer transfer will only register
+  when the trained aggregator is actually a ComposerNode.
+
+• Edited FabricPC/fabricpc/continual/trainer.py (+58 -153)
+    1597
+    1598 -    def _register_transweave_task_end(self, task_id: int) -> Dict[str, Any]:
+    1598 +    def _register_transweave_task_end(self, task_data: TaskData) -> Dict[str, Any]:
+    1599          """
+         ⋮
+    1605          Args:
+    1606 -            task_id: Completed task ID
+    1606 +            task_data: Completed task metadata and loaders
+    1607
+         ⋮
+    1618
+    1619 +        task_id = task_data.task_id
+    1620          num_columns = self.config.columns.num_columns
+    1620 -        num_heads = self.config.composer.num_heads
+    1621 -        hidden_dim = self.config.composer.hidden_dim
+    1622 -
+    1623 -        # Generate synthetic composer state from current support configuration
+    1624 -        # In a full implementation, these would come from actual model parameters
+    1625 -        # For now, we create representative attention patterns based on support selection
+    1621          active_cols = self.current_state.active_all
+    1627 -        num_active = len(active_cols)
+    1628 -
+    1629 -        # Create attention pattern that emphasizes active columns
+    1630 -        attention_weights = np.zeros((num_heads, num_columns, num_columns))
+    1631 -        for h in range(num_heads):
+    1632 -            for col in active_cols:
+    1633 -                # Attention from active columns to all others
+    1634 -                attention_weights[h, col, :] = 1.0 / num_columns
+    1635 -                # Self-attention bonus
+    1636 -                attention_weights[h, col, col] += 0.5
+    1637 -            # Normalize
+    1638 -            attention_weights[h] = attention_weights[h] / (
+    1639 -                attention_weights[h].sum(axis=1, keepdims=True) + 1e-10
+    1640 -            )
+    1641 -
+    1642 -        # Create projection matrices with structure based on active columns
+    1643 -        key_dim = hidden_dim // num_heads
+    1644 -        query_projections = np.random.randn(num_heads, hidden_dim, key_dim) * 0.1
+    1645 -        key_projections = np.random.randn(num_heads, hidden_dim, key_dim) * 0.1
+    1646 -        value_projections = np.random.randn(num_heads, hidden_dim, key_dim) * 0.1
+    1647 -        output_projection = np.random.randn(num_heads * key_dim, hidden_dim) * 0.1
+    1622 +        measure_batches = max(1, self.config.audit.support_audit_max_batches)
+    1623 +        measurement_batches = self._collect_batches(task_data.test_loader, measure_batches)
+    1624
+         ⋮
+    1626          if self.config.composer_transweave.enable:
+    1651 -            self.transweave_manager.composer_transweave.register_task(
+    1627 +            composer_summary = self._extract_composer_summary(
+    1628                  task_id=task_id,
+    1653 -                attention_weights=attention_weights,
+    1654 -                query_projections=query_projections,
+    1655 -                key_projections=key_projections,
+    1656 -                value_projections=value_projections,
+    1657 -                output_projection=output_projection,
+    1629 +                support_cols=active_cols,
+    1630 +                batches=measurement_batches,
+    1631              )
+    1632 +            if composer_summary is not None:
+    1633 +                self.transweave_manager.composer_transweave.register_task(
+    1634 +                    task_id=task_id,
+    1635 +                    attention_weights=composer_summary["attention_weights"],
+    1636 +                    query_projections=composer_summary["query_projections"],
+    1637 +                    key_projections=composer_summary["key_projections"],
+    1638 +                    value_projections=composer_summary["value_projections"],
+    1639 +                    output_projection=composer_summary["output_projection"],
+    1640 +                    gate_logits=composer_summary["gate_logits"],
+    1641 +                    metadata={"source": "measured", "num_batches": len(measurement_batches)},
+    1642 +                )
+    1643
+    1660 -            # Compute transfer for this task (to measure what was transferred)
+    1661 -            if task_id > 0:
+    1662 -                transfer_result = (
+    1663 -                    self.transweave_manager.composer_transweave.compute_transfer(
+    1664 -                        target_task_id=task_id,
+    1665 -                        current_attention=attention_weights,
+    1666 -                        current_queries=query_projections,
+    1667 -                        current_keys=key_projections,
+    1668 -                        current_values=value_projections,
+    1644 +                if task_id > 0:
+    1645 +                    transfer_result = (
+    1646 +                        self.transweave_manager.composer_transweave.compute_transfer(
+    1647 +                            target_task_id=task_id,
+    1648 +                            current_attention=composer_summary["attention_weights"],
+    1649 +                            current_queries=composer_summary["query_projections"],
+    1650 +                            current_keys=composer_summary["key_projections"],
+    1651 +                            current_values=composer_summary["value_projections"],
+    1652 +                        )
+    1653                      )
+    1670 -                )
+    1671 -                stats["composer_sources"] = len(transfer_result.source_tasks)
+    1672 -                stats["composer_strength"] = transfer_result.transfer_strength
+    1673 -                stats["composer_cost"] = transfer_result.diagnostics.get(
+    1674 -                    "mean_transport_cost", 0.0
+    1675 -                )
+    1654 +                    stats["composer_sources"] = len(transfer_result.source_tasks)
+    1655 +                    stats["composer_strength"] = transfer_result.transfer_strength
+    1656 +                    stats["composer_cost"] = transfer_result.diagnostics.get(
+    1657 +                        "mean_transport_cost", 0.0
+    1658 +                    )
+    1659
+         ⋮
+    1661          if self.config.shell_demotion_transweave.enable:
+    1679 -            shell_sizes = self.config.shell_demotion_transweave.shell_sizes
+    1680 -            num_neurons = sum(shell_sizes)
+    1681 -            num_shells = len(shell_sizes)
+    1682 -
+    1662              # Update column usage history
+         ⋮
+    1666                  self._column_usage_history[col_id].append(task_id)
+    1688 -
+    1689 -            # Track which columns were active in previous tasks
+    1690 -            prev_active_cols = set()
+    1691 -            for col_id, task_list in self._column_usage_history.items():
+    1692 -                if any(t < task_id for t in task_list):
+    1693 -                    prev_active_cols.add(col_id)
+    1667
+         ⋮
+    1672
+    1700 -            # Prepare current activities for all columns first
+    1701 -            column_activities = {}
+    1673 +            column_activities = self._measure_column_activities(
+    1674 +                task_id=task_id,
+    1675 +                support_cols=active_cols,
+    1676 +                batches=measurement_batches,
+    1677 +            )
+    1678              column_assignments = {}
+    1703 -
+    1679              for col_id in range(num_columns):
+    1705 -                # Determine column history
+    1706 -                is_active_now = col_id in active_cols
+    1707 -                was_active_before = col_id in prev_active_cols
+    1708 -                is_declining = was_active_before and not is_active_now
+    1709 -
+    1710 -                # Get shell assignments from history if available, otherwise create fresh
+    1680                  history = self.transweave_manager.shell_transweave.column_histories.get(
+         ⋮
+    1683                  if history:
+    1715 -                    # Use persisted assignments from last task
+    1716 -                    shell_assignments = history[-1].shell_assignments.copy()
+    1684 +                    column_assignments[col_id] = history[-1].shell_assignments.copy()
+    1685                  else:
+    1718 -                    # Create fresh assignments for new columns
+    1719 -                    shell_assignments = np.zeros(num_neurons, dtype=np.int32)
+    1720 -                    shell_boundaries = [0]
+    1721 -                    for size in shell_sizes:
+    1722 -                        shell_boundaries.append(shell_boundaries[-1] + size)
+    1723 -
+    1724 -                    for i in range(num_neurons):
+    1725 -                        for s in range(num_shells):
+    1726 -                            if shell_boundaries[s] <= i < shell_boundaries[s + 1]:
+    1727 -                                shell_assignments[i] = s
+    1728 -                                break
+    1729 -
+    1730 -                # Create neuron activities with shell-dependent patterns
+    1731 -                neuron_activities = np.zeros(num_neurons)
+    1732 -
+    1733 -                for s in range(num_shells):
+    1734 -                    shell_mask = shell_assignments == s
+    1735 -                    shell_neuron_count = np.sum(shell_mask)
+    1736 -
+    1737 -                    if shell_neuron_count == 0:
+    1738 -                        continue
+    1739 -
+    1740 -                    # Base activity decreases from inner to outer shells
+    1741 -                    shell_base = 0.8 - 0.25 * s  # 0.8, 0.55, 0.3
+    1742 -
+    1743 -                    if is_active_now:
+    1744 -                        # Active column: boost inner, reduce outer
+    1745 -                        if s == 0:
+    1746 -                            activity = shell_base + 0.15
+    1747 -                        elif s == num_shells - 1:
+    1748 -                            activity = shell_base - 0.15  # More reduction in outer
+    1749 -                        else:
+    1750 -                            activity = shell_base
+    1751 -                    elif is_declining:
+    1752 -                        # Declining: significant drop, especially in outer shells
+    1753 -                        decay_factor = 0.5 + 0.2 * s
+    1754 -                        activity = shell_base * (1 - decay_factor)
+    1755 -                    else:
+    1756 -                        # Never active: low baseline
+    1757 -                        activity = 0.15 + 0.05 * (num_shells - 1 - s)
+    1758 -
+    1759 -                    # Add noise and task-specific variation
+    1760 -                    noise = np.random.randn(shell_neuron_count) * 0.12
+    1761 -                    task_variation = (
+    1762 -                        np.sin(task_id * 0.7 + col_id * 0.4 + s * 0.5) * 0.15
+    1763 -                    )
+    1764 -                    neuron_activities[shell_mask] = np.clip(
+    1765 -                        activity + noise + task_variation, 0.05, 0.99
+    1766 -                    )
+    1767 -
+    1768 -                column_activities[col_id] = neuron_activities
+    1769 -                column_assignments[col_id] = shell_assignments
+    1686 +                    column_assignments[col_id] = self._default_shell_assignments()
+    1687
+    1771 -            # Compute demotions for columns with history (before registering new state)
+    1772 -            # Check all columns that were previously registered, not just currently active
+    1773 -            columns_to_check = list(
+    1774 -                range(min(num_columns, 10))
+    1775 -            )  # Check first 10 columns
+    1776 -
+    1777 -            for col_id in columns_to_check:
+    1778 -                if col_id < num_columns:
+    1779 -                    history = (
+    1780 -                        self.transweave_manager.shell_transweave.column_histories.get(
+    1781 -                            col_id, []
+    1782 -                        )
+    1688 +            for col_id in range(num_columns):
+    1689 +                history = self.transweave_manager.shell_transweave.column_histories.get(
+    1690 +                    col_id, []
+    1691 +                )
+    1692 +                if history:
+    1693 +                    result = self.transweave_manager.shell_transweave.compute_demotion_transport(
+    1694 +                        column_id=col_id,
+    1695 +                        current_activities=column_activities[col_id],
+    1696 +                        current_assignments=column_assignments[col_id],
+    1697                      )
+    1784 -                    # Need at least 1 previous state to compare against
+    1785 -                    if len(history) >= 1:
+    1786 -                        result = self.transweave_manager.shell_transweave.compute_demotion_transport(
+    1787 -                            column_id=col_id,
+    1788 -                            current_activities=column_activities[col_id],
+    1789 -                            current_assignments=column_assignments[col_id],
+    1698 +                    if result.demotion_candidates or result.promotion_candidates:
+    1699 +                        new_assignments, counts = (
+    1700 +                            self.transweave_manager.shell_transweave.apply_transitions(
+    1701 +                                column_assignments[col_id],
+    1702 +                                result,
+    1703 +                            )
+    1704                          )
+    1791 -                        # Apply the transitions to actually modify shell assignments
+    1792 -                        if result.demotion_candidates or result.promotion_candidates:
+    1793 -                            new_assignments, counts = (
+    1794 -                                self.transweave_manager.shell_transweave.apply_transitions(
+    1795 -                                    column_assignments[col_id],
+    1796 -                                    result,
+    1797 -                                )
+    1798 -                            )
+    1799 -                            column_assignments[col_id] = new_assignments
+    1800 -                            total_demotions += counts["demotions_applied"]
+    1801 -                            total_promotions += counts["promotions_applied"]
+    1705 +                        column_assignments[col_id] = new_assignments
+    1706 +                        total_demotions += counts["demotions_applied"]
+    1707 +                        total_promotions += counts["promotions_applied"]
+    1708
+    1803 -            # Now register the new states
+    1709              for col_id in range(num_columns):
+
+─ Worked for 1m 06s ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The mechanism patches are in place. I’m running focused checks now: one for the audit path to confirm it performs real swap evaluations without synthetic
+  noise, and one for TransWeave registration to confirm it consumes measured state and no longer depends on random placeholders.
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -m py_compile FabricPC/fabricpc/continual/trainer.py
+  └ (no output)
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+import sys, importlib.util
+from pathlib import Path
+import numpy as np
+sys.path.insert(0, '/home/ni/repos/freeFabricPC/FabricPC')
+spec = importlib.util.spec_from_file_location('split_mnist_continual', Path('/home/ni/repos/freeFabricPC/FabricPC/examples/split_mnist_continual.py'))
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+from fabricpc.continual.config import make_config
+from fabricpc.continual.trainer import SequentialTrainer
+from fabricpc.continual.data import TaskData
+cfg = make_config(quick_smoke=True)
+structure = mod.create_network_structure(cfg, use_columns=True)
+trainer = SequentialTrainer(structure, cfg)
+# synthetic loaders: one batch each
+x = np.ones((4, 784), dtype=np.float32)
+y_cur = np.zeros((4, 10), dtype=np.float32); y_cur[:,0]=1.0
+y_old = np.zeros((4, 10), dtype=np.float32); y_old[:,2]=1.0
+cur_loader = [(x, y_cur)]
+old_loader = [(x*0.5, y_old)]
+current_task = TaskData(task_id=0, classes=(0,1), train_loader=cur_loader, test_loader=cur_loader)
+old_task = TaskData(task_id=1, classes=(2,3), train_loader=old_loader, test_loader=old_loader)
+trainer.support_manager.select_support_for_task(0)
+trainer._task_supports[0] = trainer.current_state.active_all
+rows = trainer._run_support_swap_audit(current_task, old_task, verbose=False)
+print('audit_rows', len(rows))
+print('has_alt_support', 'alt_support' in rows[0] if rows else False)
+print('combined_gain_type', type(rows[0]['combined_gain']).__name__ if rows else 'none')
+trans_stats = trainer._register_transweave_task_end(current_task)
+print('trans_stats_keys', sorted(trans_stats.keys()))
+print('composer_sources', trans_stats['composer_sources'])
+print('shell_demotions', trans_stats['shell_demotions'])
+PY
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import sys, importlib.util
+  │ from pathlib import Path
+  │ … +30 lines
+  └ Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+    Traceback (most recent call last):
+    … +18 lines
+        ~~~~~~~~~~~~~~~^^^^^^^^^^^^
+    IndexError: boolean index did not match indexed array along axis 0; size of axis is 4 but size of corresponding boolean axis is 8
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The audit path is working, but the TransWeave smoke check exposed a shape mismatch between configured shell sizes and the actual column width in quick-smoke
+  mode. I’m hardening that path so measured activities and shell assignments are aligned to the real column dimensionality instead of assuming they already
+  match.
+
+• Edited FabricPC/fabricpc/continual/trainer.py (+22 -2)
+    1178
+    1179 -    def _default_shell_assignments(self) -> np.ndarray:
+    1179 +    def _align_shell_assignments(
+    1180 +        self,
+    1181 +        assignments: np.ndarray,
+    1182 +        num_neurons: int,
+    1183 +    ) -> np.ndarray:
+    1184 +        """Align shell assignments to the actual column width."""
+    1185 +        assignments = np.asarray(assignments, dtype=np.int32)
+    1186 +        if assignments.shape[0] == num_neurons:
+    1187 +            return assignments
+    1188 +        if assignments.shape[0] > num_neurons:
+    1189 +            return assignments[:num_neurons]
+    1190 +
+    1191 +        if assignments.size == 0:
+    1192 +            assignments = np.zeros((1,), dtype=np.int32)
+    1193 +        pad_value = int(assignments[-1])
+    1194 +        pad = np.full((num_neurons - assignments.shape[0],), pad_value, dtype=np.int32)
+    1195 +        return np.concatenate([assignments, pad], axis=0)
+    1196 +
+    1197 +    def _default_shell_assignments(self, num_neurons: Optional[int] = None) -> np.ndarray:
+    1198          """Create default contiguous shell assignments for a fresh column."""
+    1199 +        if num_neurons is None:
+    1200 +            num_neurons = self.config.columns.memory_dim
+    1201          shell_sizes = self.config.shell_demotion_transweave.shell_sizes
+         ⋮
+    1206              start += shell_size
+    1187 -        return assignments
+    1207 +        return self._align_shell_assignments(assignments, num_neurons)
+    1208
+
+• Edited FabricPC/fabricpc/continual/trainer.py (+7 -2)
+    1703                  if history:
+    1704 -                    column_assignments[col_id] = history[-1].shell_assignments.copy()
+    1704 +                    column_assignments[col_id] = self._align_shell_assignments(
+    1705 +                        history[-1].shell_assignments,
+    1706 +                        column_activities[col_id].shape[0],
+    1707 +                    )
+    1708                  else:
+    1706 -                    column_assignments[col_id] = self._default_shell_assignments()
+    1709 +                    column_assignments[col_id] = self._default_shell_assignments(
+    1710 +                        column_activities[col_id].shape[0]
+    1711 +                    )
+    1712
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -m py_compile FabricPC/fabricpc/continual/trainer.py
+  └ (no output)
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+import sys, importlib.util
+from pathlib import Path
+import numpy as np
+sys.path.insert(0, '/home/ni/repos/freeFabricPC/FabricPC')
+spec = importlib.util.spec_from_file_location('split_mnist_continual', Path('/home/ni/repos/freeFabricPC/FabricPC/examples/split_mnist_continual.py'))
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+from fabricpc.continual.config import make_config
+from fabricpc.continual.trainer import SequentialTrainer
+from fabricpc.continual.data import TaskData
+cfg = make_config(quick_smoke=True)
+structure = mod.create_network_structure(cfg, use_columns=True)
+trainer = SequentialTrainer(structure, cfg)
+x = np.ones((4, 784), dtype=np.float32)
+y_cur = np.zeros((4, 10), dtype=np.float32); y_cur[:,0]=1.0
+y_old = np.zeros((4, 10), dtype=np.float32); y_old[:,2]=1.0
+cur_loader = [(x, y_cur)]
+old_loader = [(x*0.5, y_old)]
+current_task = TaskData(task_id=0, classes=(0,1), train_loader=cur_loader, test_loader=cur_loader)
+old_task = TaskData(task_id=1, classes=(2,3), train_loader=old_loader, test_loader=old_loader)
+trainer.support_manager.select_support_for_task(0)
+trainer._task_supports[0] = trainer.current_state.active_all
+rows = trainer._run_support_swap_audit(current_task, old_task, verbose=False)
+print('audit_rows', len(rows))
+print('has_alt_support', 'alt_support' in rows[0] if rows else False)
+print('combined_gain_type', type(rows[0]['combined_gain']).__name__ if rows else 'none')
+trans_stats = trainer._register_transweave_task_end(current_task)
+print('trans_stats_keys', sorted(trans_stats.keys()))
+print('composer_sources', trans_stats['composer_sources'])
+print('shell_demotions', trans_stats['shell_demotions'])
+PY
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import sys, importlib.util
+  │ from pathlib import Path
+  │ … +29 lines
+  └ Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+    Traceback (most recent call last):
+    … +13 lines
+    composer_sources 0
+    shell_demotions 0
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The default architecture path now checks out. I’m doing one last focused check on the attention-aggregator branch so the new composer extraction doesn’t only
+  work on the linear default.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+import sys, importlib.util
+from pathlib import Path
+import numpy as np
+sys.path.insert(0, '/home/ni/repos/freeFabricPC/FabricPC')
+spec = importlib.util.spec_from_file_location('split_mnist_continual', Path('/home/ni/repos/freeFabricPC/FabricPC/examples/split_mnist_continual.py'))
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+from fabricpc.continual.config import make_config
+from fabricpc.continual.trainer import SequentialTrainer
+from fabricpc.continual.data import TaskData
+cfg = make_config(quick_smoke=True)
+cfg.columns.use_attention_aggregator = True
+structure = mod.create_network_structure(cfg, use_columns=True)
+trainer = SequentialTrainer(structure, cfg)
+x = np.ones((2, 784), dtype=np.float32)
+y = np.zeros((2, 10), dtype=np.float32); y[:,0]=1.0
+loader = [(x, y)]
+task = TaskData(task_id=0, classes=(0,1), train_loader=loader, test_loader=loader)
+trainer.support_manager.select_support_for_task(0)
+trainer._task_supports[0] = trainer.current_state.active_all
+summary = trainer._extract_composer_summary(0, trainer.current_state.active_all, [(x,y)])
+print('composer_summary_keys', sorted(summary.keys()) if summary else None)
+if summary:
+    print('attention_shape', summary['attention_weights'].shape)
+    print('query_shape', summary['query_projections'].shape)
+PY
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import sys, importlib.util
+  │ from pathlib import Path
+  │ … +24 lines
+  └ Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+    Traceback (most recent call last):
+    … +11 lines
+    attention_shape (4, 12, 12)
+    query_shape (4, 128, 32)
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The two mechanism fixes are implemented and smoke-checked. I’m marking those complete; I haven’t added permanent test files yet, only targeted runtime
+  verification in the provided environment.
+
+• Updated Plan
+  └ Implemented real masked swap evaluation for the causal audit and replaced synthetic TransWeave registration with measured column activities plus real
+    ComposerNode-derived summaries when applicable. Verification so far is via targeted runtime checks rather than committed tests.
+    ✔ Wire support selection into the actual forward path so inactive columns are masked during training and evaluation, not just in gradient transforms
+    ✔ Preserve optimizer state across tasks and checkpoints so continual-learning dynamics and resume behavior are faithful
+    ✔ Replace synthetic TransWeave registration with model-derived composer parameters and measured column activation summaries
+    ✔ Replace fabricated causal support-audit gains with real swap-evaluation measurements on bounded audit batches
+    □ Add targeted smoke tests and invariants for support masking, checkpoint resume, TransWeave grounding, and causal audit correctness
+
+• Implemented both mechanism fixes.
+
+  The causal audit no longer fabricates gains from support-bank heuristics plus noise. In trainer.py:1084, _run_support_swap_audit() now collects bounded real
+  batches, evaluates the baseline support, then evaluates each actual swap_out -> swap_in counterfactual under the altered support mask and records observed
+  current_gain, old_gain, and combined_gain. Audit rows now also include alt_support, so the recorded target corresponds to a real intervention.
+
+  TransWeave registration is no longer built from random/heuristic placeholders. In trainer.py:1149, I added helpers to:
+
+  - collect bounded batches,
+  - run real forward-state extraction under the current support mask,
+  - measure per-column neuron activity from columns.z_mu,
+  - extract measured composer summaries when the aggregator is actually a ComposerNode.
+
+  _register_transweave_task_end() now uses those measured summaries instead of np.random.randn(...) and synthetic shell activity generation. For non-Composer
+  aggregators, composer transfer is simply not registered, so the reported composer stats stay at zero rather than pretending the mechanism exists.
+
+  I also hardened shell registration against config/runtime width mismatches by aligning shell assignments to the actual column width before registering them.
+
+  Verification:
+
+  - py_compile passed on the updated trainer.
+  - A targeted smoke check confirmed the audit now emits real-valued swap rows with alt_support and no synthetic gain path.
+  - A targeted TransWeave check on the default linear aggregator produced grounded shell stats and zero composer transfer, as expected.
+  - A targeted ComposerNode check produced measured composer tensors with sensible shapes: attention (4, 12, 12) and query projections (4, 128, 32).
+
+  I have not yet added committed test files or rerun the full Split-MNIST experiment end-to-end. The remaining planned item is formalizing these checks into
+  persistent tests.
+ 
+ 
+› Write tests for @filename
+ 
+  gpt-5.4 default · 30% left · /home/ni/

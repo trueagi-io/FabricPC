@@ -1,0 +1,142 @@
+
+
+› can you please go into planning mode and suggest a fix for the problem you mentioned: Any transfer stats or downstream task adaptation attributed to
+  TransWeave are therefore not grounded in what the network actually learned.
+
+
+• I’m treating this as a design/planning pass for the TransWeave grounding issue. I’ll map the current synthetic path to the real model state that already
+  exists in the trainer so the fix is concrete and limited to the pieces that need to change.
+
+• Updated Plan
+  └ Plan to replace synthetic TransWeave registrations with model-derived representations and measured shell activity.
+    □ Trace where composer and shell TransWeave state is currently synthesized instead of extracted from the trained model
+    □ Define a minimal data extraction path from real params/activations into TransWeave registration APIs
+    □ Propose code changes, validation checks, and rollout order to land the fix safely
+
+• I’m checking the TransWeave APIs and the available node state so the plan can use the current architecture rather than inventing a parallel one. The key
+  question is which tensors we can reliably extract after training: real composer weights, real column activations, or both.
+
+• Explored
+  └ Search class TransWeaveManager|register_task\(|register_shell_state\(|compute_transfer\(|column_histories|ComposerNode|PartitionedAggregator in continual
+    Read transweave.py
+    Search initialize_graph_state|run_inference|final_state.nodes|z_mu|pre_activation in fabricpc
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I have the pieces. The clean fix is to make TransWeave a consumer of real post-task summaries from the trained graph, not a generator of placeholder state.
+  I’m writing the plan around two extractors: one for composer params/attention, one for per-column activation statistics over held-out batches.
+
+• Updated Plan
+  └ The required extraction points are available: real params on the trained nodes and real node activations via graph state/inference. The fix is to replace
+    synthetic registration with those measurements.
+    ✔ Trace where composer and shell TransWeave state is currently synthesized instead of extracted from the trained model
+    ✔ Define a minimal data extraction path from real params/activations into TransWeave registration APIs
+    ✔ Propose code changes, validation checks, and rollout order to land the fix safely
+
+• Plan
+  The fix is to stop letting SequentialTrainer._register_transweave_task_end() invent TransWeave inputs and instead feed it measurements from the model that
+  just finished training. Right now it fabricates composer tensors with np.random.randn(...) and shell activities from heuristics/noise (trainer.py:1376), so
+  the transfer bank is disconnected from the learned network.
+
+  Suggested Design
+  Add a small “TransWeave extraction” layer inside the trainer with two code paths:
+
+  1. extract_real_composer_representation(task_id, eval_loader, max_batches)
+
+  - If the aggregator is a ComposerNode, read the real trained params from self.params.nodes["aggregator"].
+  - Map them directly into ComposerRepresentation:
+      - query_projections from layer_*_q
+      - key_projections from layer_*_k
+      - value_projections from layer_*_v
+      - output_projection from output_proj or layer output projection as appropriate
+  - Compute attention_weights and gate_logits from actual forward passes on a few held-out batches, not from params alone.
+  - Minimal implementation: rerun the ComposerNode attention math on sampled columns activations and average the per-batch attention/gating tensors into a task
+    summary.
+  - If the aggregator is plain Linear or PartitionedAggregator, do not register composer transfer stats at all. Return composer_sources=0,
+    composer_strength=0.0, and mark the stats as not_applicable.
+
+  2. extract_real_shell_state(task_id, eval_loader, max_batches)
+
+  - Run inference on a small fixed sample of batches and capture final_state.nodes["columns"].z_mu.
+  - Aggregate per-column activity from the real column outputs, for example:
+      - mean(abs(z_mu[:, col, :])) over batch and sampled batches
+      - optionally also track variance or sparsity, but mean absolute activation is enough to start
+  - Use persistent shell assignments from shell_transweave.column_histories[col][-1] when present; otherwise initialize from shell_sizes.
+  - Feed those measured activities into compute_demotion_transport() / register_shell_state().
+
+  This keeps the existing TransWeave APIs mostly intact. The main change is replacing the fake inputs with extracted ones.
+
+  Concrete Changes
+  In trainer.py:
+
+  - Replace _register_transweave_task_end() with:
+      - _extract_column_activity_summary(...)
+      - _extract_composer_summary(...)
+      - _register_transweave_task_end(...) that only orchestrates registration
+  - Remove:
+      - synthetic attention_weights
+      - random projection matrices
+      - heuristic neuron_activities
+  - Use a deterministic eval subset:
+      - first N batches from task_data.test_loader or train_loader
+      - fixed max_batches in config so stats are stable and cheap
+
+  In transweave.py:
+
+  - Leave ComposerRepresentation and ShellDemotionTransWeave mostly unchanged.
+  - Optionally add metadata fields like:
+      - source="measured"
+      - num_batches
+      - num_examples
+      - aggregator_type
+        This makes it obvious in checkpoints whether a representation is grounded.
+
+  In config:
+
+  - Add something like:
+      - transweave_measurement_batches: int = 4
+      - transweave_measurement_split: str = "test"
+
+  Implementation Notes
+  For ComposerNode, you already have the exact attention math in nodes.py:482. Do not duplicate a second divergent implementation if you can avoid it. Best
+  options:
+
+  1. Extract a helper from ComposerNode.forward() that returns diagnostics:
+
+  - attention tensors
+  - gate logits/probs
+  - pooled output
+
+  2. Or add a static method like ComposerNode.compute_diagnostics(params, x, mask, task_id, config) and call it from both forward() and the trainer extractor.
+
+  That keeps the registered composer state aligned with the model’s real computation.
+
+  For shell state, note that your shell semantics are neuron-level but the current ColumnNode output dimension already matches the shell total (memory_dim ==
+  sum(shell_sizes) in the default setup). That means you can directly interpret each column’s feature axis as shell-assigned neurons and use measured
+  activations without architectural surgery.
+
+  Validation
+  After the change, verify:
+
+  - Re-running extraction twice on the same checkpoint and same sampled batches gives identical TransWeave stats.
+  - Composer transfer stats are only populated when use_attention_aggregator=True.
+  - Shell demotion counts change when the learned column activations change, not when the RNG seed changes inside _register_transweave_task_end().
+  - Checkpoints no longer contain synthetic/random TransWeave representations.
+
+  Practical Rollout
+
+  1. Fix shell-state extraction first.
+
+  - It applies to the default column architecture immediately.
+  - It is the lower-risk change.
+
+  2. Then gate composer transfer on actual ComposerNode usage.
+
+  - If the model is using Linear, report composer transfer as not applicable instead of inventing it.
+
+  3. Only after that consider using transferred composer state to initialize future task params.
+
+  - Right now the urgent flaw is invalid measurement, not missing application.
+
+  If you want, I can turn this plan into an actual patch next.
+ 

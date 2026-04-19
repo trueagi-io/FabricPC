@@ -1,0 +1,533 @@
+  Recommendation
+  Start with steps 1 and 2 first. They fix core training fidelity and make steps 3 and 4 easier to trust, because the mechanism measurements will then reflect
+  the intended architecture and stable optimization state.
+
+  If you want, I can move from planning into implementation and start with support-mask wiring plus optimizer-state persistence.
+
+
+› Yes, please proceed as you direct, moving from planning into implementation, starting with support-mask wiring plus optimizer-state persistence.
+
+
+• I’m moving into implementation with two changes first: enforce support masks in the actual forward pass, and stop resetting optimizer state between tasks and
+  checkpoints. I’m reading the training loop call sites once more so I can patch the trainer and shared training functions without breaking the rest of the
+  package.
+
+• Explored
+  └ Read train.py
+    Search train_pcn\(|train_backprop\( in FabricPC
+    Read train_backprop.py, trainer.py
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’m editing the continual node path now. The first patch will make column and composer masking depend on the trainer’s selected support set even when the
+  graph has no explicit mask edge, so train/eval actually use the intended active columns.
+
+• Edited FabricPC/fabricpc/continual/nodes.py (+25 -2)
+    24
+    25 -# Module-level variable for current task_id (used by ComposerNode)
+    26 -# This is set by SequentialTrainer before training/evaluation
+    25 +# Module-level variables for current task context.
+    26 +# These are set by SequentialTrainer before training/evaluation so continual
+    27 +# routing remains active even when the graph has no explicit task/mask edges.
+    28  _CURRENT_TASK_ID = 0
+    29 +_CURRENT_SUPPORT_COLS: Optional[Tuple[int, ...]] = None
+    30
+       ⋮
+    42
+    43 +def set_current_support_cols(active_columns: Sequence[int] | None) -> None:
+    44 +    """Set the active support columns for continual routing."""
+    45 +    global _CURRENT_SUPPORT_COLS
+    46 +    if active_columns is None:
+    47 +        _CURRENT_SUPPORT_COLS = None
+    48 +    else:
+    49 +        _CURRENT_SUPPORT_COLS = tuple(int(col) for col in active_columns)
+    50 +
+    51 +
+    52 +def get_current_support_mask(batch_size: int, num_columns: int) -> jnp.ndarray:
+    53 +    """Build a batch mask from the current support selection."""
+    54 +    if _CURRENT_SUPPORT_COLS is None:
+    55 +        return jnp.ones((batch_size, num_columns), dtype=jnp.float32)
+    56 +
+    57 +    mask = np.zeros((batch_size, num_columns), dtype=np.float32)
+    58 +    for col_idx in _CURRENT_SUPPORT_COLS:
+    59 +        if 0 <= col_idx < num_columns:
+    60 +            mask[:, col_idx] = 1.0
+    61 +    return jnp.array(mask)
+    62 +
+    63 +
+    64  class PatchEmbedNode(NodeBase, FlattenInputMixin):
+
+• Edited FabricPC/fabricpc/continual/nodes.py (+1 -1)
+    7
+    8 -from typing import Dict, Any, Tuple, Optional
+    8 +from typing import Dict, Any, Tuple, Optional, Sequence
+    9  import math
+
+• Edited FabricPC/fabricpc/continual/nodes.py (+4 -2)
+    321          if mask is None:
+    322 -            mask = jnp.ones((batch_size, num_columns))
+    322 +            mask = get_current_support_mask(batch_size, num_columns)
+    323
+        ⋮
+    534          # Get mask
+    535 -        mask = inputs.get("mask", jnp.ones((batch_size, num_columns)))
+    535 +        mask = inputs.get("mask", None)
+    536 +        if mask is None:
+    537 +            mask = get_current_support_mask(batch_size, num_columns)
+    538
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’ve wired the node-level fallback. The next patch makes the trainer own task context explicitly: it will set support columns before training/evaluation and
+  persist optimizer state plus task-to-support assignments across tasks and checkpoints.
+
+• Edited FabricPC/fabricpc/continual/trainer.py (+18 -0)
+    285          self._accuracy_matrix: Dict[int, Dict[int, float]] = {}
+    286 +        self._task_supports: Dict[int, Tuple[int, ...]] = {}
+    287
+        ⋮
+    448
+    449 +    def _set_support_context(self, support_cols: Optional[Tuple[int, ...]]) -> None:
+    450 +        """Update the active support columns for continual routing."""
+    451 +        from fabricpc.continual.nodes import set_current_support_cols
+    452 +
+    453 +        set_current_support_cols(support_cols)
+    454 +
+    455 +    def _set_task_context(
+    456 +        self,
+    457 +        task_id: int,
+    458 +        support_cols: Optional[Tuple[int, ...]] = None,
+    459 +    ) -> None:
+    460 +        """Update task-level routing context used by continual nodes."""
+    461 +        self._set_composer_task_id(task_id)
+    462 +        if support_cols is None:
+    463 +            support_cols = self._task_supports.get(task_id)
+    464 +        self._set_support_context(support_cols)
+    465 +
+    466      def _autotune_transition_thresholds(
+
+• Edited FabricPC/fabricpc/continual/trainer.py (+11 -7)
+     639
+     640 -        # Update task_id in ComposerNode config (for attention-based aggregation)
+     641 -        self._set_composer_task_id(task_id)
+     642 -
+     640          if verbose:
+         ⋮
+     647          support_cols = support_state.active_all
+     648 +        self._task_supports[task_id] = support_cols
+     649 +        self._set_task_context(task_id, support_cols)
+     650          self._autotune_transition_thresholds(
+         ⋮
+     764          if self.training_mode == "backprop":
+     766 -            self.params, loss_history, _ = train_backprop(
+     765 +            self.params, loss_history, _, self.opt_state = train_backprop(
+     766                  params=self.params,
+         ⋮
+     773                  epoch_callback=epoch_callback,
+     774 +                opt_state=self.opt_state,
+     775 +                return_opt_state=True,
+     776              )
+     777          else:  # PC mode or hybrid (default to PC)
+     777 -            self.params, energy_history, _ = train_pcn(
+     778 +            self.params, energy_history, _, self.opt_state = train_pcn(
+     779                  params=self.params,
+         ⋮
+     786                  epoch_callback=epoch_callback,
+     787 +                opt_state=self.opt_state,
+     788 +                return_opt_state=True,
+     789              )
+         ⋮
+    1075              # Set task_id in ComposerNode for proper attention routing
+    1073 -            self._set_composer_task_id(eval_task_id)
+    1076 +            support_cols = self._task_supports.get(eval_task_id)
+    1077 +            self._set_task_context(eval_task_id, support_cols)
+    1078
+         ⋮
+    1644          # Set task_id in ComposerNode for proper attention routing
+    1641 -        self._set_composer_task_id(task_id)
+    1645 +        self._set_task_context(task_id)
+    1646
+
+• Edited FabricPC/fabricpc/continual/trainer.py (+14 -1)
+    1684              "params": params_np,
+    1685 +            "opt_state": jax.tree_util.tree_map(np.array, self.opt_state),
+    1686              "global_step": self.global_step,
+         ⋮
+    1689              "accuracy_matrix": {str(k): v for k, v in self._accuracy_matrix.items()},
+    1690 +            "task_supports": {str(k): v for k, v in self._task_supports.items()},
+    1691              "support_manager": self.support_manager.save_state(),
+         ⋮
+    1721          self.params = jax.tree_util.tree_map(jnp.array, checkpoint["params"].item())
+    1720 -        self.opt_state = self.optimizer.init(self.params)
+    1722 +        if "opt_state" in checkpoint:
+    1723 +            self.opt_state = jax.tree_util.tree_map(
+    1724 +                jnp.array, checkpoint["opt_state"].item()
+    1725 +            )
+    1726 +        else:
+    1727 +            self.opt_state = self.optimizer.init(self.params)
+    1728
+         ⋮
+    1737          }
+    1738 +        self._task_supports = {
+    1739 +            int(k): tuple(v) for k, v in checkpoint.get("task_supports", {}).item().items()
+    1740 +        } if "task_supports" in checkpoint else {}
+    1741
+         ⋮
+    1748
+    1749 +        if self.current_task_id >= 0:
+    1750 +            self._set_task_context(self.current_task_id)
+    1751 +
+    1752          # Restore summaries
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’m patching the shared training loops next. The goal is backward compatibility for existing callers while allowing the continual trainer to pass in and get
+  back a live opt_state instead of having it recreated internally.
+
+• Edited FabricPC/fabricpc/training/train.py (+10 -3)
+      7
+      8 -from typing import Dict, Tuple, Any, cast, List
+      8 +from typing import Dict, Tuple, Any, cast, List, Optional
+      9  import math
+        ⋮
+    127      iter_callback=None,
+    128 -) -> Tuple[GraphParams, List[Any], List[Any]]:
+    128 +    opt_state: Optional[optax.OptState] = None,
+    129 +    return_opt_state: bool = False,
+    130 +) -> Tuple[GraphParams, List[Any], List[Any]] | Tuple[
+    131 +    GraphParams, List[Any], List[Any], optax.OptState
+    132 +]:
+    133      """
+        ⋮
+    164      """
+    161 -    opt_state = optimizer.init(params)
+    165 +    if opt_state is None:
+    166 +        opt_state = optimizer.init(params)
+    167
+        ⋮
+    248
+    249 +    if return_opt_state:
+    250 +        return params, iter_results, epoch_results, opt_state
+    251      return params, iter_results, epoch_results
+
+• Edited FabricPC/fabricpc/training/train_backprop.py (+9 -2)
+    134      iter_callback: Optional[Callable] = None,
+    135 -) -> Tuple[GraphParams, List[List[float]], List[Any]]:
+    135 +    opt_state: Optional[optax.OptState] = None,
+    136 +    return_opt_state: bool = False,
+    137 +) -> Tuple[GraphParams, List[List[float]], List[Any]] | Tuple[
+    138 +    GraphParams, List[List[float]], List[Any], optax.OptState
+    139 +]:
+    140      """
+        ⋮
+    174
+    171 -    opt_state = optimizer.init(params)
+    175 +    if opt_state is None:
+    176 +        opt_state = optimizer.init(params)
+    177
+        ⋮
+    258
+    259 +    if return_opt_state:
+    260 +        return params, iter_results, epoch_results, opt_state
+    261      return params, iter_results, epoch_results
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The main edits are in place. I’m doing a static pass now for signature compatibility and checkpoint-load correctness, then I’ll run a small targeted
+  verification in the provided venv.
+
+• Explored
+  └ Read trainer.py, nodes.py, train.py, train_backprop.py
+
+• Edited FabricPC/fabricpc/continual/trainer.py (+6 -3)
+    1737          }
+    1738 -        self._task_supports = {
+    1739 -            int(k): tuple(v) for k, v in checkpoint.get("task_supports", {}).item().items()
+    1740 -        } if "task_supports" in checkpoint else {}
+    1738 +        if "task_supports" in checkpoint:
+    1739 +            self._task_supports = {
+    1740 +                int(k): tuple(v) for k, v in checkpoint["task_supports"].item().items()
+    1741 +            }
+    1742 +        else:
+    1743 +            self._task_supports = {}
+    1744
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’m at verification now. First I’m running a syntax/import check on the edited modules in the provided virtual environment, then I’ll do one targeted runtime
+  check to confirm the support mask actually changes forward outputs.
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -m py_compile FabricPC/fabricpc/continual/nodes.py FabricPC/fabricpc/continual/
+  │ trainer.py FabricPC/fabricpc/training/train.py FabricPC/fabricpc/training/train_backprop.py
+  └ (no output)
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+import sys, importlib.util
+from pathlib import Path
+sys.path.insert(0, '/home/ni/repos/freeFabricPC/FabricPC')
+spec = importlib.util.spec_from_file_location('split_mnist_continual', Path('/home/ni/repos/freeFabricPC/FabricPC/examples/split_mnist_continual.py'))
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+import jax
+import jax.numpy as jnp
+from fabricpc.continual.config import make_config
+from fabricpc.graph import initialize_params
+from fabricpc.graph.state_initializer import initialize_graph_state
+from fabricpc.core.inference import run_inference
+from fabricpc.continual.nodes import set_current_support_cols, set_current_task_id
+cfg = make_config(quick_smoke=True)
+structure = mod.create_network_structure(cfg, use_columns=True)
+params = initialize_params(structure, jax.random.PRNGKey(0))
+batch_size = 2
+x = jnp.ones((batch_size, 784), dtype=jnp.float32)
+clamps = {structure.task_map['x']: x}
+set_current_task_id(0)
+set_current_support_cols((0,1,2))
+state = initialize_graph_state(structure, batch_size, jax.random.PRNGKey(1), clamps=clamps, params=params)
+final_a = run_inference(params, state, clamps, structure)
+cols_a = final_a.nodes['columns'].z_mu
+set_current_support_cols((0,1))
+state = initialize_graph_state(structure, batch_size, jax.random.PRNGKey(1), clamps=clamps, params=params)
+final_b = run_inference(params, state, clamps, structure)
+cols_b = final_b.nodes['columns'].z_mu
+print('masked_column_2_nonzero_a', float(jnp.abs(cols_a[:,2,:]).sum()))
+print('masked_column_2_nonzero_b', float(jnp.abs(cols_b[:,2,:]).sum()))
+print('difference', float(jnp.abs(cols_a - cols_b).sum()))
+PY
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import sys, importlib.util
+  │ from pathlib import Path
+  │ … +30 lines
+  └ Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+    Traceback (most recent call last):
+    … +11 lines
+    masked_column_2_nonzero_b 0.0
+    difference 0.25945359468460083
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The support-mask runtime check passed: deactivating a column now zeroes that column’s live output and changes the forward result. I’m doing one more quick
+  verification for optimizer-state persistence through checkpoint save/load before I summarize and move to the next flaw group.
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import sys, importlib.util, tempfile
+  │ from pathlib import Path
+  │ … +18 lines
+  └ Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+    Traceback (most recent call last):
+    … +18 lines
+    ValueError: setting an array element with a sequence. The requested array has an inhomogeneous shape after 1 dimensions. The detected shape was (2,) +
+    inhomogeneous part.
+
+• Waited for background terminal
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Checkpoint serialization exposed one bug in the new optimizer-state persistence: np.savez won’t accept the raw Optax state tree as-is. I’m patching that by
+  storing the optimizer state as a pickled object payload, which matches how the trainer already handles other nested checkpoint state.
+
+• Edited FabricPC/fabricpc/continual/trainer.py (+3 -1)
+    1684              "params": params_np,
+    1685 -            "opt_state": jax.tree_util.tree_map(np.array, self.opt_state),
+    1685 +            "opt_state": np.array(
+    1686 +                jax.tree_util.tree_map(np.array, self.opt_state), dtype=object
+    1687 +            ),
+    1688              "global_step": self.global_step,
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -m py_compile FabricPC/fabricpc/continual/trainer.py
+  └ (no output)
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import sys, importlib.util, tempfile
+  │ from pathlib import Path
+  │ … +18 lines
+  └ Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+    Traceback (most recent call last):
+    … +13 lines
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ValueError: can only convert an array of size 1 to a Python scalar
+
+• Waited for background terminal
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• np.savez accepted the object wrapper, but NumPy expanded it into a non-scalar object array on load. I’m tightening that encoding so the optimizer state is
+  stored as a single object payload and restored unambiguously.
+
+• Edited FabricPC/fabricpc/continual/trainer.py (+2 -2)
+    1685              "opt_state": np.array(
+    1686 -                jax.tree_util.tree_map(np.array, self.opt_state), dtype=object
+    1686 +                [jax.tree_util.tree_map(np.array, self.opt_state)], dtype=object
+    1687              ),
+         ⋮
+    1725              self.opt_state = jax.tree_util.tree_map(
+    1726 -                jnp.array, checkpoint["opt_state"].item()
+    1726 +                jnp.array, checkpoint["opt_state"][0]
+    1727              )
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -m py_compile FabricPC/fabricpc/continual/trainer.py
+  └ (no output)
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import sys, importlib.util, tempfile
+  │ from pathlib import Path
+  │ … +18 lines
+  └ Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+    Traceback (most recent call last):
+    … +55 lines
+     (ScaleByAdamState(count=array(0, dtype=int32), mu=GraphParams(nodes=4, total_params=45242), nu=GraphParams(nodes=4, total_params=45242)), EmptyState(),
+    EmptyState())]' with dtype object is not a valid JAX array type. Only arrays of numeric types are supported by JAX.
+
+• Waited for background terminal
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The remaining issue is purely in checkpoint encoding: the optimizer state needs to be stored as a scalar object, not a length-1 object array, otherwise JAX
+  tries to convert the wrapper itself. I’m switching to a true 0-D object payload.
+
+• Edited FabricPC/fabricpc/continual/trainer.py (+4 -4)
+    1681          params_np = jax.tree_util.tree_map(np.array, self.params)
+    1682 +        opt_state_np = np.empty((), dtype=object)
+    1683 +        opt_state_np[()] = jax.tree_util.tree_map(np.array, self.opt_state)
+    1684
+         ⋮
+    1686              "params": params_np,
+    1685 -            "opt_state": np.array(
+    1686 -                [jax.tree_util.tree_map(np.array, self.opt_state)], dtype=object
+    1687 -            ),
+    1687 +            "opt_state": opt_state_np,
+    1688              "global_step": self.global_step,
+         ⋮
+    1725              self.opt_state = jax.tree_util.tree_map(
+    1726 -                jnp.array, checkpoint["opt_state"][0]
+    1726 +                jnp.array, checkpoint["opt_state"][()]
+    1727              )
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -m py_compile FabricPC/fabricpc/continual/trainer.py
+  └ (no output)
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import sys, importlib.util, tempfile
+  │ from pathlib import Path
+  │ … +18 lines
+  └ Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+    Traceback (most recent call last):
+    … +13 lines
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ValueError: can only convert an array of size 1 to a Python scalar
+
+• Waited for background terminal
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The checkpoint path had a pre-existing fragility for other nested objects as well, not just opt_state. I’m normalizing the checkpoint format now so lists/
+  dicts like summaries, accuracy_matrix, task_supports, support_manager, and transweave all round-trip as scalar object payloads.
+
+• Edited FabricPC/fabricpc/continual/trainer.py (+21 -12)
+    1681          params_np = jax.tree_util.tree_map(np.array, self.params)
+    1682 -        opt_state_np = np.empty((), dtype=object)
+    1683 -        opt_state_np[()] = jax.tree_util.tree_map(np.array, self.opt_state)
+    1682 +
+    1683 +        def pack_object(value: Any) -> np.ndarray:
+    1684 +            payload = np.empty((), dtype=object)
+    1685 +            payload[()] = value
+    1686 +            return payload
+    1687 +
+    1688 +        opt_state_np = pack_object(jax.tree_util.tree_map(np.array, self.opt_state))
+    1689
+         ⋮
+    1694              "current_task_id": self.current_task_id,
+    1690 -            "summaries": [s.to_dict() for s in self.summaries],
+    1691 -            "accuracy_matrix": {str(k): v for k, v in self._accuracy_matrix.items()},
+    1692 -            "task_supports": {str(k): v for k, v in self._task_supports.items()},
+    1693 -            "support_manager": self.support_manager.save_state(),
+    1695 +            "summaries": pack_object([s.to_dict() for s in self.summaries]),
+    1696 +            "accuracy_matrix": pack_object(
+    1697 +                {str(k): v for k, v in self._accuracy_matrix.items()}
+    1698 +            ),
+    1699 +            "task_supports": pack_object(
+    1700 +                {str(k): v for k, v in self._task_supports.items()}
+    1701 +            ),
+    1702 +            "support_manager": pack_object(self.support_manager.save_state()),
+    1703              "rng_key": np.array(self.rng_key),
+    1695 -            "transweave": self.transweave_manager.save_state(),
+    1704 +            "transweave": pack_object(self.transweave_manager.save_state()),
+    1705          }
+         ⋮
+    1746          self._accuracy_matrix = {
+    1738 -            int(k): v for k, v in checkpoint["accuracy_matrix"].item().items()
+    1747 +            int(k): v for k, v in checkpoint["accuracy_matrix"][()].items()
+    1748          }
+         ⋮
+    1750              self._task_supports = {
+    1742 -                int(k): tuple(v) for k, v in checkpoint["task_supports"].item().items()
+    1751 +                int(k): tuple(v) for k, v in checkpoint["task_supports"][()].items()
+    1752              }
+         ⋮
+    1756          # Restore support manager
+    1748 -        self.support_manager.load_state(checkpoint["support_manager"].item())
+    1757 +        self.support_manager.load_state(checkpoint["support_manager"][()])
+    1758
+         ⋮
+    1760          if "transweave" in checkpoint:
+    1752 -            self.transweave_manager.load_state(checkpoint["transweave"].item())
+    1761 +            self.transweave_manager.load_state(checkpoint["transweave"][()])
+    1762
+         ⋮
+    1767          self.summaries = []
+    1759 -        for s in checkpoint["summaries"].item():
+    1768 +        for s in checkpoint["summaries"][()]:
+    1769              self.summaries.append(
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -m py_compile FabricPC/fabricpc/continual/trainer.py
+  └ (no output)
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import sys, importlib.util, tempfile
+  │ from pathlib import Path
+  │ … +18 lines
+  └ Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+    Traceback (most recent call last):
+    … +10 lines
+    supports_restored {0: (0, 1, 2)}
+    opt_state_restored tuple
+
+• Waited for background terminal
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The first stage is complete and verified: support masks now affect live forward activations, and checkpoints round-trip the optimizer state plus per-task
+  support assignments. I’m updating the plan to mark those done before we move to the causal-audit and TransWeave grounding fixes.
+
+• Updated Plan
+  └ Implemented and verified the first two items: support routing now masks live column activations via trainer-managed task context, and optimizer state is
+    preserved across tasks/checkpoints.
+    ✔ Wire support selection into the actual forward path so inactive columns are masked during training and evaluation, not just in gradient transforms
+    ✔ Preserve optimizer state across tasks and checkpoints so continual-learning dynamics and resume behavior are faithful
+    □ Replace synthetic TransWeave registration with model-derived composer parameters and measured column activation summaries
+    □ Replace fabricated causal support-audit gains with real swap-evaluation measurements on bounded audit batches
+    □ Add targeted smoke tests and invariants for support masking, checkpoint resume, TransWeave grounding, and causal audit correctness
+
+• Implemented the first stage.
+
+  Support routing now affects the actual forward pass. I added trainer-managed task context in trainer.py:449 and node-level fallback masking in nodes.py:43,
+  so ColumnNode and ComposerNode use the selected support columns even when the graph has no explicit mask edge. The trainer also records per-task supports and
+  restores the correct support set during masked evaluation and checkpoint reload.
+
+  Optimizer state is now preserved instead of being reinitialized every task. I extended train.py:118 and train_backprop.py:125 to accept and optionally return
+  opt_state, and updated the continual trainer to reuse self.opt_state across tasks. Checkpoints now serialize and restore opt_state and task_supports in a
+  round-trippable format in trainer.py:1670.
+
+  Verification:
+
+  - python -m py_compile passed on the edited modules in virt-envs/ffpc1.
+  - A targeted runtime check showed that removing column 2 from the support set drove that column’s live activation sum from 0.2594 to 0.0, with a nonzero
+    change in the forward result.
+  - A checkpoint round-trip restored both _task_supports and the optimizer state successfully.
+
+  One environment note: the provided venv still emits a JAX CUDA plugin fallback warning and runs on CPU here.
+
+  Next step is the result-invalidating mechanism work: replace fabricated causal audit gains with real swap evaluations, then replace synthetic TransWeave
+  registration with model-derived measurements.
+ 

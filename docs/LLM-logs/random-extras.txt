@@ -1,0 +1,27 @@
+
+Haley Lowy
+9:19 AM
+Here is your ASI Cloud Minimax API key:
+
+sk-fIzssb_SM-APMSFBqL5Zq3JgJyrTjhjreU4Tdu4X89w
+
+I am a bit disapointed with OmegaClaw on Minimax. I mean, I knew it would be a step down but...its like talking to GPT from a year ago. At least my conversation was.
+
+Please give it a try, and let me know your thoughts (don't expect max of course...but we do want something that people will want to interact with! Patrick and folks have made some updates in the last hours, so it may be working better this morning)
+
+9:23 AM
+
+
+
+
+
+
+
+Email has the link for the latest docker: https://docs.google.com/document/d/175ZZyRxqWtNC6LJbU1U9dEyk0ruOAKw8IMSaBuECopU/edit?tab=t.ae40dvmok4s7
+
+They just updated to this image:
+curl -fsSL https://github.com/asi-alliance/OmegaClaw-Core/raw/354ff244ef6c5bda0886e28447ca29b83e34d873/scripts/omegaclaw_setup.sh | bash -s -- singularitynet/omegaclaw:354ff244ef6c5bda0886e28447ca29b83e34d873
+
+Sorry!
+
+We just missed each other in the email
