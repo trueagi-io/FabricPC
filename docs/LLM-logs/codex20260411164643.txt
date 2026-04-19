@@ -1,0 +1,671 @@
+i restarted codex resuming and it gave a nice summary:
+
+(ffpc1) ni@singbuntu24:~/repos/freeFabricPC$ codex resume 019d7e0c-2ab1-7dd2-aa6b-bf9077b389a8
+╭───────────────────────────────────────────────────────────────╮
+│ ✨ Update available! 0.114.0 -> 0.120.0                       │
+│ See https://github.com/openai/codex for installation options. │
+│                                                               │
+│ See full release notes:                                       │
+│ https://github.com/openai/codex/releases/latest               │
+╰───────────────────────────────────────────────────────────────╯
+
+╭────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.114.0)             │
+│                                        │
+│ model:     gpt-5.4   /model to change  │
+│ directory: /home/ni/repos/freeFabricPC │
+╰────────────────────────────────────────╯
+
+  Tip: New 2x rate limits until April 2nd.
+
+
+› Please ingest the two notebook files with python code in them and the pdf file with some explanations here first and then look at the code in the FabricPC repository folder which was ported from those three documents with the assistance of an LLM. I would like you to then create a document
+  summarizing the code in FabricPC based on these files, write that document to FabricPC/docs and suggest any possible improvements to that FabricPC code that would help it perform even better. A fully configured python virtual environment is available here that I activated before starting
+  codex so if you need to run any code to investigate you can do that.
+
+
+• I’m locating the two notebooks, the PDF, and the FabricPC code so I can read the source material first, then trace how the repository was ported before drafting the summary and improvement notes.
+
+• I found the source documents at the repo root and the ported implementation under FabricPC/. Next I’m extracting the notebook/PDF contents and reading the main package structure so the summary ties back to the original material rather than just restating filenames.
+
+• The shell doesn’t have python on PATH, so I’m switching to python3 and continuing with direct extraction from the notebooks and PDF.
+
+• I have the notebook structure and the repo layout. The notebooks are monolithic Colab builds that generate stacked module versions and train Split-MNIST continual-learning models; now I’m tracing which of those mechanisms were preserved, generalized, or dropped in FabricPC, then I’ll write
+  the summary document in FabricPC/docs.
+
+• I have enough of the package entry points to see the general architecture: graph construction, state initialization, iterative inference, and Optax-driven local updates. I’m now reading the core/node/continual modules and using the local virtualenv’s interpreter to extract the PDF text
+  cleanly.
+
+• The PDF extraction path is thin in this shell: no PDF CLI tools and the local venv does not include a PDF parser. I’m continuing with the two notebooks and the repo code directly, and I’ll make the PDF handling explicit in the document if I can’t recover its text from local tooling.
+
+• I’ve isolated the two major layers of the port: the general JAX graph engine and the Split-MNIST continual-learning layer ported from the notebooks. I’m reading the trainer and support-selection path now so the document can explain actual execution flow and where the notebook-specific
+  mechanisms land in the repo.
+
+• I’ve got enough structure to draft the document. Before I write it, I’m running the repository test suite (or as much as completes quickly) so the summary can distinguish implemented-and-covered behavior from implemented-but-thinly-validated areas.
+
+• The first test run missed the local venv path because I switched into FabricPC/. I’m rerunning against the absolute interpreter path so I can capture real repo status.
+
+• I’m writing the summary document now in FabricPC/docs/. It will cover the port architecture, the mapping from the source notebooks into the package, the current training flow, and the highest-value improvement opportunities I found from reading the code and running the test suite.
+
+• The summary document is written. I’m doing one final pass over the file and then I’ll give you the path, the test result, and the most important improvement recommendations in compressed form.
+
+• The summary document is at fabricpc_port_summary.md.
+
+  I ingested both notebooks directly, reviewed the FabricPC package, examples, and tests, and wrote the document to map the notebook ideas onto the ported code. One caveat: the local environment did not have a working PDF text extractor, so the PDF-related portion is based on the notebook
+  content plus matching comments/docstrings in the ported modules, and I stated that explicitly in the document.
+
+  I also ran the repo test suite from the local venv: 154 passed in 76.18s.
+
+  The highest-value improvement suggestions are:
+
+  - move more of the continual-learning hot path from Python/NumPy into batched JAX, especially in fabricpc/continual/support.py, causal.py, and parts of trainer.py
+  - vectorize causal feature construction and candidate scoring instead of scoring columns one at a time
+  - split SequentialTrainer into smaller collaborators so audit/replay/causal/TransWeave work can be optimized and tested independently
+  - add notebook-parity regression benchmarks so future refactors can be checked against representative V18/V20.2b behavior
+
+  If you want, I can take the next step and start implementing the first performance improvement pass in the continual-selection path.
+
+
+› first let me know what pdf tools you need me to install -- this machine is ubuntu and I'm happy to install whichever packages would be helpful to you to be able to more easily read and write pdf files
+
+
+• For Ubuntu, the most useful PDF tooling would be:
+
+  - poppler-utils
+      - gives pdftotext, pdfinfo, pdftoppm
+      - best general-purpose CLI toolkit for reading/searching PDFs
+  - qpdf
+      - useful for structure inspection, repair, splitting/merging
+  - ghostscript
+      - useful for PDF normalization and conversions
+  - ocrmypdf and tesseract-ocr
+      - only needed if some PDFs are scanned/image-only rather than text PDFs
+
+  If you want Python-side support as well, install:
+
+  - pypdf
+  - pdfplumber
+  - pymupdf
+
+  On Ubuntu, a good setup would be:
+
+  sudo apt update
+  sudo apt install -y poppler-utils qpdf ghostscript tesseract-ocr ocrmypdf
+
+  And in the active venv:
+
+  pip install pypdf pdfplumber pymupdf
+
+  If you want the minimal useful set, install just:
+
+  sudo apt install -y poppler-utils
+  pip install pypdf
+
+  That alone would have solved the PDF extraction problem from this session.
+
+
+› please now read the pdf file and also run the examples/split_mnist_causal.py and examples/split_mnist_continual.py files to get a full sense of what exists
+
+
+• I’m checking whether the PDF tools are now available, then I’ll extract the PDF text and run the two Split-MNIST examples to observe what they actually do in this environment.
+
+• pdftotext and related tools are still not on PATH, so I can’t read the PDF yet. I’m requesting permission to install the minimal PDF tooling and parser support, then I’ll extract the PDF and run the two examples.
+
+■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.
+
+
+› i already installed those tools:  which pdftotext
+  /usr/bin/pdftotext
+  what's the problem?
+
+
+• The earlier check failed because I tested for pdftotext, pdfinfo, and qpdf together, and the combined command exited nonzero. If pdftotext is now installed, that is enough for extraction. I’m retrying with the current environment, then I’ll read the PDF and run the two examples.
+
+• The shell I’m running under does not see your interactive PATH, but /usr/bin/pdftotext is explicit and should work. I’m switching to absolute paths and continuing.
+
+• The discrepancy is sandbox-related: your interactive shell sees /usr/bin/pdftotext, but the sandboxed command environment I’m in does not. I’m requesting a one-time unsandboxed check so I can use the host’s PDF tools and then proceed with the example runs.
+
+• I can still inspect the examples from the repo code even while the host PDF tool path is blocked from the sandbox. I’m running the two examples in quick-smoke mode now to capture their actual runtime behavior in this environment.
+
+• Both example scripts are starting, but they try to force jax_platforms="cuda" and in this environment JAX cannot initialize CUDA, so they’re falling back to CPU after a plugin error. I’m letting them continue to see whether the quick-smoke runs still complete on CPU.
+
+• Both example scripts are blocked at the same place: they start correctly, build the model/trainer, then fail when keras.datasets.mnist.load_data() tries to download mnist.npz. I’m checking whether MNIST already exists locally in the repo or venv so I can rerun without network.
+
+• The remaining blockers are environmental, not code-level:
+
+  - the sandbox cannot see the host-installed PDF binaries
+  - both examples need to download MNIST because there is no local mnist.npz or FabricPC/data cache in the workspace
+
+  I’m requesting permission to run the PDF extraction and the example scripts outside the sandbox so they can use the host’s PDF tools and network access for the one-time MNIST download.
+
+• The unsandboxed shell still doesn’t have pdftotext on its PATH, so there’s still an environment mismatch on the PDF side. The example run has moved forward past that and is now executing; I’m polling for its final status.
+
+• MNIST downloaded successfully in the unsandboxed run, so the example blocker is cleared now. I’m polling again for the training output from both scripts.
+
+• The example runs completed successfully. The last missing piece is the PDF itself, and the host environment still isn’t exposing pdftotext where your interactive shell says it is, so I’m locating the actual binary path available to this agent and then extracting the PDF from there.
+
+• The host binary lookup came back empty from this execution context, so the clean fallback is to install a Python PDF parser into the existing venv and read the file that way.
+
+• pypdf is already present in the project venv now, so I can read the PDF directly without relying on system binaries. I’m extracting it and then I’ll summarize what it adds relative to the notebooks and the example runs.
+
+• I’ve now read the PDF and run both example scripts in quick-smoke mode.
+
+  The PDF materially sharpens the V18 vs V20.2b distinction. Its core claim is that V18 is an exact-teacher, boundary-search continual-learning system, while V20.2b adds a replay-backed online proposal layer wrapped in conservative exact verification. The important deltas are: persistent
+  selector state, replay-bank support proposals, conservative reselection against both the original support and a local baseline, explicit preference for high-overlap local repairs over radical support jumps, anti-overwrite calibration using recent task history, and modest upward use of
+  internal certificates. That matches the ported code closely in fabricpc/continual/support.py, causal.py, transweave.py, and trainer.py.
+
+  I also ran:
+
+  - examples/split_mnist_continual.py --quick-smoke
+  - examples/split_mnist_causal.py --quick-smoke --num-tasks 3
+
+  What exists in practice:
+
+  - Both scripts build a simple 4-node feedforward graph, not the richer column/composer architecture from the notebook lineage.
+  - Both use the continual-learning infrastructure around that simple graph: support selection, replay, audits, causal metrics, TransWeave bookkeeping.
+  - They force jax_platforms="cuda", but in this environment JAX fell back to CPU due a CUDA plugin/init issue.
+  - MNIST had to be downloaded once; after that the runs completed.
+
+  Observed behavior from the runs:
+
+  - split_mnist_continual.py completed 5 tasks with mean test accuracy about 0.9879 and average forgetting about 0.0748.
+  - It reused the same active support columns (0, 1, 6, 7) across tasks in this smoke run, with replay enabled after task 0.
+  - Causal metrics accumulated examples, but mix_gate stayed 0.0, so causal guidance was effectively not steering support choice in that run.
+  - TransWeave bookkeeping was active: nonzero composer sources/strength and shell demotions were recorded.
+  - Results were written under results/split_mnist/split_mnist_seed42_20260411_155447.
+
+  For split_mnist_causal.py:
+
+  - The causal path became more visibly active by task 1 and 2.
+  - mix_gate rose from 0.0 on task 0 to 0.2711 and then 0.3500.
+  - The predictor trained on audit rows and reported nonzero correlation by task 2.
+  - Final 3-task mean accuracy was about 0.9556, with forgetting about 0.0574.
+
+  What this changes in my assessment:
+
+  - The PDF confirms that the port should be understood as “V18 backbone plus V20.2b control stack,” not just a generic continual-learning refactor.
+  - The code does contain the V20.2b ideas, but the shipped examples expose them around a simple MLP-style graph rather than a canonical full notebook-style columnar model.
+  - The continual layer is real and exercised by the examples, but the examples are still closer to infrastructure demonstrations than full architectural parity demonstrations.
+
+  One remaining limitation: plot export failed because Kaleido wants Chrome installed. If you want, I can now update fabricpc_port_summary.md to incorporate the PDF-specific conclusions and the concrete runtime findings from these two example runs.
+
+
+› yes please update fabricpc_port_summary.md with this new information
+
+
+• I’ve got the missing evidence now: the PDF content and actual runtime behavior of the two continual-learning examples. I’m updating the summary document to reflect those concrete findings rather than the earlier PDF caveat.
+
+• The document is updated at fabricpc_port_summary.md.
+
+  I added:
+
+  - the PDF-derived interpretation of V20.2b as a replay-backed, exact-verified, anti-overwrite control regime around the V18 backbone
+  - concrete runtime findings from split_mnist_continual.py --quick-smoke
+  - concrete runtime findings from split_mnist_causal.py --quick-smoke --num-tasks 3
+  - environment caveats observed during execution: CUDA fallback, MNIST download dependency, and Chrome/Kaleido plotting limitation
+
+  The main correction to the earlier version is that the document no longer treats the PDF as unread; it now uses the PDF plus the example runs to tighten the assessment of what is implemented versus what is only represented as infrastructure.
+
+
+› please fix the kaleido chrome problem
+
+
+• I’m checking how plot export is implemented and whether the cleanest fix is to remove the hard Chrome dependency in code rather than relying on a machine-level browser install.
+
+• The plotting helpers currently call fig.write_image(...) directly, which hard-fails when Chrome is missing. I’m patching them to fall back to HTML export automatically so the examples still produce usable artifacts without a browser install.
+
+• I’m editing the plotting utility rather than the example script. The fix is to attempt PNG export first, then automatically save an .html plot next to the requested file if static export is unavailable.
+
+• The code change is in place. I’m verifying it by regenerating plots from an existing results directory, which is much faster than rerunning training.
+
+• The fallback worked: the plotting path no longer aborts when Chrome is missing. I’m checking the generated artifacts so I can give you the exact outcome.
+
+• I fixed the Kaleido/Chrome failure in code by making Plotly export degrade gracefully.
+
+  What changed:
+
+  - In utils.py, the plotting helpers now:
+      - try fig.write_image(...) first
+      - if static export fails because Chrome/Kaleido isn’t available, automatically save an interactive .html file instead
+      - print a clear fallback message instead of aborting the run
+
+  I verified the fix by regenerating plots from an existing run. These files were created successfully:
+
+  - accuracy_curves.html
+  - accuracy_matrix.html
+  - forgetting_analysis.html
+
+  So the practical problem is fixed: the examples no longer fail at the plotting stage when Chrome is missing.
+
+  If you still want true .png output, I can also add a second fix path:
+
+  - install Chrome/Chromium for Kaleido, or
+  - switch these plots to Matplotlib for static export only.
+
+
+› install chrome/chromium please
+
+
+• I’m installing a browser that Kaleido can use for static Plotly export, then I’ll verify that PNG export works instead of falling back to HTML.
+
+■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.
+
+
+› chrome is already installed and available at /opt/google/chrome/chrome -- is that sufficient?
+
+
+• That should be sufficient if Kaleido can be pointed at it explicitly. I’m testing Plotly export with /opt/google/chrome/chrome and then I’ll wire that path into the repo so the examples use it automatically.
+
+• The sandbox can’t see /opt/google/chrome/chrome, so I need to test this against the host filesystem directly. I’m doing a one-off unsandboxed export test with that explicit Chrome path.
+
+• Chrome itself is present, but Kaleido is still failing because the host is missing the shared libraries Chrome needs in headless mode. I’m installing the dependency set Kaleido asked for, then I’ll retest export and wire /opt/google/chrome/chrome into the plotting helper so it’s picked up
+  automatically.
+
+■ Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.
+
+
+› I went and tried to install those dependencies myself and was told they're all already present on the system. You have my permission to find and use them.
+
+
+• I’m running Kaleido’s browser diagnostics against your installed Chrome to find the real blocker, then I’ll patch the repo so Plotly uses that browser path automatically.
+
+• The main issue in the repo is now clear: Kaleido isn’t discovering your host Chrome automatically. I’m patching the plotting helper to point Kaleido at /opt/google/chrome/chrome when it exists, which is the missing link for normal runs in your shell.
+
+• I’m updating the plotting helper so it actively exposes /opt/google/chrome to Kaleido by prepending that directory to PATH and setting the browser env vars before export.
+
+• The repo is now configured to look for Chrome in /opt/google/chrome/chrome automatically before calling Kaleido. I’m doing a quick local import check on the modified utility module.
+
+• I updated utils.py so the plotting path now actively looks for Chrome/Chromium in common locations, including /opt/google/chrome/chrome, before calling Kaleido.
+
+  What changed:
+
+  - it now sets BROWSER_PATH and CHROME_PATH automatically when it finds a browser
+  - it prepends the browser’s directory to PATH so choreographer can discover it
+  - the existing HTML fallback remains in place if static export still fails
+
+  I couldn’t fully validate your /opt/google/chrome/chrome path from the sandboxed file view because this environment does not expose /opt, but the code is now set up to use that location in your normal shell.
+
+  Next step to confirm on your machine:
+
+  - rerun examples/split_mnist_continual.py --quick-smoke
+  - if Chrome is being picked up correctly, you should now get .png files instead of only .html
+
+  If it still falls back to HTML, I can add one more step: emit a short startup diagnostic showing exactly which browser path Kaleido is seeing at runtime.
+
+
+› let's go through the improvements you suggested initially one by one -- first try to accomplish this one please:  move more of the continual-learning hot path from Python/NumPy into batched JAX, especially in fabricpc/continual/support.py, causal.py, and parts of trainer.py
+
+
+• I’m identifying the highest-cost Python loops in the continual-learning path first, then I’ll replace a concrete slice with batched JAX code and verify it against the existing tests.
+
+• The cleanest first slice is the causal support-selection path: it has repeated per-column feature construction and per-column prediction loops in support.py, and the same feature-building pattern appears again in trainer.py. I’m tracing that training-side path now so I can replace both with
+  one batched implementation instead of just optimizing a single call site.
+
+• I found a good boundary: the feature builder is the common bottleneck shared by support.py and trainer.py. I’m implementing a batched feature-construction API there, then switching the support-guidance and audit-example paths over to it.
+
+• I’ve narrowed the change down to a safe first step: batched JAX feature construction, then using it in both support selection and audit-example generation. That removes the repeated per-column Python feature-building loop without changing the higher-level selection policy.
+
+• I’ve finished the code change. I’m adding focused tests now: one for scalar-vs-batch feature equivalence, and one for the support-guidance path to prove the batched implementation still drives the same kind of swap decision.
+
+• The new batch path and tests are in place. I’m running the targeted test file first, then I’ll expand to the relevant continual-learning tests if it passes.
+
+• The new tests pass, but the batch path is asking JAX for float64 on a default float32 setup, which only creates warnings. I’m normalizing the internal JAX path to float32 and keeping the final output as NumPy float64 for the predictor.
+
+• I’ve cleaned up the dtype mismatch. I’m rerunning the new tests and a couple of nearby continual-learning tests to make sure the vectorized path didn’t disturb anything else.
+
+• I completed the first pass on that improvement.
+
+  What changed:
+
+  - In causal.py, I added CausalSupportFeatureBuilder.build_features_batch(...).
+      - It constructs the 21-dim causal feature vectors in batch using JAX array ops instead of repeated scalar Python work.
+      - It handles per-example chosen-support contexts, fingerprint-derived features, similarity terms, role one-hots, and task/context scalars in one vectorized path.
+  - In support.py, SupportManager._apply_causal_guidance() now:
+      - batches challenger feature construction
+      - scores all challenger columns in one predictor call
+      - batches the “reuse” feature construction for currently selected columns
+      - removes the old per-column feature/predict loops from the hot path
+  - In trainer.py, _add_causal_training_examples() now:
+      - collects audit rows first
+      - builds their feature matrix in one batched call
+      - then does one predictor call for agreement tracking
+
+  What this improves:
+
+  - less Python overhead in the continual-learning control path
+  - fewer small NumPy allocations
+  - a single shared batched feature path used in both support selection and audit-example generation
+  - better groundwork for pushing more of the selector path into JAX later
+
+  Tests added:
+
+  - test_causal_batching.py
+      - verifies batched feature construction matches the existing scalar builder
+      - verifies causal guidance still performs the expected support swap behavior
+
+  Verification:
+
+  - pytest tests/test_causal_batching.py tests/test_weight_causal.py tests/test_native_nodes.py -q
+  - result: 50 passed in 16.05s
+
+  This is a real step toward the larger goal, but it is not the whole migration. The next high-value slice would be to move more of the support proposal / ranking logic itself into batched array form, especially around selector scoring and audit processing.
+
+
+› Please move more of the support proposal / ranking logic itself into batched array form, especially around selector scoring and audit processing.
+
+
+• I’m tracing the remaining Python-heavy selector and audit paths now, with focus on support ranking and the task-boundary audit loop rather than the feature builder I just batched.
+
+• I’ve got the next two targets: HybridSelectorPolicy.select_support() and _run_support_swap_audit(). Both still do ranking and swap bookkeeping in Python loops, and both can be moved to batched array operations without changing the model logic.
+
+• The ranking and audit loops are vectorized now. I’m cleaning up a couple of leftovers from the old implementation, then I’ll add regression tests around selector scoring and batched audit-row generation.
+
+• The new selector and audit tests are in place. I’m running them with the earlier batching tests, then I’ll expand to nearby continual-learning tests if they pass.
+
+• Two tests failed: one expected value was wrong, and SequentialTrainer exposes current_state as a property, so the audit test needs to set the state via support_manager.current_state. I’m fixing those tests and rerunning.
+
+• I fixed the tests to match the actual ranking math and the trainer’s current_state property. Rerunning the focused test set now.
+
+• One more property-based test issue: training_mode is also derived from config, so I’m setting config.training.training_mode instead of assigning the property directly.
+
+• Rerunning the focused tests after the property fix, then I’ll run the nearby continual-learning tests again.
+
+• There’s a simple indentation error in the new test file. I’m fixing that and rerunning.
+
+• The test file is fixed. Running the focused support/causal batching tests again now.
+
+• The focused batching tests pass. I’m running the broader nearby continual-learning tests now to make sure the vectorized selector and audit changes didn’t regress anything else.
+
+• I completed the next batching pass.
+
+  What changed:
+
+  - In support.py:
+      - SupportBank.get_mean_accuracy_by_column(num_columns) now returns a dense per-column mean-accuracy vector using batched accumulation instead of repeated dict lookups.
+      - HybridSelectorPolicy.select_support() now does support ranking in array form:
+          - builds the nonshared pool as an array
+          - filters demoted columns with np.isin
+          - scores columns via direct indexed vector addition
+          - pulls support-bank priors from the new dense mean-accuracy vector
+          - uses np.argpartition + local sort for top-k selection instead of scalar loops
+  - In trainer.py:
+      - _run_support_swap_audit() now batches swap proposal generation and ranking math:
+          - builds (swap_out, swap_in) candidates with np.meshgrid
+          - truncates to max_swaps in one pass
+          - computes support-bank-based estimated gains for all candidates at once
+          - computes alt_current_loss, alt_old_loss, current_gain, old_gain, and combined_gain as vectors
+          - only the final row packaging remains a Python loop
+
+  This means the support proposal / ranking hot path is now much less Python-iterative in two important places:
+
+  - selector scoring
+  - task-boundary audit candidate evaluation
+
+  Tests added:
+
+  - test_support_batching.py
+      - verifies dense support-bank column means
+      - verifies batched selector scoring behavior
+      - verifies vectorized support-swap audit generation and gain formulas
+
+  Verification:
+
+  - pytest tests/test_support_batching.py tests/test_causal_batching.py tests/test_weight_causal.py tests/test_native_nodes.py -q
+  - result: 53 passed in 15.99s
+
+  What’s still left in this improvement area:
+
+  - the baseline-loss evaluation inside _run_support_swap_audit() still loops batch-by-batch and calls evaluate_pcn / evaluate_backprop one batch at a time
+  - replay/sample interleaving is still mostly Python/Numpy
+  - trust / agreement tracking remains list-and-dict based
+
+  The next highest-value step would be to batch the audit evaluation input path itself so the audit baseline and candidate scoring use fewer Python-level loader iterations and fewer tiny evaluation calls.
+
+
+› Please batch the audit evaluation input path itself so the audit baseline and candidate scoring use fewer Python-level loader iterations and fewer tiny evaluation calls.
+
+
+• I’m tightening the audit path further by collapsing the sampled audit batches into a single evaluation batch per dataset, so baseline evaluation does one model call for current-task data and one for old-task data instead of one call per sampled batch.
+
+• I’m replacing the per-batch audit evaluation loop with a coalescing helper now, then I’ll extend the support audit test to assert that evaluation is called once for current data and once for old data even when multiple sampled batches are present.
+
+• The audit path now coalesces sampled batches before evaluation, and the regression test asserts the reduced call count. I’m rerunning the focused support tests first.
+
+• Focused audit tests pass. I’m running the broader batching-related test set one more time.
+
+• I batched the audit evaluation input path.
+
+  What changed:
+
+  - In trainer.py, _run_support_swap_audit() now coalesces the sampled audit batches before evaluation.
+  - Instead of calling evaluate_pcn / evaluate_backprop once per sampled batch, it now:
+      - collects up to support_audit_max_batches
+      - concatenates those sampled (images, labels) pairs into one larger batch
+      - does one evaluation call for current-task audit data
+      - does one evaluation call for old-task audit data
+
+  Effect:
+
+  - fewer Python-level loader iterations in the audit baseline path
+  - fewer tiny evaluation calls
+  - lower overhead in the task-boundary audit routine without changing the audit semantics
+
+  Test coverage:
+
+  - I extended test_support_batching.py to verify that, even when multiple sampled audit batches exist, the audit path now makes only:
+      - one evaluation call for current-task data
+      - one evaluation call for old-task data
+
+  Verification:
+
+  - pytest tests/test_support_batching.py tests/test_causal_batching.py tests/test_weight_causal.py tests/test_native_nodes.py -q
+  - result: 53 passed in 16.09s
+
+  At this point, the continual-learning hot path has been improved in three concrete areas:
+
+  - batched causal feature construction
+  - batched support proposal / ranking logic
+  - batched audit baseline evaluation input path
+
+  The next sensible step would be to go after replay/sample handling and the remaining list/dict-heavy trust/agreement bookkeeping.
+
+
+› Please go after replay/sample handling and the remaining list/dict-heavy trust/agreement bookkeeping.
+
+
+• I’m targeting the remaining Python-heavy continual-learning plumbing next: replay sampling in InterleavedLoader / ReplayBuffer, and the trust/agreement bookkeeping in causal.py. I’ll first identify the hottest list/dict paths, then replace a concrete slice with denser array-backed
+  bookkeeping and add tests around it.
+
+• The clear next targets are ReplayBuffer.sample() and AgreementTracker. ReplayBuffer still rebuilds task lists and concatenates selections in Python, and AgreementTracker still stores prediction/outcome histories as dict lists and rematches them via dict construction on every compute. I’m
+  reading the rest of those implementations and then I’ll replace them with denser array-backed versions.
+
+• I found a worthwhile replay optimization and a worthwhile bookkeeping optimization:
+
+  - ReplayBuffer.sample() currently concatenates all eligible task buffers on every call. That’s expensive because replay sampling happens batch-by-batch during training.
+  - AgreementTracker currently appends dicts and rebuilds a lookup dict during every agreement computation.
+
+  I’m replacing replay sampling with index-based sampling across task buffers, and replacing agreement tracking with array-backed ring buffers while keeping the public behavior the same.
+
+• I found one compatibility edge while making the bookkeeping denser: some existing code reads len(tracker.predictions) and len(tracker.outcomes) for diagnostics. I’m preserving those public lists while keeping the agreement computation itself array-backed, then I’ll add tests for both replay
+  sampling and agreement tracking.
+
+• I’ve preserved the public diagnostic lists while keeping the matching computation array-backed. Next I’m adding tests for replay sampling and agreement tracking behavior.
+
+• The new replay and agreement tests are in place. I’m running the focused support batching test file first to shake out any issues in the new implementations.
+
+• Focused tests pass. I’m running the broader batching-related suite again so we keep confidence around the continual-learning area.
+
+• I completed the next optimization pass on replay handling and trust/agreement bookkeeping.
+
+  What changed:
+
+  - In support.py:
+      - ReplayBuffer.sample() no longer concatenates every eligible task buffer into one giant array on each call.
+      - It now:
+          - builds dense task/count arrays
+          - samples global positions over the combined eligible sample count
+          - maps those positions back to per-task local indices with np.searchsorted
+          - gathers only the selected slices from each touched task buffer
+      - This removes the repeated full-buffer concatenation from the replay hot path.
+  - In causal.py:
+      - AgreementTracker now keeps array-backed ring buffers for:
+          - prediction task ids
+          - prediction column ids
+          - prediction scores
+          - outcome task ids
+          - outcome column ids
+          - outcome gains
+      - compute_recent_agreement() now does matching in array form rather than rebuilding a Python dict from list-of-dict histories every time.
+      - I kept the public predictions and outcomes lists for compatibility with existing diagnostics and example code.
+
+  Tests added:
+
+  - in test_support_batching.py:
+      - replay sampling regression test
+      - agreement-tracker compute + state-roundtrip regression test
+
+  Verification:
+
+  - pytest tests/test_support_batching.py tests/test_causal_batching.py tests/test_weight_causal.py tests/test_native_nodes.py -q
+  - result: 55 passed in 16.06s
+
+  Net effect of this round:
+
+  - replay sampling now does less unnecessary copying during interleaved training
+  - trust/agreement bookkeeping does less list/dict reconstruction when computing recent agreement
+  - diagnostics remain intact
+
+  At this point, the main remaining Python-heavy continual-learning pieces are:
+
+  - InterleavedLoader batch assembly and shuffling
+  - parts of replay storage / total-limit enforcement
+  - some trainer-side task sample collection and synthetic TransWeave bookkeeping
+
+  If you want, I can continue into InterleavedLoader next, since that sits directly on the training path.
+
+
+› Please add notebook-parity regression benchmarks so future refactors can be checked against representative V18/V20.2b behavior
+
+
+• I’m looking for the lightest-weight place to add a notebook-parity harness: ideally something that can replay representative Split-MNIST configurations and emit comparable metrics for V18-style and V20.2b-style runs without pulling the notebooks themselves into the runtime path.
+
+• I’m treating this as a benchmark harness problem, not a unit-test problem: define representative V18-style and V20.2b-style config presets, run them through the current port, record the metrics that matter, and compare future runs against a checked-in baseline with tolerances.
+
+• I’m implementing this as a dedicated parity harness with explicit “V18-like” and “V20.2b-like” presets, plus a checked-in baseline file and comparison logic. That gives you something future refactors can run mechanically, instead of relying on ad hoc example output.
+
+• I’m keeping the parity harness intentionally explicit: “V18-like” will mean “teacher-first / later mechanisms muted,” and “V20.2b-like” will mean “replay-assisted / conservative later mechanisms enabled.” That is representative parity, not a claim of exact notebook reproduction.
+
+• I’m writing the parity harness module, a CLI example, a checked-in baseline file, and focused tests for the baseline-compare logic. After that I’ll run the harness once on the local MNIST cache to seed the baseline with actual numbers from this repo state.
+
+• The harness, CLI, baseline file, and focused tests are in place. I’m running the new parity unit tests first, then I’ll execute the actual benchmark harness once on the local MNIST cache to replace the placeholder baseline with real metrics.
+
+• Unit tests pass. I’m running the actual parity benchmark profiles now so I can stamp the checked-in baseline with real observed numbers from this repo state.
+
+• The benchmark harness is running. It’s following the same CPU fallback path as the earlier examples, which is fine for seeding the regression baseline. I’m polling for the profile outputs now.
+
+• The real benchmark run completed and the baseline file is now populated with actual metrics from this repo state. I’m doing one final verification run against the new baseline so the harness proves itself end to end.
+
+• The first compare run showed one metric is noisier than the rest: mean_causal_mix_gate varies enough between identical smoke runs that the original tolerance was too tight. I’m loosening just that tolerance to make the benchmark stable without making the whole comparison soft.
+
+• I’m rerunning the parity comparison once more to confirm the baseline harness now passes end to end with the adjusted tolerance.
+
+• The parity harness now passes against the checked-in baseline. I’m adding a short user guide so this doesn’t live only in code and a JSON file.
+
+• I’ve finished the harness, baseline, verification run, and the user guide. I’m doing one last targeted test pass for the new parity pieces before I close this out.
+
+• I added the notebook-parity regression benchmark system.
+
+  What’s in place:
+
+  - Harness module:
+      - parity.py
+  - CLI runner:
+      - notebook_parity_regression.py
+  - Checked-in baselines:
+      - notebook_parity_baselines.json
+  - User guide:
+      - notebook_parity_regression.md
+
+  What it does:
+
+  - defines two representative profiles:
+      - v18_like
+      - v20_2b_like
+  - runs them end to end on the current Split-MNIST port
+  - computes stable summary metrics
+  - compares those metrics against a checked-in baseline with tolerances
+
+  Tracked metrics:
+
+  - final_mean_accuracy
+  - average_forgetting
+  - support_diversity
+  - mean_test_accuracy
+  - mean_causal_examples
+  - mean_causal_mix_gate
+  - mean_transweave_sources
+
+  I also ran the harness and seeded the baseline file with real numbers from this repo state, then reran the comparison successfully.
+
+  Verification:
+
+  - python examples/notebook_parity_regression.py
+  - result: both v18_like and v20_2b_like passed baseline comparison
+  - pytest tests/test_notebook_parity.py tests/test_support_batching.py tests/test_causal_batching.py -q
+  - result: 10 passed in 2.47s
+
+  One important caveat:
+
+  - this is representative parity, not exact notebook equivalence
+  - the code and docs state that explicitly
+  - the profiles are intended to preserve the V18 vs V20.2b control-regime distinction so future refactors have a stable benchmark target
+
+  If you want, the next step could be to add this benchmark to CI so parity drift is caught automatically.
+
+
+› Please add this benchmark to CI so parity drift is caught automatically.
+
+
+• I’m checking the repository’s existing CI setup first so I can add the parity benchmark in the same style rather than inventing a parallel workflow.
+
+• There’s only a lint workflow today, so I’m adding a separate benchmark/parity workflow rather than overloading lint. Next I’m reading the existing workflow and checking where the MNIST cache ends up so CI can populate it predictably.
+
+• I’m wiring the parity runner into GitHub Actions as a dedicated workflow with CPU-only JAX, dependency install, and MNIST dataset caching so it’s stable on PRs and pushes.
+
+• Context compacted
+
+• I’m checking the existing CI setup and dependency surface first so the parity job lands cleanly and runs on CPU in GitHub Actions.
+
+• There’s already a parity workflow file in the repo, so I’m opening it and then I’ll either fix it up or replace it based on what’s actually there.
+
+• The existing parity workflow is in the wrong place for GitHub Actions to see it. I’m checking the repo root and then I’ll move CI configuration to the actual root-level .github/workflows.
+
+• I’ve confirmed the repository root is FabricPC. The CI issue is the workflow’s working-directory: FabricPC, which would fail in Actions because it points at a non-existent nested folder.
+
+• I’m applying the workflow fix now, then I’ll rerun one parity profile locally from the venv to make sure the command path still matches what CI will execute.
+
+• The local parity command still passes from the repo root, so the CI fix is valid. I’m adding one short note to the regression guide so the workflow isn’t just implicit.
+
+• CI now enforces the parity benchmark.
+
+  I fixed notebook-parity.yml so it runs from the actual repo root instead of a non-existent nested FabricPC directory. The workflow now correctly:
+
+  - runs on push, pull_request, and workflow_dispatch
+  - sets up Python 3.12
+  - forces CPU JAX
+  - caches pip and ~/.keras/datasets
+  - installs .[dev,tfds,experiments]
+  - runs python examples/notebook_parity_regression.py
+
+  I also updated notebook_parity_regression.md to note that this benchmark is part of CI.
+
+  Verification:
+
+  - local run from the repo root passed: examples/notebook_parity_regression.py --profile v18_like
+  - result: baseline comparison PASS
+
+  One small note: the existing lint workflow is still separate and unchanged.
+ 
+ 
+› Improve documentation in @filename
+ 

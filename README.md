@@ -42,12 +42,36 @@ aim up
 python examples/mnist_demo.py
 ```
 
+## Example Entry Points
+
+FabricPC now includes both core demos and continual-learning examples.
+
+- Basic MNIST demo: `python examples/mnist_demo.py`
+- Quick continual smoke test: `python examples/split_mnist_quick.py`
+- Full Split-MNIST continual run: `python examples/split_mnist_continual.py`
+- Split-MNIST causal diagnostics: `python examples/split_mnist_causal.py`
+- Split-CIFAR-100 continual run: `python examples/split_cifar100_continual.py`
+
+See [examples/README.md](examples/README.md) for the example inventory and common invocation patterns.
+
 ## Features
 - Modular node and wire abstractions for flexible model construction
 - Inherently supports arbitrary architectures: feedforward, recurrent, skip connections, etc.
 - Support for various node types: Linear, Conv1D/2D/3D (planned), Transfomers (in progress)
 - Local automatic differentiation for efficient inference and learning
 - JAX backend for GPU acceleration and scalability
+- Continual-learning research code for Split-MNIST and Split-CIFAR-100 experiments
+
+## Continual Learning
+
+The `fabricpc.continual` package provides task-sequential training utilities built on top of the main graph API, including:
+
+- Split-MNIST and Split-CIFAR-100 task loaders
+- Sequential training with accuracy-matrix and forgetting analysis
+- Column-based routing modules for modular continual-learning experiments
+- Support-selection, gradient-protection, EWC, and TransWeave utilities
+
+The main continual-learning entrypoints live in `examples/` and write run artifacts under `../results/` by default.
 
 ## Contributions
 Contributions are welcome! Please open issues or pull requests on the GitHub repository.

@@ -1,0 +1,170 @@
+╭─── Claude Code v2.0.76 ───────────────────────────────────────────────────────────────────────╮
+│                           │ Tips for getting started                                          │
+│   Welcome back charlie!   │ Run /init to create a CLAUDE.md file with instructions for Claude │
+│                           │ ───────────────────────────────────────────────────────────────── │
+│        * ▐▛███▜▌ *        │ Recent activity                                                   │
+│       * ▝▜█████▛▘ *       │ No recent activity                                                │
+│        *  ▘▘ ▝▝  *        │                                                                   │
+│                           │                                                                   │
+│   Opus 4.5 · Claude Max   │                                                                   │
+│   ~/repos/freeFabricPC    │                                                                   │
+╰───────────────────────────────────────────────────────────────────────────────────────────────╯
+
+> please ingest agi_cltl_benchmarks_v2.pdf -- then go into planning mode on the code in FabricPC/ -- finally, write out a file with recomendations for 
+implementing everything from the paper in this codebase to this name & location: FabricPC/docs/cltl_plan.md 
+
+● I'll start by reading the PDF file to understand its contents, then explore the codebase.
+
+● Read(agi_cltl_benchmarks_v2.pdf)
+  ⎿  Read PDF (373.3KB)
+
+● I've read the paper. It proposes a comprehensive benchmark framework for AGI-oriented continual learning + transfer learning (CL+TL). Now let me enter planning mode to explore the FabricPC codebase and understand how the paper's concepts could be implemented.
+                                                                   
+● Entered plan mode
+  Claude is now exploring and designing an implementation approach.
+
+● Let me explore the FabricPC codebase to understand its architecture and capabilities.
+
+● 3 Explore agents finished (ctrl+o to expand)
+   ├─ Explore FabricPC architecture · 35 tool uses · 51.5k tokens
+   │  ⎿  Done
+   ├─ Find learning/memory systems · 22 tool uses · 91.7k tokens
+   │  ⎿  Done
+   └─ Find patterns and interfaces · 30 tool uses · 67.6k tokens
+      ⎿  Done
+
+● Excellent! I now have a comprehensive understanding of the FabricPC codebase. It's a JAX-based Predictive Coding framework with sophisticated continual learning mechanisms including:
+
+  - Core PC Engine: Local Hebbian learning, graph-based architecture
+  - Continual Learning: Support selection, causal fingerprints, TransWeave transfer, replay buffers
+  - Existing Benchmark Framework: cl-benchmark with forgetting, BWT, FWT metrics
+
+  Now let me launch a Plan agent to design the implementation recommendations based on the paper's concepts.
+
+● Plan(Design CLTL implementation plan)
+  ⎿  Done (30 tool uses · 108.8k tokens · 3m 8s)                                                                                                               
+
+● I now have a comprehensive understanding of both the paper and the FabricPC codebase, along with a detailed implementation plan. Let me write the final plan file, and then I'll be ready to create the actual recommendations document at FabricPC/docs/cltl_plan.md.
+
+● Updated plan
+  ⎿  /plan to preview
+
+● Now I'll exit plan mode so I can create the actual recommendations document at the location you specified.
+                                                                                                                                                               
+● User approved Claude's plan
+  ⎿  Plan saved to: ~/repos/h/causal-hnet/LLM-session-logs/claude/rogr-fedora-42/plans/ticklish-bubbling-globe.md · /plan to edit
+     Plan: AGI CL+TL Benchmark Implementation Recommendations
+
+     Task
+
+     Write implementation recommendations for integrating AGI-oriented Continual Learning + Transfer Learning benchmarks from Ben Goertzel's paper 
+     (agi_cltl_benchmarks_v2.pdf) into the FabricPC codebase.
+
+     Output file: FabricPC/docs/cltl_plan.md
+
+     Summary
+
+     The paper proposes a 4-axis benchmark matrix for AGI-oriented CL+TL evaluation:
+     1. Task Families (control streams, compositional, multimodal, embodied)
+     2. Surface Types (raw, frozen-feature, structured, query)
+     3. Stream Protocols (abrupt switch, gradual drift, recurring, interleaved, hidden boundaries)
+     4. Resource Tracks (fixed-capacity, bounded-growth, open-growth)
+
+     Plus extended metrics beyond classical CL (transfer matrix, few-shot gain, recurrence gain, etc.) and two new embodied benchmarks (Minecraft Concept 
+     Ecology, Object-Affordance Ecology).
+
+     FabricPC Existing Infrastructure
+
+     Strong foundations exist:
+     - fabricpc/continual/trainer.py: SequentialTrainer for task-by-task training
+     - fabricpc/continual/support.py: SupportManager, ReplayBuffer
+     - fabricpc/continual/causal.py: CausalFingerprintBank for routing
+     - fabricpc/continual/transweave.py: Optimal transport transfer
+     - cl-benchmark/: BenchmarkRunner with ACC, BWT, FWT, Forgetting metrics
+
+     Implementation Approach
+
+     Create new fabricpc/benchmarks/ module with:
+     - Configuration system (4-axis matrix config)
+     - Extended stream protocols
+     - Resource tracking
+     - Transfer-centred metrics
+     - Concept ecology support
+
+     Integrate with existing SequentialTrainer via callbacks and extended configuration.
+
+     Files to Create
+
+     Primary output: /home/ni/repos/freeFabricPC/FabricPC/docs/cltl_plan.md
+
+     This will contain comprehensive implementation recommendations covering:
+     1. Paper-to-codebase mapping
+     2. New module architecture
+     3. Implementation phases
+     4. Code specifications
+     5. Integration points
+     6. Testing strategy
+
+● Now I'll create the comprehensive recommendations document at FabricPC/docs/cltl_plan.md:
+
+● Bash(mkdir -p /home/ni/repos/freeFabricPC/FabricPC/docs)
+  ⎿  (No content)
+
+● Write(FabricPC/docs/cltl_plan.md)
+  ⎿  Wrote 1582 lines to FabricPC/docs/cltl_plan.md                                                                                                          
+      1 # AGI-Oriented Continual Learning + Transfer Learning Implementation Plan
+      2 ## Based on: "Toward AGI-friendly Benchmarks for Continual + Transfer Learning" (Goertzel, April 2026)
+      3 This document provides comprehensive recommendations for implementing the AGI-oriented CL+TL benchmark framework from Ben Goertzel's paper into the F
+        abricPC codebase.
+      4 ---
+      5 ## Table of Contents
+     … +1572 lines (ctrl+o to expand)
+
+● I've created the comprehensive implementation recommendations document at FabricPC/docs/cltl_plan.md.
+
+  Summary
+
+  The document covers:
+
+  1. Paper Key Concepts
+
+  - The 4-axis benchmark matrix (Task Families × Surface Types × Stream Protocols × Resource Tracks)
+  - Extended metrics beyond classical CL (transfer matrix, few-shot gain, recurrence gain, etc.)
+  - CL strategy comparison framework (global updates, modular growth, domain-conditioned, symbolic CL)
+
+  2. FabricPC Gap Analysis
+
+  - Already exists: Classical CL metrics, support columns, causal fingerprints, TransWeave transfer, replay buffer
+  - Needs implementation: Transfer matrix T_ij(k), few-shot gain, recurrence gain, resource tracking, gradual drift streams, hidden boundary streams, concept graphs
+
+  3. Implementation Architecture
+
+  A new fabricpc/benchmarks/ module with:
+  - Configuration system (config.py)
+  - Stream protocols (streams/)
+  - Resource tracking (resources/)
+  - Extended metrics (metrics/)
+  - Concept ecology support (ecology/)
+  - CL strategy comparison (strategies/)
+
+  4. Detailed Specifications
+
+  - Full code examples for all major components
+  - Integration points with existing SequentialTrainer, TransWeave, and causal systems
+  - Testing strategy with unit, integration, and regression tests
+
+  5. Implementation Phases
+
+  A 12-week roadmap from core infrastructure through integration and testing
+
+  6. Future Extensions
+
+  - Minecraft Concept Ecology (T6) requirements
+  - Object-Affordance Ecology (T7) requirements
+  - Same-backbone ablation protocol
+
+  The document maps each concept from Goertzel's paper to FabricPC's existing architecture and provides actionable recommendations for implementation.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> read the cltl_plan.md                                                                                                                                      ↵ send
+─────────────────────────────

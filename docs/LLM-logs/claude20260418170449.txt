@@ -1,0 +1,1998 @@
+Last login: Sat Apr 18 08:30:25 on ttys024
+ni@m4p:FabricPC % ls
+benchmarks                          data                                fabricpc.egg-info                   results
+CHANGELOG.md                        docs                                LICENSE                             tests
+cl-benchmark                        examples                            pyproject.toml                      transformer_multi_gpu_results.jsonl
+CODEOWNERS                          fabricpc                            README.md
+ni@m4p:FabricPC % git status
+On branch experimental/cl2
+Your branch is up to date with 'origin/experimental/cl2'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+    (use "git restore <file>..." to discard changes in working directory)
+    	 modified:   fabricpc/continual/data.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+       results/
+
+no changes added to commit (use "git add" and/or "git commit -a")
+ni@m4p:FabricPC % git add fabricpc/
+ni@m4p:FabricPC % git commit
+[INFO] Initializing environment for https://github.com/psf/black.
+[INFO] Installing environment for https://github.com/psf/black.
+[INFO] Once installed this environment will be reused.
+[INFO] This may take a few minutes...
+black....................................................................Failed
+- hook id: black
+- files were modified by this hook
+
+reformatted fabricpc/continual/data.py
+
+All done! ✨ 🍰 ✨
+1 file reformatted.
+
+ni@m4p:FabricPC % git add fabricpc/
+ni@m4p:FabricPC % git commit
+black....................................................................Passed
+[experimental/cl2 12ee6f2] mnist download fix for Macs
+ 1 file changed, 34 insertions(+), 2 deletions(-)
+ ni@m4p:FabricPC % git push
+ Enumerating objects: 9, done.
+ Counting objects: 100% (9/9), done.
+ Delta compression using up to 12 threads
+ Compressing objects: 100% (5/5), done.
+ Writing objects: 100% (5/5), 1.09 KiB | 1.09 MiB/s, done.
+ Total 5 (delta 4), reused 0 (delta 0), pack-reused 0 (from 0)
+ remote: Resolving deltas: 100% (4/4), completed with 4 local objects.
+ To github.com:dort/FabricPC.git
+    e477bce..12ee6f2  experimental/cl2 -> experimental/cl2
+    ni@m4p:FabricPC % git status
+    On branch experimental/cl2
+    Your branch is up to date with 'origin/experimental/cl2'.
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+       results/
+
+nothing added to commit but untracked files present (use "git add" to track)
+ni@m4p:FabricPC % git status
+On branch experimental/cl2
+Your branch is up to date with 'origin/experimental/cl2'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+    (use "git restore <file>..." to discard changes in working directory)
+    	 modified:   fabricpc/utils/data/dataloader.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+       results/
+
+no changes added to commit (use "git add" and/or "git commit -a")
+ni@m4p:FabricPC % git add fabricpc/
+ni@m4p:FabricPC % git commit
+black....................................................................Passed
+[experimental/cl2 92dffdf] adding fallback for mnist data fetching/loading errors
+ 1 file changed, 105 insertions(+), 15 deletions(-)
+ ni@m4p:FabricPC % git push
+ Enumerating objects: 11, done.
+ Counting objects: 100% (11/11), done.
+ Delta compression using up to 12 threads
+ Compressing objects: 100% (6/6), done.
+ Writing objects: 100% (6/6), 2.05 KiB | 2.05 MiB/s, done.
+ Total 6 (delta 5), reused 0 (delta 0), pack-reused 0 (from 0)
+ remote: Resolving deltas: 100% (5/5), completed with 5 local objects.
+ To github.com:dort/FabricPC.git
+    12ee6f2..92dffdf  experimental/cl2 -> experimental/cl2
+    ni@m4p:FabricPC % pwd
+    /Users/ni/repos/forks/FabricPC
+    ni@m4p:FabricPC % cd ..
+    ni@m4p:forks % claude
+    ╭─── Claude Code v2.1.114 ───────────────────────────────────────────────────────────────────────────────────────────────╮
+    │                                                    │ Tips for getting started                                          │
+    │                Welcome back charlie!               │ Run /init to create a CLAUDE.md file with instructions for Claude │
+    │                                                    │ ───────────────────────────────────────────────────────────────── │
+    │                      ▗ ▗   ▖ ▖                     │ Recent activity                                                   │
+    │                                                    │ No recent activity                                                │
+    │                        ▘▘ ▝▝                       │                                                                   │
+    │        Opus 4.7 (1M context) · Claude Max ·        │                                                                   │
+    │        agi@subdude.io's Organization               │                                                                   │
+    │                    ~/repos/forks                   │                                                                   │
+    ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+❯ there is code in FabricPC which does continual learning via an examples/split_mnist_continual.py experiment -- can you suggest a domain that
+  we can test this on together that's a bit more complex than split MNIST?
+
+  Read 1 file, listed 2 directories (ctrl+o to expand)
+
+⏺ A few options, in increasing complexity:
+
+  Split CIFAR-100 (20 tasks × 5 classes) — the standard next step up from Split-MNIST. Same MLP/columnar shape still works (flatten 32×32×3 →
+    3072), but natural images + more tasks make forgetting much harder to mask. Lots of published baselines to compare against.
+
+  Permuted MNIST — orthogonal axis: same 10 classes, each task is a fixed pixel permutation. Tests drift-resilience rather than class-incremental
+     isolation, so it stresses the column routing differently than Split-MNIST.
+
+  Rotated / Split Fashion-MNIST — cheapest step up, if you want to validate the pipeline changes before paying CIFAR's compute cost.
+
+  My recommendation: Split CIFAR-100. It's the canonical "is your CL method real?" test and your ColumnNode + PartitionedAggregator architecture
+    is exactly the kind of thing that should shine (or fail interestingly) there. Want me to sketch a split_cifar100_continual.py adapted from the
+      existing script?
+
+✻ Baked for 35s
+
+❯ yes, please do what you're recommending - if you need to test, please use the virtual environment available at /Users/ni/virt-envs/fpc1
+
+  Read 2 files, listed 1 directory (ctrl+o to expand)
+
+⏺ Let me verify the trainer has no MNIST-specific assumptions and check what Python env is available.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+  Searching for 2 patterns, reading 2 files… (ctrl+o to expand)
+    ⎿  FabricPC/fabricpc/continual/gradient_protection.py
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import sys; print(sys.version); import torch; print('torch', torch.__version__); import
+      torchvision; print('tv', torchvi…)
+        ⎿  Running…
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import sys; print(sys.version); import torch; print('torch', torch.__version__); import
+      torchvision; print('tv', torchvi…)  >  p
+        ⎿  Traceback (most recen( call last):  import torch; print('torch', torch.__version__); import torchvision; print('tv', torchvision.__vers
+	       File "<string>", line 1, in <module>
+	       ───── ─  import sys; print(sys.version); import─torch;─print('torch',─torch.__version__);─import─torchvision;─print('tv',─torchvision.__vers─────
+	       ✻ Sur… +4 lines (ctrl+o to expand)             6      s
+	         ⎿                               sumptions──────────────────────────────────────────────────────────────────────────────────────────────────────
+		 ⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import jax; print('jax', jax.__version__); import fabricpc; print('fpc ok'); importitensorflow;t
+		       print('tf', tensorflow._…)            m
+		         ⎿  Running…
+
+⏺─Surveying t (3s)r assumptions… (3m 2s · ↓ 790 tokens) ─────────────────────────────────────────────────────────────────────────────────────────
+  ⎿  (ctrl+b to run in background)sumptions
+       jax 0.10.0
+       ✽ Surfpc ok                       3m 3s · ↓a790 tokens)
+         ⎿  tfS2.21.0trainer hardcoded assumptions
+
+✢ Surveying trainer assumptions… (3m 3s · ↑a790 tokens)──────────────────────────────────────────────────────────────────────────────────────────
+  ⎿  ◼ Survey trainer hardcoded assumptions
+         Add Split-CIFAR100 data loader
+	 ───────Writ─ split_cifar100_continual.py─example─────────────────────────────────────────────────────────────────────────────────────────────────
+	 ❯    ◻ Smoke-test the new example
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  esc to interrupt · ctrl+t to hide tasks                                                                                     ◉ xhigh · /effort
+
+
+
+
+
+
+╭─── Claude Code v2.1.114 ───────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                          │
+│                Welcome back charlie!               │ Run /init to create a CLAUDE.md file with instructions for Claude │
+│                                                    │ ───────────────────────────────────────────────────────────────── │
+│                      ▗ ▗   ▖ ▖                     │ Recent activity                                                   │
+│                                                    │ No recent activity                                                │
+│                        ▘▘ ▝▝                       │                                                                   │
+│        Opus 4.7 (1M context) · Claude Max ·        │                                                                   │
+│        agi@subdude.io's Organization               │                                                                   │
+│                    ~/repos/forks                   │                                                                   │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+❯ there is code in FabricPC which does continual learning via an examples/split_mnist_continual.py experiment -- can you suggest a domain that
+  we can test this on together that's a bit more complex than split MNIST?
+
+  Read 1 file, listed 2 directories (ctrl+o to expand)
+
+⏺ A few options, in increasing complexity:
+
+  Split CIFAR-100 (20 tasks × 5 classes) — the standard next step up from Split-MNIST. Same MLP/columnar shape still works (flatten 32×32×3 →
+    3072), but natural images + more tasks make forgetting much harder to mask. Lots of published baselines to compare against.
+
+  Permuted MNIST — orthogonal axis: same 10 classes, each task is a fixed pixel permutation. Tests drift-resilience rather than class-incremental
+     isolation, so it stresses the column routing differently than Split-MNIST.
+
+  Rotated / Split Fashion-MNIST — cheapest step up, if you want to validate the pipeline changes before paying CIFAR's compute cost.
+
+  My recommendation: Split CIFAR-100. It's the canonical "is your CL method real?" test and your ColumnNode + PartitionedAggregator architecture
+    is exactly the kind of thing that should shine (or fail interestingly) there. Want me to sketch a split_cifar100_continual.py adapted from the
+      existing script?
+
+✻ Baked for 35s
+
+❯ yes, please do what you're recommending - if you need to test, please use the virtual environment available at /Users/ni/virt-envs/fpc1
+
+  Read 2 files, listed 1 directory (ctrl+o to expand)
+
+⏺ Let me verify the trainer has no MNIST-specific assumptions and check what Python env is available.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import sys; print(sys.version); import torch; print('torch', torch.__version__); import
+      torchvision; print('tv', torchvi…)
+        ⎿  Traceback (most recent call last):
+	       File "<string>", line 1, in <module>
+	                import sys; print(sys.version); import torch; print('torch', torch.__version__); import torchvision; print('tv', torchvision.__vers
+			     … +4 lines (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import jax; print('jax', jax.__version__); import fabricpc; print('fpc ok'); import tensorflow;
+      print('tf', tensorflow._…)
+        ⎿  jax 0.10.0
+	     fpc ok
+	          tf 2.21.0
+
+· Surveying trainer assumptions… (3m 3s · ↑ 790 tokens)
+  ⎿  ◼ Survey trainer hardcoded assumptions
+       ◻ Add Split-CIFAR100 data loader
+            ◻ Write split_cifar100_continual.py example
+	         ◻ Smoke-test the new example
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  esc to interrupt · ctrl+t to hide tasks                                                                                     ◉ xhigh · /effort
+
+╭─── Claude Code v2.1.114 ───────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                          │
+│                Welcome back charlie!               │ Run /init to create a CLAUDE.md file with instructions for Claude │
+│                                                    │ ───────────────────────────────────────────────────────────────── │
+│                      ▗ ▗   ▖ ▖                     │ Recent activity                                                   │
+│                                                    │ No recent activity                                                │
+│                        ▘▘ ▝▝                       │                                                                   │
+│        Opus 4.7 (1M context) · Claude Max ·        │                                                                   │
+│        agi@subdude.io's Organization               │                                                                   │
+│                    ~/repos/forks                   │                                                                   │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+❯ there is code in FabricPC which does continual learning via an examples/split_mnist_continual.py experiment -- can you suggest a domain that
+  we can test this on together that's a bit more complex than split MNIST?
+
+  Read 1 file, listed 2 directories (ctrl+o to expand)
+
+⏺ A few options, in increasing complexity:
+
+  Split CIFAR-100 (20 tasks × 5 classes) — the standard next step up from Split-MNIST. Same MLP/columnar shape still works (flatten 32×32×3 →
+    3072), but natural images + more tasks make forgetting much harder to mask. Lots of published baselines to compare against.
+
+  Permuted MNIST — orthogonal axis: same 10 classes, each task is a fixed pixel permutation. Tests drift-resilience rather than class-incremental
+     isolation, so it stresses the column routing differently than Split-MNIST.
+
+  Rotated / Split Fashion-MNIST — cheapest step up, if you want to validate the pipeline changes before paying CIFAR's compute cost.
+
+  My recommendation: Split CIFAR-100. It's the canonical "is your CL method real?" test and your ColumnNode + PartitionedAggregator architecture
+    is exactly the kind of thing that should shine (or fail interestingly) there. Want me to sketch a split_cifar100_continual.py adapted from the
+      existing script?
+
+✻ Baked for 35s
+
+❯ yes, please do what you're recommending - if you need to test, please use the virtual environment available at /Users/ni/virt-envs/fpc1
+
+  Read 2 files, listed 1 directory (ctrl+o to expand)
+
+⏺ Let me verify the trainer has no MNIST-specific assumptions and check what Python env is available.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import sys; print(sys.version); import torch; print('torch', torch.__version__); import
+      torchvision; print('tv', torchvi…)
+        ⎿  Traceback (most recent call last):
+	       File "<string>", line 1, in <module>
+	                import sys; print(sys.version); import torch; print('torch', torch.__version__); import torchvision; print('tv', torchvision.__vers
+			     … +4 lines (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import jax; print('jax', jax.__version__); import fabricpc; print('fpc ok'); import tensorflow;
+      print('tf', tensorflow._…)
+        ⎿  jax 0.10.0
+	     fpc ok
+	          tf 2.21.0
+
+· Surveying trainer assumptions… (3m 3s · ↑ 790 tokens)
+  ⎿  ◼ Survey trainer hardcoded assumptions
+       ◻ Add Split-CIFAR100 data loader
+            ◻ Write split_cifar100_continual.py example
+	         ◻ Smoke-test the new example
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  esc to interrupt · ctrl+t to hide tasks                                                                                     ◉ xhigh · /effort
+
+╭─── Claude Code v2.1.114 ───────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                          │
+│                Welcome back charlie!               │ Run /init to create a CLAUDE.md file with instructions for Claude │
+│                                                    │ ───────────────────────────────────────────────────────────────── │
+│                      ▗ ▗   ▖ ▖                     │ Recent activity                                                   │
+│                                                    │ No recent activity                                                │
+│                        ▘▘ ▝▝                       │                                                                   │
+│        Opus 4.7 (1M context) · Claude Max ·        │                                                                   │
+│        agi@subdude.io's Organization               │                                                                   │
+│                    ~/repos/forks                   │                                                                   │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+❯ there is code in FabricPC which does continual learning via an examples/split_mnist_continual.py experiment -- can you suggest a domain that
+  we can test this on together that's a bit more complex than split MNIST?
+
+  Read 1 file, listed 2 directories (ctrl+o to expand)
+
+⏺ A few options, in increasing complexity:
+
+  Split CIFAR-100 (20 tasks × 5 classes) — the standard next step up from Split-MNIST. Same MLP/columnar shape still works (flatten 32×32×3 →
+    3072), but natural images + more tasks make forgetting much harder to mask. Lots of published baselines to compare against.
+
+  Permuted MNIST — orthogonal axis: same 10 classes, each task is a fixed pixel permutation. Tests drift-resilience rather than class-incremental
+     isolation, so it stresses the column routing differently than Split-MNIST.
+
+  Rotated / Split Fashion-MNIST — cheapest step up, if you want to validate the pipeline changes before paying CIFAR's compute cost.
+
+  My recommendation: Split CIFAR-100. It's the canonical "is your CL method real?" test and your ColumnNode + PartitionedAggregator architecture
+    is exactly the kind of thing that should shine (or fail interestingly) there. Want me to sketch a split_cifar100_continual.py adapted from the
+      existing script?
+
+✻ Baked for 35s
+
+❯ yes, please do what you're recommending - if you need to test, please use the virtual environment available at /Users/ni/virt-envs/fpc1
+
+  Read 2 files, listed 1 directory (ctrl+o to expand)
+
+⏺ Let me verify the trainer has no MNIST-specific assumptions and check what Python env is available.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import sys; print(sys.version); import torch; print('torch', torch.__version__); import
+      torchvision; print('tv', torchvi…)
+        ⎿  Traceback (most recent call last):
+	       File "<string>", line 1, in <module>
+	                import sys; print(sys.version); import torch; print('torch', torch.__version__); import torchvision; print('tv', torchvision.__vers
+			     … +4 lines (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import jax; print('jax', jax.__version__); import fabricpc; print('fpc ok'); import tensorflow;
+      print('tf', tensorflow._…)
+        ⎿  jax 0.10.0
+	     fpc ok
+	          tf 2.21.0
+
+· Surveying trainer assumptions… (3m 3s · ↑ 790 tokens)
+  ⎿  ◼ Survey trainer hardcoded assumptions
+       ◻ Add Split-CIFAR100 data loader
+            ◻ Write split_cifar100_continual.py example
+	         ◻ Smoke-test the new example
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  esc to interrupt · ctrl+t to hide tasks                                                                                     ◉ xhigh · /effort
+
+╭─── Claude Code v2.1.114 ───────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                          │
+│                Welcome back charlie!               │ Run /init to create a CLAUDE.md file with instructions for Claude │
+│                                                    │ ───────────────────────────────────────────────────────────────── │
+│                      ▗ ▗   ▖ ▖                     │ Recent activity                                                   │
+│                                                    │ No recent activity                                                │
+│                        ▘▘ ▝▝                       │                                                                   │
+│        Opus 4.7 (1M context) · Claude Max ·        │                                                                   │
+│        agi@subdude.io's Organization               │                                                                   │
+│                    ~/repos/forks                   │                                                                   │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+❯ there is code in FabricPC which does continual learning via an examples/split_mnist_continual.py experiment -- can you suggest a domain that
+  we can test this on together that's a bit more complex than split MNIST?
+
+  Read 1 file, listed 2 directories (ctrl+o to expand)
+
+⏺ A few options, in increasing complexity:
+
+  Split CIFAR-100 (20 tasks × 5 classes) — the standard next step up from Split-MNIST. Same MLP/columnar shape still works (flatten 32×32×3 →
+    3072), but natural images + more tasks make forgetting much harder to mask. Lots of published baselines to compare against.
+
+  Permuted MNIST — orthogonal axis: same 10 classes, each task is a fixed pixel permutation. Tests drift-resilience rather than class-incremental
+     isolation, so it stresses the column routing differently than Split-MNIST.
+
+  Rotated / Split Fashion-MNIST — cheapest step up, if you want to validate the pipeline changes before paying CIFAR's compute cost.
+
+  My recommendation: Split CIFAR-100. It's the canonical "is your CL method real?" test and your ColumnNode + PartitionedAggregator architecture
+    is exactly the kind of thing that should shine (or fail interestingly) there. Want me to sketch a split_cifar100_continual.py adapted from the
+      existing script?
+
+✻ Baked for 35s
+
+❯ yes, please do what you're recommending - if you need to test, please use the virtual environment available at /Users/ni/virt-envs/fpc1
+
+  Read 2 files, listed 1 directory (ctrl+o to expand)
+
+⏺ Let me verify the trainer has no MNIST-specific assumptions and check what Python env is available.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import sys; print(sys.version); import torch; print('torch', torch.__version__); import
+      torchvision; print('tv', torchvi…)
+        ⎿  Traceback (most recent call last):
+	       File "<string>", line 1, in <module>
+	                import sys; print(sys.version); import torch; print('torch', torch.__version__); import torchvision; print('tv', torchvision.__vers
+			     … +4 lines (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import jax; print('jax', jax.__version__); import fabricpc; print('fpc ok'); import tensorflow;
+      print('tf', tensorflow._…)
+        ⎿  jax 0.10.0
+	     fpc ok
+	          tf 2.21.0
+
+· Surveying trainer assumptions… (3m 3s · ↑ 790 tokens)
+  ⎿  ◼ Survey trainer hardcoded assumptions
+       ◻ Add Split-CIFAR100 data loader
+            ◻ Write split_cifar100_continual.py example
+	         ◻ Smoke-test the new example
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  esc to interrupt · ctrl+t to hide tasks                                                                                     ◉ xhigh · /effort
+
+╭─── Claude Code v2.1.114 ───────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                          │
+│                Welcome back charlie!               │ Run /init to create a CLAUDE.md file with instructions for Claude │
+│                                                    │ ───────────────────────────────────────────────────────────────── │
+│                      ▗ ▗   ▖ ▖                     │ Recent activity                                                   │
+│                                                    │ No recent activity                                                │
+│                        ▘▘ ▝▝                       │                                                                   │
+│        Opus 4.7 (1M context) · Claude Max ·        │                                                                   │
+│        agi@subdude.io's Organization               │                                                                   │
+│                    ~/repos/forks                   │                                                                   │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+❯ there is code in FabricPC which does continual learning via an examples/split_mnist_continual.py experiment -- can you suggest a domain that
+  we can test this on together that's a bit more complex than split MNIST?
+
+  Read 1 file, listed 2 directories (ctrl+o to expand)
+
+⏺ A few options, in increasing complexity:
+
+  Split CIFAR-100 (20 tasks × 5 classes) — the standard next step up from Split-MNIST. Same MLP/columnar shape still works (flatten 32×32×3 →
+    3072), but natural images + more tasks make forgetting much harder to mask. Lots of published baselines to compare against.
+
+  Permuted MNIST — orthogonal axis: same 10 classes, each task is a fixed pixel permutation. Tests drift-resilience rather than class-incremental
+     isolation, so it stresses the column routing differently than Split-MNIST.
+
+  Rotated / Split Fashion-MNIST — cheapest step up, if you want to validate the pipeline changes before paying CIFAR's compute cost.
+
+  My recommendation: Split CIFAR-100. It's the canonical "is your CL method real?" test and your ColumnNode + PartitionedAggregator architecture
+    is exactly the kind of thing that should shine (or fail interestingly) there. Want me to sketch a split_cifar100_continual.py adapted from the
+      existing script?
+
+✻ Baked for 35s
+
+❯ yes, please do what you're recommending - if you need to test, please use the virtual environment available at /Users/ni/virt-envs/fpc1
+
+  Read 2 files, listed 1 directory (ctrl+o to expand)
+
+⏺ Let me verify the trainer has no MNIST-specific assumptions and check what Python env is available.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import sys; print(sys.version); import torch; print('torch', torch.__version__); import
+      torchvision; print('tv', torchvi…)
+        ⎿  Traceback (most recent call last):
+	       File "<string>", line 1, in <module>
+	                import sys; print(sys.version); import torch; print('torch', torch.__version__); import torchvision; print('tv', torchvision.__vers
+			     … +4 lines (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import jax; print('jax', jax.__version__); import fabricpc; print('fpc ok'); import tensorflow;
+      print('tf', tensorflow._…)
+        ⎿  jax 0.10.0
+	     fpc ok
+	          tf 2.21.0
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "from tensorflow.keras.datasets import cifar100; print('cifar100 importable')" 2>&1 | tail -5)
+  ⎿  cifar100 importable
+
+⏺ Good, keras has cifar100. Now let me check how the support/column settings scale — need to make sure num_columns can accommodate 20 tasks.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Now writing the CIFAR-100 data loader.
+
+⏺ Write(FabricPC/fabricpc/continual/data_cifar.py)
+
+  4 tasks (1 done, 1 in progress, 2 open)
+    ✔ Survey trainer hardcoded assumptions
+      ◼ Add Split-CIFAR100 data loader
+        ◻ Write split_cifar100_continual.py example
+	  ◻ Smoke-test the new example
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Create file
+  FabricPC/fabricpc/continual/data_cifar.py
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+      1 """
+          2 Split-CIFAR-100 Data Loading for Continual Learning.
+	      3
+	          4 Provides JAX-compatible data loaders for sequential task learning on
+		      5 CIFAR-100 split into groups of classes. Structured to mirror the Split-MNIS
+		            T
+			        6 loader in ``fabricpc.continual.data`` so the same SequentialTrainer can
+				    7 consume it unchanged.
+				        8 """
+					    9
+					       10 from dataclasses import dataclass
+					          11 from typing import Tuple, List, Optional, Iterator, Sequence
+						     12 import numpy as np
+						        13
+							   14 from fabricpc.utils.data.data_utils import one_hot
+							      15 from fabricpc.continual.data import TaskData
+							         16
+								    17 CIFAR100_MEAN = np.array([0.5071, 0.4865, 0.4409], dtype=np.float32)
+								       18 CIFAR100_STD = np.array([0.2673, 0.2564, 0.2762], dtype=np.float32)
+								          19
+									     20
+									        21 class SplitCifar100TaskLoader:
+										   22     """
+										      23     Data loader for a single Split-CIFAR-100 task (a group of classes).
+										         24
+											    25     Yields (images, one_hot_labels). Images are per-channel normalized and,
+											       26     in ``"flat"`` tensor_format, flattened to (N, 3072).
+											          27     """
+												     28
+												        29     def __init__(
+													   30         self,
+													      31         images: np.ndarray,
+													         32         labels: np.ndarray,
+														    33         batch_size: int,
+														       34         shuffle: bool = True,
+														          35         seed: Optional[int] = None,
+															     36         tensor_format: str = "flat",
+															        37         num_classes: int = 100,
+																   38     ):
+																      39         self.images = images
+																         40         self.labels = labels
+																	    41         self.batch_size = batch_size
+																	       42         self.shuffle = shuffle
+																	          43         self.seed = seed
+																		     44         self.tensor_format = tensor_format
+																		        45         self.num_classes = num_classes
+																			   46
+																			      47         self._epoch = 0
+																			         48         self._num_samples = len(images)
+																				    49         self._num_batches = (self._num_samples + batch_size - 1) // batch_s
+																				          ize
+																					     50
+																					        51     def __len__(self) -> int:
+																						   52         return self._num_batches
+																						      53
+																						         54     def __iter__(self) -> Iterator[Tuple[np.ndarray, np.ndarray]]:
+																							    55         indices = np.arange(self._num_samples)
+																							       56         if self.shuffle:
+																							          57             epoch_seed = self.seed + self._epoch if self.seed is not None e
+																								        lse None
+																									   58             rng = np.random.default_rng(epoch_seed)
+																									      59             rng.shuffle(indices)
+																									         60         self._epoch += 1
+																										    61
+																										       62         for start in range(0, self._num_samples, self.batch_size):
+																										          63             batch_idx = indices[start : start + self.batch_size]
+																											     64
+																											        65             batch_images = self.images[batch_idx].astype(np.float32)
+																												   66             batch_labels = self.labels[batch_idx]
+																												      67
+																												         68             batch_images = (batch_images - CIFAR100_MEAN) / CIFAR100_STD
+																													    69
+																													       70             if self.tensor_format == "flat":
+																													          71                 batch_images = batch_images.reshape(len(batch_idx), -1)
+																														     72             elif self.tensor_format == "NHWC":
+																														        73                 pass
+																															   74             else:
+																															      75                 raise ValueError(f"Unknown tensor_format: {self.tensor_form
+																															            at}")
+																																       76
+																																          77             batch_labels_onehot = one_hot(batch_labels, num_classes=self.nu
+																																	        m_classes)
+																																		   78             yield batch_images, batch_labels_onehot
+																																		      79
+																																		         80
+																																			    81 def _load_cifar100_keras():
+																																			       82     """Load CIFAR-100 via keras.datasets (uses fine labels)."""
+																																			          83     try:
+																																				     84         from tensorflow.keras.datasets import cifar100
+																																				        85
+																																					   86         (train_images, train_labels), (test_images, test_labels) = cifar100
+																																					         .load_data(
+																																						    87             label_mode="fine"
+																																						       88         )
+																																						          89         return train_images, train_labels, test_images, test_labels
+																																							     90     except ImportError:
+																																							        91         return None
+																																								   92     except Exception as e:
+																																								      93         print(
+																																								         94             f"Keras CIFAR-100 load failed ({type(e).__name__}: {e}); "
+																																									    95             "falling back to manual download."
+																																									       96         )
+																																									          97         return None
+																																										     98
+																																										        99
+																																											  100 def _load_cifar100_manual(data_root: str):
+																																											    101     """Download CIFAR-100 python tarball and parse it without any TF depend
+																																											          ency."""
+																																												    102     import os
+																																												      103     import tarfile
+																																												        104     import pickle
+																																													  105     import shutil
+																																													    106     import urllib.request
+																																													      107     import ssl
+																																													        108
+																																														  109     url = "https://www.cs.toronto.edu/~kriz/cifar-100-python.tar.gz"
+																																														    110     tar_path = os.path.join(data_root, "cifar-100-python.tar.gz")
+																																														      111     extract_dir = os.path.join(data_root, "cifar-100-python")
+																																														        112     os.makedirs(data_root, exist_ok=True)
+																																															  113
+																																															    114     if not os.path.exists(extract_dir):
+																																															      115         if not os.path.exists(tar_path):
+																																															        116             print("Downloading CIFAR-100 (~170MB)...")
+																																																  117             try:
+																																																    118                 import certifi
+																																																      119
+																																																        120                 context = ssl.create_default_context(cafile=certifi.where()
+																																																	      )
+																																																	        121             except ImportError:
+																																																		  122                 context = ssl.create_default_context()
+																																																		    123             opener = urllib.request.build_opener(
+																																																		      124                 urllib.request.HTTPSHandler(context=context)
+																																																		        125             )
+																																																			  126             with opener.open(url) as response, open(tar_path, "wb") as out:
+																																																			    127                 shutil.copyfileobj(response, out)
+																																																			      128         with tarfile.open(tar_path, "r:gz") as tar:
+																																																			        129             tar.extractall(data_root)
+																																																				  130
+																																																				    131     def _unpickle(path):
+																																																				      132         with open(path, "rb") as f:
+																																																				        133             return pickle.load(f, encoding="bytes")
+																																																					  134
+																																																					    135     train = _unpickle(os.path.join(extract_dir, "train"))
+																																																					      136     test = _unpickle(os.path.join(extract_dir, "test"))
+																																																					        137
+																																																						  138     def _reshape(batch):
+																																																						    139         data = batch[b"data"].reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1)
+																																																						      140         labels = np.array(batch[b"fine_labels"], dtype=np.int32)
+																																																						        141         return data, labels
+																																																							  142
+																																																							    143     train_images, train_labels = _reshape(train)
+																																																							      144     test_images, test_labels = _reshape(test)
+																																																							        145     return train_images, train_labels, test_images, test_labels
+																																																								  146
+																																																								    147
+																																																								      148 class SplitCifar100Loader:
+																																																								        149     """
+																																																									  150     Load CIFAR-100 split into sequential tasks by class groups.
+																																																									    151
+																																																									      152     ``class_groups`` is a sequence of class-index tuples. The default is 20
+																																																									        153     sequential groups of 5 classes each: ((0..4), (5..9), ..., (95..99)).
+																																																										  154     """
+																																																										    155
+																																																										      156     def __init__(
+																																																										        157         self,
+																																																											  158         class_groups: Optional[Sequence[Sequence[int]]] = None,
+																																																											    159         classes_per_task: int = 5,
+																																																											      160         num_tasks: int = 20,
+																																																											        161         batch_size: int = 256,
+																																																												  162         shuffle: bool = True,
+																																																												    163         seed: Optional[int] = None,
+																																																												      164         tensor_format: str = "flat",
+																																																												        165         data_root: str = "./data",
+																																																													  166         num_classes: int = 100,
+																																																													    167     ):
+																																																													      168         if class_groups is None:
+																																																													        169             class_groups = tuple(
+																																																														  170                 tuple(range(i * classes_per_task, (i + 1) * classes_per_tas
+																																																														        k))
+																																																															  171                 for i in range(num_tasks)
+																																																															    172             )
+																																																															      173         self.class_groups = [tuple(g) for g in class_groups]
+																																																															        174         self.batch_size = batch_size
+																																																																  175         self.shuffle = shuffle
+																																																																    176         self.seed = seed
+																																																																      177         self.tensor_format = tensor_format
+																																																																        178         self.num_classes = num_classes
+																																																																	  179
+																																																																	    180         self._load_cifar100(data_root)
+																																																																	      181
+																																																																	        182         self.tasks: List[TaskData] = []
+																																																																		  183         for task_id, classes in enumerate(self.class_groups):
+																																																																		    184             self.tasks.append(self._create_task(task_id, classes))
+																																																																		      185
+																																																																		        186     def _load_cifar100(self, data_root: str):
+																																																																			  187         result = _load_cifar100_keras()
+																																																																			    188         if result is None:
+																																																																			      189             result = _load_cifar100_manual(data_root)
+																																																																			        190         train_images, train_labels, test_images, test_labels = result
+																																																																				  191
+																																																																				    192         self._train_images = train_images.astype(np.float32) / 255.0
+																																																																				      193         self._train_labels = np.asarray(train_labels, dtype=np.int32).resha
+																																																																				            pe(-1)
+																																																																					      194         self._test_images = test_images.astype(np.float32) / 255.0
+																																																																					        195         self._test_labels = np.asarray(test_labels, dtype=np.int32).reshape
+																																																																						      (-1)
+																																																																						        196
+																																																																							  197     def _create_task(self, task_id: int, classes: Sequence[int]) -> TaskDat
+																																																																							        a:
+																																																																								  198         class_set = set(int(c) for c in classes)
+																																																																								    199
+																																																																								      200         train_mask = np.isin(self._train_labels, list(class_set))
+																																																																								        201         train_images = self._train_images[train_mask]
+																																																																									  202         train_labels = self._train_labels[train_mask]
+																																																																									    203
+																																																																									      204         test_mask = np.isin(self._test_labels, list(class_set))
+																																																																									        205         test_images = self._test_images[test_mask]
+																																																																										  206         test_labels = self._test_labels[test_mask]
+																																																																										    207
+																																																																										      208         task_seed = self.seed + task_id if self.seed is not None else None
+																																																																										        209
+																																																																											  210         train_loader = SplitCifar100TaskLoader(
+																																																																											    211             images=train_images,
+																																																																											      212             labels=train_labels,
+																																																																											        213             batch_size=self.batch_size,
+																																																																												  214             shuffle=self.shuffle,
+																																																																												    215             seed=task_seed,
+																																																																												      216             tensor_format=self.tensor_format,
+																																																																												        217             num_classes=self.num_classes,
+																																																																													  218         )
+																																																																													    219         test_loader = SplitCifar100TaskLoader(
+																																																																													      220             images=test_images,
+																																																																													        221             labels=test_labels,
+																																																																														  222             batch_size=self.batch_size,
+																																																																														    223             shuffle=False,
+																																																																														      224             seed=task_seed,
+																																																																														        225             tensor_format=self.tensor_format,
+																																																																															  226             num_classes=self.num_classes,
+																																																																															    227         )
+																																																																															      228
+																																																																															        229         return TaskData(
+																																																																																  230             task_id=task_id,
+																																																																																    231             classes=tuple(classes),
+																																																																																      232             train_loader=train_loader,
+																																																																																        233             test_loader=test_loader,
+																																																																																	  234         )
+																																																																																	    235
+																																																																																	      236     def __len__(self) -> int:
+																																																																																	        237         return len(self.tasks)
+																																																																																		  238
+																																																																																		    239     def __iter__(self) -> Iterator[TaskData]:
+																																																																																		      240         return iter(self.tasks)
+																																																																																		        241
+																																																																																			  242     def __getitem__(self, idx: int) -> TaskData:
+																																																																																			    243         return self.tasks[idx]
+																																																																																			      244
+																																																																																			        245
+																																																																																				  246 def build_split_cifar100_loaders(
+																																																																																				    247     config,
+																																																																																				      248     data_root: str = "./data",
+																																																																																				        249 ) -> List[TaskData]:
+																																																																																					  250     """
+																																																																																					    251     Build Split-CIFAR-100 task loaders from an ExperimentConfig.
+																																																																																					      252
+																																																																																					        253     Expects:
+																																																																																						  254         config.task_pairs           -> tuple of class-group tuples
+																																																																																						    255         config.num_output_classes   -> 100
+																																																																																						      256         config.training.batch_size
+																																																																																						        257         config.seed
+																																																																																							  258     """
+																																																																																							    259     loader = SplitCifar100Loader(
+																																																																																							      260         class_groups=config.task_pairs,
+																																																																																							        261         batch_size=config.training.batch_size,
+																																																																																								  262         shuffle=True,
+																																																																																								    263         seed=config.seed,
+																																																																																								      264         tensor_format="flat",
+																																																																																								        265         data_root=data_root,
+																																																																																									  266         num_classes=getattr(config, "num_output_classes", 100),
+																																																																																									    267     )
+																																																																																									      268     return loader.tasks
+																																																																																									      ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+																																																																																									       Do you want to create data_cifar.py?
+																																																																																									        ❯ 1. Yes
+																																																																																										   2. Yes, allow all edits during this session (shift+tab)
+																																																																																										      3. No
+
+ Esc to cancel · Tab to amend
+
+╭─── Claude Code v2.1.114 ───────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                          │
+│                Welcome back charlie!               │ Run /init to create a CLAUDE.md file with instructions for Claude │
+│                                                    │ ───────────────────────────────────────────────────────────────── │
+│                      ▗ ▗   ▖ ▖                     │ Recent activity                                                   │
+│                                                    │ No recent activity                                                │
+│                        ▘▘ ▝▝                       │                                                                   │
+│        Opus 4.7 (1M context) · Claude Max ·        │                                                                   │
+│        agi@subdude.io's Organization               │                                                                   │
+│                    ~/repos/forks                   │                                                                   │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+❯ there is code in FabricPC which does continual learning via an examples/split_mnist_continual.py experiment -- can you suggest a domain that
+  we can test this on together that's a bit more complex than split MNIST?
+
+  Read 1 file, listed 2 directories (ctrl+o to expand)
+
+⏺ A few options, in increasing complexity:
+
+  Split CIFAR-100 (20 tasks × 5 classes) — the standard next step up from Split-MNIST. Same MLP/columnar shape still works (flatten 32×32×3 →
+    3072), but natural images + more tasks make forgetting much harder to mask. Lots of published baselines to compare against.
+
+  Permuted MNIST — orthogonal axis: same 10 classes, each task is a fixed pixel permutation. Tests drift-resilience rather than class-incremental
+     isolation, so it stresses the column routing differently than Split-MNIST.
+
+  Rotated / Split Fashion-MNIST — cheapest step up, if you want to validate the pipeline changes before paying CIFAR's compute cost.
+
+  My recommendation: Split CIFAR-100. It's the canonical "is your CL method real?" test and your ColumnNode + PartitionedAggregator architecture
+    is exactly the kind of thing that should shine (or fail interestingly) there. Want me to sketch a split_cifar100_continual.py adapted from the
+      existing script?
+
+✻ Baked for 35s
+
+❯ yes, please do what you're recommending - if you need to test, please use the virtual environment available at /Users/ni/virt-envs/fpc1
+
+  Read 2 files, listed 1 directory (ctrl+o to expand)
+
+⏺ Let me verify the trainer has no MNIST-specific assumptions and check what Python env is available.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import sys; print(sys.version); import torch; print('torch', torch.__version__); import
+      torchvision; print('tv', torchvi…)
+        ⎿  Traceback (most recent call last):
+	       File "<string>", line 1, in <module>
+	                import sys; print(sys.version); import torch; print('torch', torch.__version__); import torchvision; print('tv', torchvision.__vers
+			     … +4 lines (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import jax; print('jax', jax.__version__); import fabricpc; print('fpc ok'); import tensorflow;
+      print('tf', tensorflow._…)
+        ⎿  jax 0.10.0
+	     fpc ok
+	          tf 2.21.0
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "from tensorflow.keras.datasets import cifar100; print('cifar100 importable')" 2>&1 | tail -5)
+  ⎿  cifar100 importable
+
+⏺ Good, keras has cifar100. Now let me check how the support/column settings scale — need to make sure num_columns can accommodate 20 tasks.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Now writing the CIFAR-100 data loader.
+
+⏺ Write(FabricPC/fabricpc/continual/data_cifar.py)
+
+  4 tasks (1 done, 1 in progress, 2 open)
+    ✔ Survey trainer hardcoded assumptions
+      ◼ Add Split-CIFAR100 data loader
+        ◻ Write split_cifar100_continual.py example
+	  ◻ Smoke-test the new example
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Create file
+  FabricPC/fabricpc/continual/data_cifar.py
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+      1 """
+          2 Split-CIFAR-100 Data Loading for Continual Learning.
+	      3
+	          4 Provides JAX-compatible data loaders for sequential task learning on
+		      5 CIFAR-100 split into groups of classes. Structured to mirror the Split-MNIST
+		          6 loader in ``fabricpc.continual.data`` so the same SequentialTrainer can
+			      7 consume it unchanged.
+			          8 """
+				      9
+				         10 from dataclasses import dataclass
+					    11 from typing import Tuple, List, Optional, Iterator, Sequence
+					       12 import numpy as np
+					          13
+						     14 from fabricpc.utils.data.data_utils import one_hot
+						        15 from fabricpc.continual.data import TaskData
+							   16
+							      17 CIFAR100_MEAN = np.array([0.5071, 0.4865, 0.4409], dtype=np.float32)
+							         18 CIFAR100_STD = np.array([0.2673, 0.2564, 0.2762], dtype=np.float32)
+								    19
+								       20
+								          21 class SplitCifar100TaskLoader:
+									     22     """
+									        23     Data loader for a single Split-CIFAR-100 task (a group of classes).
+										   24
+										      25     Yields (images, one_hot_labels). Images are per-channel normalized and,
+										         26     in ``"flat"`` tensor_format, flattened to (N, 3072).
+											    27     """
+											       28
+											          29     def __init__(
+												     30         self,
+												        31         images: np.ndarray,
+													   32         labels: np.ndarray,
+													      33         batch_size: int,
+													         34         shuffle: bool = True,
+														    35         seed: Optional[int] = None,
+														       36         tensor_format: str = "flat",
+														          37         num_classes: int = 100,
+															     38     ):
+															        39         self.images = images
+																   40         self.labels = labels
+																      41         self.batch_size = batch_size
+																         42         self.shuffle = shuffle
+																	    43         self.seed = seed
+																	       44         self.tensor_format = tensor_format
+																	          45         self.num_classes = num_classes
+																		     46
+																		        47         self._epoch = 0
+																			   48         self._num_samples = len(images)
+																			      49         self._num_batches = (self._num_samples + batch_size - 1) // batch_size
+																			         50
+																				    51     def __len__(self) -> int:
+																				       52         return self._num_batches
+																				          53
+																					     54     def __iter__(self) -> Iterator[Tuple[np.ndarray, np.ndarray]]:
+																					        55         indices = np.arange(self._num_samples)
+																						   56         if self.shuffle:
+																						      57             epoch_seed = self.seed + self._epoch if self.seed is not None else None
+																						         58             rng = np.random.default_rng(epoch_seed)
+																							    59             rng.shuffle(indices)
+																							       60         self._epoch += 1
+																							          61
+																								     62         for start in range(0, self._num_samples, self.batch_size):
+																								        63             batch_idx = indices[start : start + self.batch_size]
+																									   64
+																									      65             batch_images = self.images[batch_idx].astype(np.float32)
+																									         66             batch_labels = self.labels[batch_idx]
+																										    67
+																										       68             batch_images = (batch_images - CIFAR100_MEAN) / CIFAR100_STD
+																										          69
+																											     70             if self.tensor_format == "flat":
+																											        71                 batch_images = batch_images.reshape(len(batch_idx), -1)
+																												   72             elif self.tensor_format == "NHWC":
+																												      73                 pass
+																												         74             else:
+																													    75                 raise ValueError(f"Unknown tensor_format: {self.tensor_format}")
+																													       76
+																													          77             batch_labels_onehot = one_hot(batch_labels, num_classes=self.num_classes)
+																														     78             yield batch_images, batch_labels_onehot
+																														        79
+																															   80
+																															      81 def _load_cifar100_keras():
+																															         82     """Load CIFAR-100 via keras.datasets (uses fine labels)."""
+																																    83     try:
+																																       84         from tensorflow.keras.datasets import cifar100
+																																          85
+																																	     86         (train_images, train_labels), (test_images, test_labels) = cifar100.load_data(
+																																	        87             label_mode="fine"
+																																		   88         )
+																																		      89         return train_images, train_labels, test_images, test_labels
+																																		         90     except ImportError:
+																																			    91         return None
+																																			       92     except Exception as e:
+																																			          93         print(
+																																				     94             f"Keras CIFAR-100 load failed ({type(e).__name__}: {e}); "
+																																				        95             "falling back to manual download."
+																																					   96         )
+																																					      97         return None
+																																					         98
+																																						    99
+																																						      100 def _load_cifar100_manual(data_root: str):
+																																						        101     """Download CIFAR-100 python tarball and parse it without any TF dependency."""
+																																							  102     import os
+																																							    103     import tarfile
+																																							      104     import pickle
+																																							        105     import shutil
+																																								  106     import urllib.request
+																																								    107     import ssl
+																																								      108
+																																								        109     url = "https://www.cs.toronto.edu/~kriz/cifar-100-python.tar.gz"
+																																									  110     tar_path = os.path.join(data_root, "cifar-100-python.tar.gz")
+																																									    111     extract_dir = os.path.join(data_root, "cifar-100-python")
+																																									      112     os.makedirs(data_root, exist_ok=True)
+																																									        113
+																																										  114     if not os.path.exists(extract_dir):
+																																										    115         if not os.path.exists(tar_path):
+																																										      116             print("Downloading CIFAR-100 (~170MB)...")
+																																										        117             try:
+																																											  118                 import certifi
+																																											    119
+																																											      120                 context = ssl.create_default_context(cafile=certifi.where())
+																																											        121             except ImportError:
+																																												  122                 context = ssl.create_default_context()
+																																												    123             opener = urllib.request.build_opener(
+																																												      124                 urllib.request.HTTPSHandler(context=context)
+																																												        125             )
+																																													  126             with opener.open(url) as response, open(tar_path, "wb") as out:
+																																													    127                 shutil.copyfileobj(response, out)
+																																													      128         with tarfile.open(tar_path, "r:gz") as tar:
+																																													        129             tar.extractall(data_root)
+																																														  130
+																																														    131     def _unpickle(path):
+																																														      132         with open(path, "rb") as f:
+																																														        133             return pickle.load(f, encoding="bytes")
+																																															  134
+																																															    135     train = _unpickle(os.path.join(extract_dir, "train"))
+																																															      136     test = _unpickle(os.path.join(extract_dir, "test"))
+																																															        137
+																																																  138     def _reshape(batch):
+																																																    139         data = batch[b"data"].reshape(-1, 3, 32, 32).transpose(0, 2, 3, 1)
+																																																      140         labels = np.array(batch[b"fine_labels"], dtype=np.int32)
+																																																        141         return data, labels
+																																																	  142
+																																																	    143     train_images, train_labels = _reshape(train)
+																																																	      144     test_images, test_labels = _reshape(test)
+																																																	        145     return train_images, train_labels, test_images, test_labels
+																																																		  146
+																																																		    147
+																																																		      148 class SplitCifar100Loader:
+																																																		        149     """
+																																																			  150     Load CIFAR-100 split into sequential tasks by class groups.
+																																																			    151
+																																																			      152     ``class_groups`` is a sequence of class-index tuples. The default is 20
+																																																			        153     sequential groups of 5 classes each: ((0..4), (5..9), ..., (95..99)).
+																																																				  154     """
+																																																				    155
+																																																				      156     def __init__(
+																																																				        157         self,
+																																																					  158         class_groups: Optional[Sequence[Sequence[int]]] = None,
+																																																					    159         classes_per_task: int = 5,
+																																																					      160         num_tasks: int = 20,
+																																																					        161         batch_size: int = 256,
+																																																						  162         shuffle: bool = True,
+																																																						    163         seed: Optional[int] = None,
+																																																						      164         tensor_format: str = "flat",
+																																																						        165         data_root: str = "./data",
+																																																							  166         num_classes: int = 100,
+																																																							    167     ):
+																																																							      168         if class_groups is None:
+																																																							        169             class_groups = tuple(
+																																																								  170                 tuple(range(i * classes_per_task, (i + 1) * classes_per_task))
+																																																								    171                 for i in range(num_tasks)
+																																																								      172             )
+																																																								        173         self.class_groups = [tuple(g) for g in class_groups]
+																																																									  174         self.batch_size = batch_size
+																																																									    175         self.shuffle = shuffle
+																																																									      176         self.seed = seed
+																																																									        177         self.tensor_format = tensor_format
+																																																										  178         self.num_classes = num_classes
+																																																										    179
+																																																										      180         self._load_cifar100(data_root)
+																																																										        181
+																																																											  182         self.tasks: List[TaskData] = []
+																																																											    183         for task_id, classes in enumerate(self.class_groups):
+																																																											      184             self.tasks.append(self._create_task(task_id, classes))
+																																																											        185
+																																																												  186     def _load_cifar100(self, data_root: str):
+																																																												    187         result = _load_cifar100_keras()
+																																																												      188         if result is None:
+																																																												        189             result = _load_cifar100_manual(data_root)
+																																																													  190         train_images, train_labels, test_images, test_labels = result
+																																																													    191
+																																																													      192         self._train_images = train_images.astype(np.float32) / 255.0
+																																																													        193         self._train_labels = np.asarray(train_labels, dtype=np.int32).reshape(-1)
+																																																														  194         self._test_images = test_images.astype(np.float32) / 255.0
+																																																														    195         self._test_labels = np.asarray(test_labels, dtype=np.int32).reshape(-1)
+																																																														      196
+																																																														        197     def _create_task(self, task_id: int, classes: Sequence[int]) -> TaskData:
+																																																															  198         class_set = set(int(c) for c in classes)
+																																																															    199
+																																																															      200         train_mask = np.isin(self._train_labels, list(class_set))
+																																																															        201         train_images = self._train_images[train_mask]
+																																																																  202         train_labels = self._train_labels[train_mask]
+																																																																    203
+																																																																      204         test_mask = np.isin(self._test_labels, list(class_set))
+																																																																        205         test_images = self._test_images[test_mask]
+																																																																	  206         test_labels = self._test_labels[test_mask]
+																																																																	    207
+																																																																	      208         task_seed = self.seed + task_id if self.seed is not None else None
+																																																																	        209
+																																																																		  210         train_loader = SplitCifar100TaskLoader(
+																																																																		    211             images=train_images,
+																																																																		      212             labels=train_labels,
+																																																																		        213             batch_size=self.batch_size,
+																																																																			  214             shuffle=self.shuffle,
+																																																																			    215             seed=task_seed,
+																																																																			      216             tensor_format=self.tensor_format,
+																																																																			        217             num_classes=self.num_classes,
+																																																																				  218         )
+																																																																				    219         test_loader = SplitCifar100TaskLoader(
+																																																																				      220             images=test_images,
+																																																																				        221             labels=test_labels,
+																																																																					  222             batch_size=self.batch_size,
+																																																																					    223             shuffle=False,
+																																																																					      224             seed=task_seed,
+																																																																					        225             tensor_format=self.tensor_format,
+																																																																						  226             num_classes=self.num_classes,
+																																																																						    227         )
+																																																																						      228
+																																																																						        229         return TaskData(
+																																																																							  230             task_id=task_id,
+																																																																							    231             classes=tuple(classes),
+																																																																							      232             train_loader=train_loader,
+																																																																							        233             test_loader=test_loader,
+																																																																								  234         )
+																																																																								    235
+																																																																								      236     def __len__(self) -> int:
+																																																																								        237         return len(self.tasks)
+																																																																									  238
+																																																																									    239     def __iter__(self) -> Iterator[TaskData]:
+																																																																									      240         return iter(self.tasks)
+																																																																									        241
+																																																																										  242     def __getitem__(self, idx: int) -> TaskData:
+																																																																										    243         return self.tasks[idx]
+																																																																										      244
+																																																																										        245
+																																																																											  246 def build_split_cifar100_loaders(
+																																																																											    247     config,
+																																																																											      248     data_root: str = "./data",
+																																																																											        249 ) -> List[TaskData]:
+																																																																												  250     """
+																																																																												    251     Build Split-CIFAR-100 task loaders from an ExperimentConfig.
+																																																																												      252
+																																																																												        253     Expects:
+																																																																													  254         config.task_pairs           -> tuple of class-group tuples
+																																																																													    255         config.num_output_classes   -> 100
+																																																																													      256         config.training.batch_size
+																																																																													        257         config.seed
+																																																																														  258     """
+																																																																														    259     loader = SplitCifar100Loader(
+																																																																														      260         class_groups=config.task_pairs,
+																																																																														        261         batch_size=config.training.batch_size,
+																																																																															  262         shuffle=True,
+																																																																															    263         seed=config.seed,
+																																																																															      264         tensor_format="flat",
+																																																																															        265         data_root=data_root,
+																																																																																  266         num_classes=getattr(config, "num_output_classes", 100),
+																																																																																    267     )
+																																																																																      268     return loader.tasks
+																																																																																      ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+																																																																																       Do you want to create data_cifar.py?
+																																																																																          1. Yes
+																																																																																	   ❯ 2. Yes, allow all edits during this session (shift+tab)
+																																																																																	      3. No
+
+ Esc to cancel
+
+╭─── Claude Code v2.1.114 ───────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                          │
+│                Welcome back charlie!               │ Run /init to create a CLAUDE.md file with instructions for Claude │
+│                                                    │ ───────────────────────────────────────────────────────────────── │
+│                      ▗ ▗   ▖ ▖                     │ Recent activity                                                   │
+│                                                    │ No recent activity                                                │
+│                        ▘▘ ▝▝                       │                                                                   │
+│        Opus 4.7 (1M context) · Claude Max ·        │                                                                   │
+│        agi@subdude.io's Organization               │                                                                   │
+│                    ~/repos/forks                   │                                                                   │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+❯ there is code in FabricPC which does continual learning via an examples/split_mnist_continual.py experiment -- can you suggest a domain that
+  we can test this on together that's a bit more complex than split MNIST?
+
+  Read 1 file, listed 2 directories (ctrl+o to expand)
+
+⏺ A few options, in increasing complexity:
+
+  Split CIFAR-100 (20 tasks × 5 classes) — the standard next step up from Split-MNIST. Same MLP/columnar shape still works (flatten 32×32×3 →
+    3072), but natural images + more tasks make forgetting much harder to mask. Lots of published baselines to compare against.
+
+  Permuted MNIST — orthogonal axis: same 10 classes, each task is a fixed pixel permutation. Tests drift-resilience rather than class-incremental
+     isolation, so it stresses the column routing differently than Split-MNIST.
+
+  Rotated / Split Fashion-MNIST — cheapest step up, if you want to validate the pipeline changes before paying CIFAR's compute cost.
+
+  My recommendation: Split CIFAR-100. It's the canonical "is your CL method real?" test and your ColumnNode + PartitionedAggregator architecture
+    is exactly the kind of thing that should shine (or fail interestingly) there. Want me to sketch a split_cifar100_continual.py adapted from the
+      existing script?
+
+✻ Baked for 35s
+
+❯ yes, please do what you're recommending - if you need to test, please use the virtual environment available at /Users/ni/virt-envs/fpc1
+
+  Read 2 files, listed 1 directory (ctrl+o to expand)
+
+⏺ Let me verify the trainer has no MNIST-specific assumptions and check what Python env is available.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import sys; print(sys.version); import torch; print('torch', torch.__version__); import
+      torchvision; print('tv', torchvi…)
+        ⎿  Traceback (most recent call last):
+	       File "<string>", line 1, in <module>
+	                import sys; print(sys.version); import torch; print('torch', torch.__version__); import torchvision; print('tv', torchvision.__vers
+			     … +4 lines (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import jax; print('jax', jax.__version__); import fabricpc; print('fpc ok'); import tensorflow;
+      print('tf', tensorflow._…)
+        ⎿  jax 0.10.0
+	     fpc ok
+	          tf 2.21.0
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "from tensorflow.keras.datasets import cifar100; print('cifar100 importable')" 2>&1 | tail -5)
+  ⎿  cifar100 importable
+
+⏺ Good, keras has cifar100. Now let me check how the support/column settings scale — need to make sure num_columns can accommodate 20 tasks.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Now writing the CIFAR-100 data loader.
+
+⏺ Write(FabricPC/fabricpc/continual/data_cifar.py)
+  ⎿  Wrote 268 lines to FabricPC/fabricpc/continual/data_cifar.py
+         1 """
+	        2 Split-CIFAR-100 Data Loading for Continual Learning.
+		       3
+		              4 Provides JAX-compatible data loaders for sequential task learning on
+			             5 CIFAR-100 split into groups of classes. Structured to mirror the Split-MNIST
+				            6 loader in ``fabricpc.continual.data`` so the same SequentialTrainer can
+					           7 consume it unchanged.
+						          8 """
+							         9
+								       10 from dataclasses import dataclass
+								            … +258 lines (ctrl+o to expand)
+
+⏺ Now add num_output_classes to ExperimentConfig and thread it through the trainer.
+
+⏺ Update(FabricPC/fabricpc/continual/config.py)
+  ⎿  Added 2 lines, removed 1 line
+        565
+	      566      # Task configuration
+	            567      num_tasks: int = 5
+		          568 -    task_pairs: Tuple[Tuple[int, int], ...] = ((0, 1), (2, 3), (4, 5), (6, 7), (8, 9))
+			        568 +    task_pairs: Tuple[Tuple[int, ...], ...] = ((0, 1), (2, 3), (4, 5), (6, 7), (8, 9))
+				      569 +    num_output_classes: int = 10  # 10 for MNIST/CIFAR-10, 100 for CIFAR-100
+				            570
+					          571      # Random seed
+						        572      seed: int = 0
+
+⏺ Update(FabricPC/fabricpc/continual/trainer.py)
+  ⎿  Added 1 line, removed 1 line
+        670          # Set active classes for output layer gradient masking
+	      671          self.gradient_protector.set_active_classes(
+	            672              active_classes=task_data.classes,
+		          673 -            num_output_classes=10,  # Split-MNIST has 10 classes
+			        673 +            num_output_classes=getattr(self.config, "num_output_classes", 10),
+				      674          )
+				            675          # Set aggregator partitioning for task-specific pathways (if enabled)
+					          676          if self.config.columns.partition_aggregator:
+
+⏺ Write(FabricPC/examples/split_cifar100_continual.py)
+  ⎿  Wrote 458 lines to FabricPC/examples/split_cifar100_continual.py
+         1 """
+	        2 Split-CIFAR-100 Continual Learning Example
+		       3
+		              4 Extends the Split-MNIST continual learning pipeline to CIFAR-100:
+			             5 - 20 tasks of 5 classes each (class-incremental)
+				            6 - 3072-dim flattened RGB input, 100-way softmax output
+					           7 - Same ColumnNode / PartitionedAggregator / attention architectures
+						          8
+							         9 Usage:
+								       10     python examples/split_cifar100_continual.py
+								            … +448 lines (ctrl+o to expand)
+
+⏺ Now let's smoke-test. Starting with a minimal run (5 tasks × 5 classes to keep it short).
+
+  Bash(cd /Users/ni/repos/forks/FabricPC && /Users/ni/virt-envs/fpc1/bin/python examples/split_cifar100_continual.py --quick-smoke --num-tasks 5
+        --classes-per-task 5 2…)
+	  ⎿  Running… (4s · timeout 10m)
+	       (ctrl+b to run in background)
+
+✳ Running smoke test… (6m 15s · ↓ 7.9k tokens)
+  ⎿  ✔ Survey trainer hardcoded assumptions
+       ✔ Add Split-CIFAR100 data loader
+            ✔ Write split_cifar100_continual.py example
+	         ◼ Smoke-test the new example
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt · ctrl+t to hide tasks                                           ◉ xhigh · /effort
+
+
+
+
+
+
+
+
+
+
+╭─── Claude Code v2.1.114 ───────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                          │
+│                Welcome back charlie!               │ Run /init to create a CLAUDE.md file with instructions for Claude │
+│                                                    │ ───────────────────────────────────────────────────────────────── │
+│                      ▗ ▗   ▖ ▖                     │ Recent activity                                                   │
+│                                                    │ No recent activity                                                │
+│                        ▘▘ ▝▝                       │                                                                   │
+│        Opus 4.7 (1M context) · Claude Max ·        │                                                                   │
+│        agi@subdude.io's Organization               │                                                                   │
+│                    ~/repos/forks                   │                                                                   │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+❯ there is code in FabricPC which does continual learning via an examples/split_mnist_continual.py experiment -- can you suggest a domain that
+  we can test this on together that's a bit more complex than split MNIST?
+
+  Read 1 file, listed 2 directories (ctrl+o to expand)
+
+⏺ A few options, in increasing complexity:
+
+  Split CIFAR-100 (20 tasks × 5 classes) — the standard next step up from Split-MNIST. Same MLP/columnar shape still works (flatten 32×32×3 →
+    3072), but natural images + more tasks make forgetting much harder to mask. Lots of published baselines to compare against.
+
+  Permuted MNIST — orthogonal axis: same 10 classes, each task is a fixed pixel permutation. Tests drift-resilience rather than class-incremental
+     isolation, so it stresses the column routing differently than Split-MNIST.
+
+  Rotated / Split Fashion-MNIST — cheapest step up, if you want to validate the pipeline changes before paying CIFAR's compute cost.
+
+  My recommendation: Split CIFAR-100. It's the canonical "is your CL method real?" test and your ColumnNode + PartitionedAggregator architecture
+    is exactly the kind of thing that should shine (or fail interestingly) there. Want me to sketch a split_cifar100_continual.py adapted from the
+      existing script?
+
+✻ Baked for 35s
+
+❯ yes, please do what you're recommending - if you need to test, please use the virtual environment available at /Users/ni/virt-envs/fpc1
+
+  Read 2 files, listed 1 directory (ctrl+o to expand)
+
+⏺ Let me verify the trainer has no MNIST-specific assumptions and check what Python env is available.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import sys; print(sys.version); import torch; print('torch', torch.__version__); import
+      torchvision; print('tv', torchvi…)
+        ⎿  Traceback (most recent call last):
+	       File "<string>", line 1, in <module>
+	                import sys; print(sys.version); import torch; print('torch', torch.__version__); import torchvision; print('tv', torchvision.__vers
+			     … +4 lines (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import jax; print('jax', jax.__version__); import fabricpc; print('fpc ok'); import tensorflow;
+      print('tf', tensorflow._…)
+        ⎿  jax 0.10.0
+	     fpc ok
+	          tf 2.21.0
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "from tensorflow.keras.datasets import cifar100; print('cifar100 importable')" 2>&1 | tail -5)
+  ⎿  cifar100 importable
+
+⏺ Good, keras has cifar100. Now let me check how the support/column settings scale — need to make sure num_columns can accommodate 20 tasks.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Now writing the CIFAR-100 data loader.
+
+⏺ Write(FabricPC/fabricpc/continual/data_cifar.py)
+  ⎿  Wrote 268 lines to FabricPC/fabricpc/continual/data_cifar.py
+         1 """
+	        2 Split-CIFAR-100 Data Loading for Continual Learning.
+		       3
+		              4 Provides JAX-compatible data loaders for sequential task learning on
+			             5 CIFAR-100 split into groups of classes. Structured to mirror the Split-MNIST
+				            6 loader in ``fabricpc.continual.data`` so the same SequentialTrainer can
+					           7 consume it unchanged.
+						          8 """
+							         9
+								       10 from dataclasses import dataclass
+								            … +258 lines (ctrl+o to expand)
+
+⏺ Now add num_output_classes to ExperimentConfig and thread it through the trainer.
+
+⏺ Update(FabricPC/fabricpc/continual/config.py)
+  ⎿  Added 2 lines, removed 1 line
+        565
+	      566      # Task configuration
+	            567      num_tasks: int = 5
+		          568 -    task_pairs: Tuple[Tuple[int, int], ...] = ((0, 1), (2, 3), (4, 5), (6, 7), (8, 9))
+			        568 +    task_pairs: Tuple[Tuple[int, ...], ...] = ((0, 1), (2, 3), (4, 5), (6, 7), (8, 9))
+				      569 +    num_output_classes: int = 10  # 10 for MNIST/CIFAR-10, 100 for CIFAR-100
+				            570
+					          571      # Random seed
+						        572      seed: int = 0
+
+⏺ Update(FabricPC/fabricpc/continual/trainer.py)
+  ⎿  Added 1 line, removed 1 line
+        670          # Set active classes for output layer gradient masking
+	      671          self.gradient_protector.set_active_classes(
+	            672              active_classes=task_data.classes,
+		          673 -            num_output_classes=10,  # Split-MNIST has 10 classes
+			        673 +            num_output_classes=getattr(self.config, "num_output_classes", 10),
+				      674          )
+				            675          # Set aggregator partitioning for task-specific pathways (if enabled)
+					          676          if self.config.columns.partition_aggregator:
+
+⏺ Write(FabricPC/examples/split_cifar100_continual.py)
+  ⎿  Wrote 458 lines to FabricPC/examples/split_cifar100_continual.py
+         1 """
+	        2 Split-CIFAR-100 Continual Learning Example
+		       3
+		              4 Extends the Split-MNIST continual learning pipeline to CIFAR-100:
+			             5 - 20 tasks of 5 classes each (class-incremental)
+				            6 - 3072-dim flattened RGB input, 100-way softmax output
+					           7 - Same ColumnNode / PartitionedAggregator / attention architectures
+						          8
+							         9 Usage:
+								       10     python examples/split_cifar100_continual.py
+								            … +448 lines (ctrl+o to expand)
+
+⏺ Now let's smoke-test. Starting with a minimal run (5 tasks × 5 classes to keep it short).
+
+  Bash(cd /Users/ni/repos/forks/FabricPC && /Users/ni/virt-envs/fpc1/bin/python examples/split_cifar100_continual.py --quick-smoke --num-tasks 5
+        --classes-per-task 5 2…)
+	  ⎿  Running… (4s · timeout 10m)
+	       (ctrl+b to run in background)
+
+✳ Running smoke test… (6m 16s · ↓ 7.9k tokens)
+  ⎿  ✔ Survey trainer hardcoded assumptions
+       ✔ Add Split-CIFAR100 data loader
+            ✔ Write split_cifar100_continual.py example
+	         ◼ Smoke-test the new example
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt · ctrl+t to hide tasks                                           ◉ xhigh · /effort
+
+╭─── Claude Code v2.1.114 ───────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                          │
+│                Welcome back charlie!               │ Run /init to create a CLAUDE.md file with instructions for Claude │
+│                                                    │ ───────────────────────────────────────────────────────────────── │
+│                      ▗ ▗   ▖ ▖                     │ Recent activity                                                   │
+│                                                    │ No recent activity                                                │
+│                        ▘▘ ▝▝                       │                                                                   │
+│        Opus 4.7 (1M context) · Claude Max ·        │                                                                   │
+│        agi@subdude.io's Organization               │                                                                   │
+│                    ~/repos/forks                   │                                                                   │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+❯ there is code in FabricPC which does continual learning via an examples/split_mnist_continual.py experiment -- can you suggest a domain that
+  we can test this on together that's a bit more complex than split MNIST?
+
+  Read 1 file, listed 2 directories (ctrl+o to expand)
+
+⏺ A few options, in increasing complexity:
+
+  Split CIFAR-100 (20 tasks × 5 classes) — the standard next step up from Split-MNIST. Same MLP/columnar shape still works (flatten 32×32×3 →
+    3072), but natural images + more tasks make forgetting much harder to mask. Lots of published baselines to compare against.
+
+  Permuted MNIST — orthogonal axis: same 10 classes, each task is a fixed pixel permutation. Tests drift-resilience rather than class-incremental
+     isolation, so it stresses the column routing differently than Split-MNIST.
+
+  Rotated / Split Fashion-MNIST — cheapest step up, if you want to validate the pipeline changes before paying CIFAR's compute cost.
+
+  My recommendation: Split CIFAR-100. It's the canonical "is your CL method real?" test and your ColumnNode + PartitionedAggregator architecture
+    is exactly the kind of thing that should shine (or fail interestingly) there. Want me to sketch a split_cifar100_continual.py adapted from the
+      existing script?
+
+✻ Baked for 35s
+
+❯ yes, please do what you're recommending - if you need to test, please use the virtual environment available at /Users/ni/virt-envs/fpc1
+
+  Read 2 files, listed 1 directory (ctrl+o to expand)
+
+⏺ Let me verify the trainer has no MNIST-specific assumptions and check what Python env is available.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import sys; print(sys.version); import torch; print('torch', torch.__version__); import
+      torchvision; print('tv', torchvi…)
+        ⎿  Traceback (most recent call last):
+	       File "<string>", line 1, in <module>
+	                import sys; print(sys.version); import torch; print('torch', torch.__version__); import torchvision; print('tv', torchvision.__vers
+			     … +4 lines (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import jax; print('jax', jax.__version__); import fabricpc; print('fpc ok'); import tensorflow;
+      print('tf', tensorflow._…)
+        ⎿  jax 0.10.0
+	     fpc ok
+	          tf 2.21.0
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "from tensorflow.keras.datasets import cifar100; print('cifar100 importable')" 2>&1 | tail -5)
+  ⎿  cifar100 importable
+
+⏺ Good, keras has cifar100. Now let me check how the support/column settings scale — need to make sure num_columns can accommodate 20 tasks.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Now writing the CIFAR-100 data loader.
+
+⏺ Write(FabricPC/fabricpc/continual/data_cifar.py)
+  ⎿  Wrote 268 lines to FabricPC/fabricpc/continual/data_cifar.py
+         1 """
+	        2 Split-CIFAR-100 Data Loading for Continual Learning.
+		       3
+		              4 Provides JAX-compatible data loaders for sequential task learning on
+			             5 CIFAR-100 split into groups of classes. Structured to mirror the Split-MNIST
+				            6 loader in ``fabricpc.continual.data`` so the same SequentialTrainer can
+					           7 consume it unchanged.
+						          8 """
+							         9
+								       10 from dataclasses import dataclass
+								            … +258 lines (ctrl+o to expand)
+
+⏺ Now add num_output_classes to ExperimentConfig and thread it through the trainer.
+
+⏺ Update(FabricPC/fabricpc/continual/config.py)
+  ⎿  Added 2 lines, removed 1 line
+        565
+	      566      # Task configuration
+	            567      num_tasks: int = 5
+		          568 -    task_pairs: Tuple[Tuple[int, int], ...] = ((0, 1), (2, 3), (4, 5), (6, 7), (8, 9))
+			        568 +    task_pairs: Tuple[Tuple[int, ...], ...] = ((0, 1), (2, 3), (4, 5), (6, 7), (8, 9))
+				      569 +    num_output_classes: int = 10  # 10 for MNIST/CIFAR-10, 100 for CIFAR-100
+				            570
+					          571      # Random seed
+						        572      seed: int = 0
+
+⏺ Update(FabricPC/fabricpc/continual/trainer.py)
+  ⎿  Added 1 line, removed 1 line
+        670          # Set active classes for output layer gradient masking
+	      671          self.gradient_protector.set_active_classes(
+	            672              active_classes=task_data.classes,
+		          673 -            num_output_classes=10,  # Split-MNIST has 10 classes
+			        673 +            num_output_classes=getattr(self.config, "num_output_classes", 10),
+				      674          )
+				            675          # Set aggregator partitioning for task-specific pathways (if enabled)
+					          676          if self.config.columns.partition_aggregator:
+
+⏺ Write(FabricPC/examples/split_cifar100_continual.py)
+  ⎿  Wrote 458 lines to FabricPC/examples/split_cifar100_continual.py
+         1 """
+	        2 Split-CIFAR-100 Continual Learning Example
+		       3
+		              4 Extends the Split-MNIST continual learning pipeline to CIFAR-100:
+			             5 - 20 tasks of 5 classes each (class-incremental)
+				            6 - 3072-dim flattened RGB input, 100-way softmax output
+					           7 - Same ColumnNode / PartitionedAggregator / attention architectures
+						          8
+							         9 Usage:
+								       10     python examples/split_cifar100_continual.py
+								            … +448 lines (ctrl+o to expand)
+
+⏺ Now let's smoke-test. Starting with a minimal run (5 tasks × 5 classes to keep it short).
+
+  Bash(cd /Users/ni/repos/forks/FabricPC && /Users/ni/virt-envs/fpc1/bin/python examples/split_cifar100_continual.py --quick-smoke --num-tasks 5
+        --classes-per-task 5 2…)
+	  ⎿  Running… (4s · timeout 10m)
+	       (ctrl+b to run in background)
+
+✶ Running smoke test… (6m 16s · ↓ 7.9k tokens)
+  ⎿  ✔ Survey trainer hardcoded assumptions
+       ✔ Add Split-CIFAR100 data loader
+            ✔ Write split_cifar100_continual.py example
+	         ◼ Smoke-test the new example
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt · ctrl+t to hide tasks                                           ◉ xhigh · /effort
+
+╭─── Claude Code v2.1.114 ───────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                          │
+│                Welcome back charlie!               │ Run /init to create a CLAUDE.md file with instructions for Claude │
+│                                                    │ ───────────────────────────────────────────────────────────────── │
+│                      ▗ ▗   ▖ ▖                     │ Recent activity                                                   │
+│                                                    │ No recent activity                                                │
+│                        ▘▘ ▝▝                       │                                                                   │
+│        Opus 4.7 (1M context) · Claude Max ·        │                                                                   │
+│        agi@subdude.io's Organization               │                                                                   │
+│                    ~/repos/forks                   │                                                                   │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+❯ there is code in FabricPC which does continual learning via an examples/split_mnist_continual.py experiment -- can you suggest a domain that
+  we can test this on together that's a bit more complex than split MNIST?
+
+  Read 1 file, listed 2 directories (ctrl+o to expand)
+
+⏺ A few options, in increasing complexity:
+
+  Split CIFAR-100 (20 tasks × 5 classes) — the standard next step up from Split-MNIST. Same MLP/columnar shape still works (flatten 32×32×3 →
+    3072), but natural images + more tasks make forgetting much harder to mask. Lots of published baselines to compare against.
+
+  Permuted MNIST — orthogonal axis: same 10 classes, each task is a fixed pixel permutation. Tests drift-resilience rather than class-incremental
+     isolation, so it stresses the column routing differently than Split-MNIST.
+
+  Rotated / Split Fashion-MNIST — cheapest step up, if you want to validate the pipeline changes before paying CIFAR's compute cost.
+
+  My recommendation: Split CIFAR-100. It's the canonical "is your CL method real?" test and your ColumnNode + PartitionedAggregator architecture
+    is exactly the kind of thing that should shine (or fail interestingly) there. Want me to sketch a split_cifar100_continual.py adapted from the
+      existing script?
+
+✻ Baked for 35s
+
+❯ yes, please do what you're recommending - if you need to test, please use the virtual environment available at /Users/ni/virt-envs/fpc1
+
+  Read 2 files, listed 1 directory (ctrl+o to expand)
+
+⏺ Let me verify the trainer has no MNIST-specific assumptions and check what Python env is available.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import sys; print(sys.version); import torch; print('torch', torch.__version__); import
+      torchvision; print('tv', torchvi…)
+        ⎿  Traceback (most recent call last):
+	       File "<string>", line 1, in <module>
+	                import sys; print(sys.version); import torch; print('torch', torch.__version__); import torchvision; print('tv', torchvision.__vers
+			     … +4 lines (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import jax; print('jax', jax.__version__); import fabricpc; print('fpc ok'); import tensorflow;
+      print('tf', tensorflow._…)
+        ⎿  jax 0.10.0
+	     fpc ok
+	          tf 2.21.0
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "from tensorflow.keras.datasets import cifar100; print('cifar100 importable')" 2>&1 | tail -5)
+  ⎿  cifar100 importable
+
+⏺ Good, keras has cifar100. Now let me check how the support/column settings scale — need to make sure num_columns can accommodate 20 tasks.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Now writing the CIFAR-100 data loader.
+
+⏺ Write(FabricPC/fabricpc/continual/data_cifar.py)
+  ⎿  Wrote 268 lines to FabricPC/fabricpc/continual/data_cifar.py
+         1 """
+	        2 Split-CIFAR-100 Data Loading for Continual Learning.
+		       3
+		              4 Provides JAX-compatible data loaders for sequential task learning on
+			             5 CIFAR-100 split into groups of classes. Structured to mirror the Split-MNIST
+				            6 loader in ``fabricpc.continual.data`` so the same SequentialTrainer can
+					           7 consume it unchanged.
+						          8 """
+							         9
+								       10 from dataclasses import dataclass
+								            … +258 lines (ctrl+o to expand)
+
+⏺ Now add num_output_classes to ExperimentConfig and thread it through the trainer.
+
+⏺ Update(FabricPC/fabricpc/continual/config.py)
+  ⎿  Added 2 lines, removed 1 line
+        565
+	      566      # Task configuration
+	            567      num_tasks: int = 5
+		          568 -    task_pairs: Tuple[Tuple[int, int], ...] = ((0, 1), (2, 3), (4, 5), (6, 7), (8, 9))
+			        568 +    task_pairs: Tuple[Tuple[int, ...], ...] = ((0, 1), (2, 3), (4, 5), (6, 7), (8, 9))
+				      569 +    num_output_classes: int = 10  # 10 for MNIST/CIFAR-10, 100 for CIFAR-100
+				            570
+					          571      # Random seed
+						        572      seed: int = 0
+
+⏺ Update(FabricPC/fabricpc/continual/trainer.py)
+  ⎿  Added 1 line, removed 1 line
+        670          # Set active classes for output layer gradient masking
+	      671          self.gradient_protector.set_active_classes(
+	            672              active_classes=task_data.classes,
+		          673 -            num_output_classes=10,  # Split-MNIST has 10 classes
+			        673 +            num_output_classes=getattr(self.config, "num_output_classes", 10),
+				      674          )
+				            675          # Set aggregator partitioning for task-specific pathways (if enabled)
+					          676          if self.config.columns.partition_aggregator:
+
+⏺ Write(FabricPC/examples/split_cifar100_continual.py)
+  ⎿  Wrote 458 lines to FabricPC/examples/split_cifar100_continual.py
+         1 """
+	        2 Split-CIFAR-100 Continual Learning Example
+		       3
+		              4 Extends the Split-MNIST continual learning pipeline to CIFAR-100:
+			             5 - 20 tasks of 5 classes each (class-incremental)
+				            6 - 3072-dim flattened RGB input, 100-way softmax output
+					           7 - Same ColumnNode / PartitionedAggregator / attention architectures
+						          8
+							         9 Usage:
+								       10     python examples/split_cifar100_continual.py
+								            … +448 lines (ctrl+o to expand)
+
+⏺ Now let's smoke-test. Starting with a minimal run (5 tasks × 5 classes to keep it short).
+
+  Bash(cd /Users/ni/repos/forks/FabricPC && /Users/ni/virt-envs/fpc1/bin/python examples/split_cifar100_continual.py --quick-smoke --num-tasks 5
+        --classes-per-task 5 2…)
+	  ⎿  Running… (4s · timeout 10m)
+	       (ctrl+b to run in background)
+
+✶ Running smoke test… (6m 16s · ↓ 7.9k tokens)
+  ⎿  ✔ Survey trainer hardcoded assumptions
+       ✔ Add Split-CIFAR100 data loader
+            ✔ Write split_cifar100_continual.py example
+	         ◼ Smoke-test the new example
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt · ctrl+t to hide tasks                                           ◉ xhigh · /effort
+
+╭─── Claude Code v2.1.114 ───────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                          │
+│                Welcome back charlie!               │ Run /init to create a CLAUDE.md file with instructions for Claude │
+│                                                    │ ───────────────────────────────────────────────────────────────── │
+│                      ▗ ▗   ▖ ▖                     │ Recent activity                                                   │
+│                                                    │ No recent activity                                                │
+│                        ▘▘ ▝▝                       │                                                                   │
+│        Opus 4.7 (1M context) · Claude Max ·        │                                                                   │
+│        agi@subdude.io's Organization               │                                                                   │
+│                    ~/repos/forks                   │                                                                   │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+❯ there is code in FabricPC which does continual learning via an examples/split_mnist_continual.py experiment -- can you suggest a domain that
+  we can test this on together that's a bit more complex than split MNIST?
+
+  Read 1 file, listed 2 directories (ctrl+o to expand)
+
+⏺ A few options, in increasing complexity:
+
+  Split CIFAR-100 (20 tasks × 5 classes) — the standard next step up from Split-MNIST. Same MLP/columnar shape still works (flatten 32×32×3 →
+    3072), but natural images + more tasks make forgetting much harder to mask. Lots of published baselines to compare against.
+
+  Permuted MNIST — orthogonal axis: same 10 classes, each task is a fixed pixel permutation. Tests drift-resilience rather than class-incremental
+     isolation, so it stresses the column routing differently than Split-MNIST.
+
+  Rotated / Split Fashion-MNIST — cheapest step up, if you want to validate the pipeline changes before paying CIFAR's compute cost.
+
+  My recommendation: Split CIFAR-100. It's the canonical "is your CL method real?" test and your ColumnNode + PartitionedAggregator architecture
+    is exactly the kind of thing that should shine (or fail interestingly) there. Want me to sketch a split_cifar100_continual.py adapted from the
+      existing script?
+
+✻ Baked for 35s
+
+❯ yes, please do what you're recommending - if you need to test, please use the virtual environment available at /Users/ni/virt-envs/fpc1
+
+  Read 2 files, listed 1 directory (ctrl+o to expand)
+
+⏺ Let me verify the trainer has no MNIST-specific assumptions and check what Python env is available.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import sys; print(sys.version); import torch; print('torch', torch.__version__); import
+      torchvision; print('tv', torchvi…)
+        ⎿  Traceback (most recent call last):
+	       File "<string>", line 1, in <module>
+	                import sys; print(sys.version); import torch; print('torch', torch.__version__); import torchvision; print('tv', torchvision.__vers
+			     … +4 lines (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import jax; print('jax', jax.__version__); import fabricpc; print('fpc ok'); import tensorflow;
+      print('tf', tensorflow._…)
+        ⎿  jax 0.10.0
+	     fpc ok
+	          tf 2.21.0
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "from tensorflow.keras.datasets import cifar100; print('cifar100 importable')" 2>&1 | tail -5)
+  ⎿  cifar100 importable
+
+⏺ Good, keras has cifar100. Now let me check how the support/column settings scale — need to make sure num_columns can accommodate 20 tasks.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Now writing the CIFAR-100 data loader.
+
+⏺ Write(FabricPC/fabricpc/continual/data_cifar.py)
+  ⎿  Wrote 268 lines to FabricPC/fabricpc/continual/data_cifar.py
+         1 """
+	        2 Split-CIFAR-100 Data Loading for Continual Learning.
+		       3
+		              4 Provides JAX-compatible data loaders for sequential task learning on
+			             5 CIFAR-100 split into groups of classes. Structured to mirror the Split-MNIST
+				            6 loader in ``fabricpc.continual.data`` so the same SequentialTrainer can
+					           7 consume it unchanged.
+						          8 """
+							         9
+								       10 from dataclasses import dataclass
+								            … +258 lines (ctrl+o to expand)
+
+⏺ Now add num_output_classes to ExperimentConfig and thread it through the trainer.
+
+⏺ Update(FabricPC/fabricpc/continual/config.py)
+  ⎿  Added 2 lines, removed 1 line
+        565
+	      566      # Task configuration
+	            567      num_tasks: int = 5
+		          568 -    task_pairs: Tuple[Tuple[int, int], ...] = ((0, 1), (2, 3), (4, 5), (6, 7), (8, 9))
+			        568 +    task_pairs: Tuple[Tuple[int, ...], ...] = ((0, 1), (2, 3), (4, 5), (6, 7), (8, 9))
+				      569 +    num_output_classes: int = 10  # 10 for MNIST/CIFAR-10, 100 for CIFAR-100
+				            570
+					          571      # Random seed
+						        572      seed: int = 0
+
+⏺ Update(FabricPC/fabricpc/continual/trainer.py)
+  ⎿  Added 1 line, removed 1 line
+        670          # Set active classes for output layer gradient masking
+	      671          self.gradient_protector.set_active_classes(
+	            672              active_classes=task_data.classes,
+		          673 -            num_output_classes=10,  # Split-MNIST has 10 classes
+			        673 +            num_output_classes=getattr(self.config, "num_output_classes", 10),
+				      674          )
+				            675          # Set aggregator partitioning for task-specific pathways (if enabled)
+					          676          if self.config.columns.partition_aggregator:
+
+⏺ Write(FabricPC/examples/split_cifar100_continual.py)
+  ⎿  Wrote 458 lines to FabricPC/examples/split_cifar100_continual.py
+         1 """
+	        2 Split-CIFAR-100 Continual Learning Example
+		       3
+		              4 Extends the Split-MNIST continual learning pipeline to CIFAR-100:
+			             5 - 20 tasks of 5 classes each (class-incremental)
+				            6 - 3072-dim flattened RGB input, 100-way softmax output
+					           7 - Same ColumnNode / PartitionedAggregator / attention architectures
+						          8
+							         9 Usage:
+								       10     python examples/split_cifar100_continual.py
+								            … +448 lines (ctrl+o to expand)
+
+⏺ Now let's smoke-test. Starting with a minimal run (5 tasks × 5 classes to keep it short).
+
+⏺ Bash(cd /Users/ni/repos/forks/FabricPC && /Users/ni/virt-envs/fpc1/bin/python examples/split_cifar100_continual.py --quick-smoke --num-tasks 5
+      --classes-per-task 5 2…)
+        ⎿  Running… (4s · timeout 10m)
+	     (ctrl+b to run in background)
+
+✻ Running smoke test… (6m 16s · ↓ 7.9k tokens)
+  ⎿  ✔ Survey trainer hardcoded assumptions
+       ✔ Add Split-CIFAR100 data loader
+            ✔ Write split_cifar100_continual.py example
+	         ◼ Smoke-test the new example
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle) · esc to interrupt · ctrl+t to hide tasks                                           ◉ xhigh · /effort
+
+╭─── Claude Code v2.1.114 ───────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                          │
+│                Welcome back charlie!               │ Run /init to create a CLAUDE.md file with instructions for Claude │
+│                                                    │ ───────────────────────────────────────────────────────────────── │
+│                      ▗ ▗   ▖ ▖                     │ Recent activity                                                   │
+│                                                    │ No recent activity                                                │
+│                        ▘▘ ▝▝                       │                                                                   │
+│        Opus 4.7 (1M context) · Claude Max ·        │                                                                   │
+│        agi@subdude.io's Organization               │                                                                   │
+│                    ~/repos/forks                   │                                                                   │
+╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+❯ there is code in FabricPC which does continual learning via an examples/split_mnist_continual.py experiment -- can you suggest a domain that
+  we can test this on together that's a bit more complex than split MNIST?
+
+  Read 1 file, listed 2 directories (ctrl+o to expand)
+
+⏺ A few options, in increasing complexity:
+
+  Split CIFAR-100 (20 tasks × 5 classes) — the standard next step up from Split-MNIST. Same MLP/columnar shape still works (flatten 32×32×3 →
+    3072), but natural images + more tasks make forgetting much harder to mask. Lots of published baselines to compare against.
+
+  Permuted MNIST — orthogonal axis: same 10 classes, each task is a fixed pixel permutation. Tests drift-resilience rather than class-incremental
+     isolation, so it stresses the column routing differently than Split-MNIST.
+
+  Rotated / Split Fashion-MNIST — cheapest step up, if you want to validate the pipeline changes before paying CIFAR's compute cost.
+
+  My recommendation: Split CIFAR-100. It's the canonical "is your CL method real?" test and your ColumnNode + PartitionedAggregator architecture
+    is exactly the kind of thing that should shine (or fail interestingly) there. Want me to sketch a split_cifar100_continual.py adapted from the
+      existing script?
+
+✻ Baked for 35s
+
+❯ yes, please do what you're recommending - if you need to test, please use the virtual environment available at /Users/ni/virt-envs/fpc1
+
+  Read 2 files, listed 1 directory (ctrl+o to expand)
+
+⏺ Let me verify the trainer has no MNIST-specific assumptions and check what Python env is available.
+
+  Searched for 1 pattern, read 1 file (ctrl+o to expand)
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import sys; print(sys.version); import torch; print('torch', torch.__version__); import
+      torchvision; print('tv', torchvi…)
+        ⎿  Traceback (most recent call last):
+	       File "<string>", line 1, in <module>
+	                import sys; print(sys.version); import torch; print('torch', torch.__version__); import torchvision; print('tv', torchvision.__vers
+			     … +4 lines (ctrl+o to expand)
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "import jax; print('jax', jax.__version__); import fabricpc; print('fpc ok'); import tensorflow;
+      print('tf', tensorflow._…)
+        ⎿  jax 0.10.0
+	     fpc ok
+	          tf 2.21.0
+
+⏺ Bash(/Users/ni/virt-envs/fpc1/bin/python -c "from tensorflow.keras.datasets import cifar100; print('cifar100 importable')" 2>&1 | tail -5)
+  ⎿  cifar100 importable
+
+⏺ Good, keras has cifar100. Now let me check how the support/column settings scale — need to make sure num_columns can accommodate 20 tasks.
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Now writing the CIFAR-100 data loader.
+
+⏺ Write(FabricPC/fabricpc/continual/data_cifar.py)
+  ⎿  Wrote 268 lines to FabricPC/fabricpc/continual/data_cifar.py
+         1 """
+	        2 Split-CIFAR-100 Data Loading for Continual Learning.
+		       3
+		              4 Provides JAX-compatible data loaders for sequential task learning on
+			             5 CIFAR-100 split into groups of classes. Structured to mirror the Split-MNIST
+				            6 loader in ``fabricpc.continual.data`` so the same SequentialTrainer can
+					           7 consume it unchanged.
+						          8 """
+							         9
+								       10 from dataclasses import dataclass
+								            … +258 lines (ctrl+o to expand)
+
+⏺ Now add num_output_classes to ExperimentConfig and thread it through the trainer.
+
+⏺ Update(FabricPC/fabricpc/continual/config.py)
+  ⎿  Added 2 lines, removed 1 line
+        565
+	      566      # Task configuration
+	            567      num_tasks: int = 5
+		          568 -    task_pairs: Tuple[Tuple[int, int], ...] = ((0, 1), (2, 3), (4, 5), (6, 7), (8, 9))
+			        568 +    task_pairs: Tuple[Tuple[int, ...], ...] = ((0, 1), (2, 3), (4, 5), (6, 7), (8, 9))
+				      569 +    num_output_classes: int = 10  # 10 for MNIST/CIFAR-10, 100 for CIFAR-100
+				            570
+					          571      # Random seed
+						        572      seed: int = 0
+
+⏺ Update(FabricPC/fabricpc/continual/trainer.py)
+  ⎿  Added 1 line, removed 1 line
+        670          # Set active classes for output layer gradient masking
+	      671          self.gradient_protector.set_active_classes(
+	            672              active_classes=task_data.classes,
+		          673 -            num_output_classes=10,  # Split-MNIST has 10 classes
+			        673 +            num_output_classes=getattr(self.config, "num_output_classes", 10),
+				      674          )
+				            675          # Set aggregator partitioning for task-specific pathways (if enabled)
+					          676          if self.config.columns.partition_aggregator:
+
+⏺ Write(FabricPC/examples/split_cifar100_continual.py)
+  ⎿  Wrote 458 lines to FabricPC/examples/split_cifar100_continual.py
+         1 """
+	        2 Split-CIFAR-100 Continual Learning Example
+		       3
+		              4 Extends the Split-MNIST continual learning pipeline to CIFAR-100:
+			             5 - 20 tasks of 5 classes each (class-incremental)
+				            6 - 3072-dim flattened RGB input, 100-way softmax output
+					           7 - Same ColumnNode / PartitionedAggregator / attention architectures
+						          8
+							         9 Usage:
+								       10     python examples/split_cifar100_continual.py
+								            … +448 lines (ctrl+o to expand)
+
+⏺ Now let's smoke-test. Starting with a minimal run (5 tasks × 5 classes to keep it short).
+
+⏺ Bash(cd /Users/ni/repos/forks/FabricPC && /Users/ni/virt-envs/fpc1/bin/python examples/split_cifar100_continual.py --quick-smoke --num-tasks 5
+      --classes-per-task 5 2…)
+        ⎿    Epoch 1: acc=0.5700, loss=0.0000
+	     Epoch 1/1, energy: 1.7243
+	            Audit baseline: current_loss=0.0000, old_loss=0.0000
+		         … +55 lines (ctrl+o to expand)
+			   ⎿  (timeout 10m)
+
+⏺ Smoke test passed end-to-end: 5 tasks × 5 classes, all tasks trained, accuracy matrix + forgetting metric computed, plots saved.
+
+  What I did:
+    - fabricpc/continual/data_cifar.py — SplitCifar100Loader / build_split_cifar100_loaders. Loads via tf.keras.datasets.cifar100, falls back to
+      the raw CIFAR-100 tarball. Yields flat (N, 3072) batches with per-channel CIFAR-100 normalization, reusing TaskData so the SequentialTrainer is
+         unchanged.
+	   - fabricpc/continual/config.py — added num_output_classes: int = 10, widened task_pairs type hint to Tuple[Tuple[int, ...], ...].
+	     - fabricpc/continual/trainer.py — the previously hardcoded num_output_classes=10 now reads from config.
+	       - examples/split_cifar100_continual.py — mirrors the MNIST example, CLI adds --num-tasks / --classes-per-task (default 20×5). Scales
+	         num_columns to shared + num_tasks * topk_nonshared and widens the MLP baseline to 1024→512→100.
+
+  Smoke output (5 tasks × 5 classes, 2 batches each): task-masked test acc 53–65%, avg forgetting 0.11. Each task ~1s; full CIFAR-100 run (20
+    tasks, 5 epochs) will be ~100×–200× longer.
+
+  Next: want me to run a real (non-smoke) baseline — say --num-tasks 10 --classes-per-task 10 --epochs 3 to keep it tractable — or a head-to-head
+     pc vs --partitioned vs --ewc comparison?
+
+✻ Sautéed for 8m 39s
+
+~
