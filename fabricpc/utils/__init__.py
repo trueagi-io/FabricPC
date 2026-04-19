@@ -4,6 +4,7 @@ import importlib
 
 from fabricpc.utils.helpers import (
     update_node_in_state,
+    set_jax_flags_before_importing_jax,
     layernorm,
 )
 
@@ -21,6 +22,7 @@ def __getattr__(name: str):
 __all__ = [
     # Helpers
     "update_node_in_state",
+    "set_jax_flags_before_importing_jax",
     "layernorm",
     # Submodules
     "data",
