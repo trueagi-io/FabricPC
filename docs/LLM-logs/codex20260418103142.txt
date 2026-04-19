@@ -1,0 +1,63 @@
+› yes, let's proceed with an updated plan to fix those two groups of flaws
+
+
+• I’m updating the plan around both groups: first restoring implementation fidelity for support routing and optimizer continuity, then replacing synthetic/
+  fabricated TransWeave and causal-audit signals with measured ones. I’ll keep it staged so each step yields a testable behavioral improvement instead of one
+  large rewrite.
+
+• Updated Plan
+  └ Updated plan covering both result-invalidating mechanism flaws and the architecture/training fidelity flaws.
+    □ Wire support selection into the actual forward path so inactive columns are masked during training and evaluation, not just in gradient transforms
+    □ Preserve optimizer state across tasks and checkpoints so continual-learning dynamics and resume behavior are faithful
+    □ Replace synthetic TransWeave registration with model-derived composer parameters and measured column activation summaries
+    □ Replace fabricated causal support-audit gains with real swap-evaluation measurements on bounded audit batches
+    □ Add targeted smoke tests and invariants for support masking, checkpoint resume, TransWeave grounding, and causal audit correctness
+
+• Updated Plan
+
+  1. Support routing fidelity
+
+  - Thread the selected support mask into the graph so ColumnNode and ComposerNode/aggregator receive real mask inputs during train and eval.
+  - Remove the current mismatch where support selection only affects gradient masking.
+  - Validation: with a fixed batch, deactivating columns must change columns.z_mu and downstream logits deterministically.
+
+  2. Optimizer continuity
+
+  - Stop reinitializing opt_state inside per-task training loops.
+  - Change train_pcn() and train_backprop() usage so SequentialTrainer owns and reuses optimizer state across tasks.
+  - Save and restore opt_state in checkpoints.
+  - Validation: resume-from-checkpoint should match uninterrupted training for the next step/task.
+
+  3. Grounded TransWeave
+
+  - Replace _register_transweave_task_end() synthetic composer tensors and heuristic shell activities with extracted model state.
+  - For ComposerNode, register real params plus measured attention/gating summaries from sampled inference batches.
+  - For shell demotion, register measured per-column neuron activities from real columns activations.
+  - If the current architecture does not use ComposerNode, mark composer transfer as not applicable instead of inventing stats.
+  - Validation: TransWeave summaries should be deterministic for the same checkpoint/sample set and should vary with learned model state, not RNG noise.
+
+  4. Real causal audit
+
+  - Replace estimated swap gains from support-bank heuristics with actual bounded swap evaluations.
+  - For each audited swap, run the model with the altered support mask on a limited batch set and record observed current/old-task loss deltas.
+  - Keep it cheap with small max_swaps and max_batches.
+  - Validation: audit rows should be reproducible and correspond to actual support interventions.
+
+  5. Test and rollout order
+
+  - Land in this order:
+      1. support-mask wiring
+      2. optimizer-state persistence
+      3. real causal audit
+      4. grounded TransWeave
+  - Add focused tests:
+      - support mask changes forward outputs
+      - checkpoint resume preserves optimizer trajectory
+      - causal audit uses measured swap results
+      - TransWeave registration contains no random/synthetic placeholders
+
+  Recommendation
+  Start with steps 1 and 2 first. They fix core training fidelity and make steps 3 and 4 easier to trust, because the mechanism measurements will then reflect
+  the intended architecture and stable optimization state.
+
+  If you want, I can move from planning into implementation and start with support-mask wiring plus optimizer-state persistence.

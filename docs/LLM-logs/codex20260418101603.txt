@@ -1,0 +1,168 @@
+(ffpc1) ni@singbuntu24:~/repos/freeFabricPC$ codex
+╭───────────────────────────────────────────────────────────────╮
+│ ✨ Update available! 0.114.0 -> 0.120.0                       │
+│ See https://github.com/openai/codex for installation options. │
+│                                                               │
+│ See full release notes:                                       │
+│ https://github.com/openai/codex/releases/latest               │
+╰───────────────────────────────────────────────────────────────╯
+
+╭────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.114.0)             │
+│                                        │
+│ model:     gpt-5.4   /model to change  │
+│ directory: /home/ni/repos/freeFabricPC │
+╰────────────────────────────────────────╯
+
+  Tip: Update Required - This version will no longer be supported starting May 8th. Please upgrade to the latest version
+  (https://github.com/openai/codex/releases/latest) using your preferred package manager.
+
+
+› please use the /home/ni/repos/freeFabricPC/virt-envs/ffpc1 virtual environment if you need to run anything but I would like you
+  to examine the codebase in FabricPC/continual/ in order to see if you can find any flaws in it -- the experiment can be run
+  using the venv I mentioned by executing (from FabricPC/ ) python examples/split_mnist_continual.py
+
+
+• I’m reviewing FabricPC/continual/ for correctness risks and regressions, and I’ll use the provided virtual environment if I need
+  to execute the example or tests. I’m starting by locating the relevant files and reading the continual-learning implementation
+  before deciding whether a run is needed to confirm any issues.
+
+• Explored
+  └ List continual
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The first pass shows the package lives under FabricPC/, but there isn’t a top-level FabricPC/continual path from the repo root
+  as named. I’m checking the actual package layout and the example’s imports next so the review is scoped to the code it really
+  exercises.
+
+• Ran pwd
+  └ /home/ni/repos/freeFabricPC
+
+• Explored
+  └ List .
+    Search continual|split_mnist_continual|__init__
+    List freeFabricPC
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The repo scan pulled in the virtualenv and drowned the signal, so I’m narrowing to the project package and tracing the example’s
+  imports into the continual code. After that I’ll inspect the core training/state-management paths and run the example only if
+  the static review needs confirmation.
+
+• Explored
+  └ List FabricPC
+    Search continual|split_mnist_continual|__init__|mnist
+    Search continual in freeFabricPC
+    Read split_mnist_continual.py
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’ve confirmed the implementation is under FabricPC/fabricpc/continual/, and the example wires through config, data, nodes, and
+  trainer. I’m reading those paths now, with the review centered on state handling, task transitions, masking/protection logic,
+  and evaluation bookkeeping.
+
+• Explored
+  └ Read nodes.py, data.py, trainer.py, gradient_protection.py, config.py, support.py, utils.py, ewc.py, transweave.py
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I have enough context to focus on the failure-prone paths now. Next I’m tracing train_task() end-to-end, then checking whether
+  the masking/EWC logic is actually wired into the training functions the example uses, because that’s where “looks implemented”
+  often diverges from “actually affects optimization.”
+
+• Explored
+  └ Read trainer.py, gradient_protection.py
+    Search gradient_protector|opt_state|optimizer|train_backprop|train_pcn|evaluate_backprop|evaluate_pcn|set_active_columns|set_active_classes|
+           set_shell_assignments|set_aggregator_config|ewc_manager|consolidate_task|_set_composer_task_id in trainer.py
+    Read trainer.py
+    Search current_state|select_support_for_task|record_outcome|checkpoint|load_state|save_state|accuracy_matrix\(|_consolidate_ewc|corrected_grads|
+           per_weight_causal in trainer.py
+    Read support.py, train.py, train_backprop.py, nodes.py
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The high-risk patterns are emerging: several “continual” mechanisms are present in the trainer, but some of them are only approximated or not fully threaded
+  through the actual optimization state. I’m validating that against the parameter naming/layout used by the core nodes before I write up concrete findings.
+
+• Explored
+  └ Read linear.py
+    Search weights\[|biases\[|return NodeParams|class Linear|initialize_params\( in nodes
+    Search Linear|bias|:in|column_bias|head_bias
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ from fabricpc.continual.config import make_config
+  │ from fabricpc.examples.split_mnist_continual import create_network_structure
+  │ … +9 lines
+  └ Traceback (most recent call last):
+      File "<stdin>", line 2, in <module>
+    ModuleNotFoundError: No module named 'fabricpc.examples'
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’m checking the live parameter tree in the provided venv now. That confirms whether the gradient masks are targeting the real weight keys the example
+  instantiates, rather than just the intended ones on paper.
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import sys
+  │ sys.path.insert(0, '.')
+  │ … +12 lines
+  └ Traceback (most recent call last):
+      File "<stdin>", line 3, in <module>
+      File "/home/ni/repos/freeFabricPC/FabricPC/examples/__init__.py", line 8, in <module>
+        from fabricpc.examples.plotting import visualize_experiment
+    ModuleNotFoundError: No module named 'fabricpc.examples'
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import importlib.util
+  │ from pathlib import Path
+  │ … +14 lines
+  └ Jax plugin configuration error: Exception when calling jax_plugins.xla_cuda12.initialize()
+    Traceback (most recent call last):
+    … +19 lines
+      weights ['aggregator->output:in']
+      biases ['b']
+
+• Waited for background terminal
+
+• Waited for background terminal
+
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’ve started a smoke run in the requested venv. It’s already surfaced one environment-level issue: the example hard-requests CUDA via JAX flags, then falls
+  back noisily to CPU when CUDA init fails, so I’m waiting to see whether training itself completes or exposes a code-path failure.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_mnist_continual.py --quick-smoke
+--training-mode backprop --seed 42
+
+• Explored
+  └ Search active_mask\(|slot\(\"mask\"\)|task_id\)|get_active_mask\(|current_state.active_mask|mask\] = in fabricpc
+    Read split_mnist_continual.py, trainer.py, nodes.py
+
+─ Worked for 1m 12s ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Findings
+
+  - High: support selection is not actually applied in the forward pass, so “active columns” are still all contributing activations. The example graph only
+    connects pixels -> columns -> aggregator -> output and never feeds a support mask into columns.slot("mask") or aggregator.slot("mask")
+    (split_mnist_continual.py:158, split_mnist_continual.py:169). In ColumnNode.forward(), missing mask input defaults to an all-ones mask, so every column
+    stays live (nodes.py:297). That means support selection only affects gradient masking, not routing, and frozen/stale columns can still interfere with
+    logits.
+  - High: the causal support audit is generating synthetic labels instead of measuring real swapped-support behavior. After collecting baseline losses,
+    _run_support_swap_audit() stops evaluating actual swap variants and replaces them with estimated_gain = (swap_in_score - swap_out_score) * 0.1 + noise
+    derived from support-bank averages plus Gaussian noise (trainer.py:1177). Those fabricated gains are then fed into the causal predictor/trust pipeline, so
+    the “causal” learner is training on noisy heuristics rather than observed counterfactual outcomes.
+  - High: TransWeave state is also synthetic, so the transfer mechanism is decoupled from the learned model. _register_transweave_task_end() explicitly says it
+    is generating representative composer state “for now,” then builds random projections with np.random.randn(...) and shell activities from hand-written
+    heuristics/noise instead of model parameters or measured activations (trainer.py:1376, trainer.py:1397, trainer.py:1483). Any transfer stats or downstream
+    task adaptation attributed to TransWeave are therefore not grounded in what the network actually learned.
+  - Medium: optimizer state is effectively thrown away at every task boundary and on checkpoint restore. SequentialTrainer constructs self.optimizer, but
+    train_task() calls train_backprop() / train_pcn() which each reinitialize opt_state = optimizer.init(params) internally (trainer.py:747,
+    train_backprop.py:171, train.py:161). Checkpoints also save params but not optimizer state, and load_checkpoint() just re-inits it again (trainer.py:1661,
+    trainer.py:1698). That makes resume non-faithful and wipes Adam moments across tasks, which changes continual-learning behavior.
+
+  I also validated the live parameter tree in the provided ffpc1 venv to confirm the masking code is targeting the real keys. I started a --quick-smoke run; it
+  got through import/setup and exposed a noisy forced-CUDA fallback plus a Matplotlib config permission warning, but I did not wait for the full training run
+  to complete.
+ 
+  1 background terminal running · /ps to view · /clean to close

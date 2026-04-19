@@ -1,0 +1,27 @@
+ - move more of the continual-learning hot path from Python/NumPy into batched JAX, especially in fabricpc/continual/support.py, causal.py, and parts of trainer.py
+  - vectorize causal feature construction and candidate scoring instead of scoring columns one at a time
+  - split SequentialTrainer into smaller collaborators so audit/replay/causal/TransWeave work can be optimized and tested independently
+  - add notebook-parity regression benchmarks so future refactors can be checked against representative V18/V20.2b behavior
+
+
+
+  What’s still left in this improvement area:
+
+  - the baseline-loss evaluation inside _run_support_swap_audit() still loops batch-by-batch and calls evaluate_pcn / evaluate_backprop one batch at a time
+  - replay/sample interleaving is still mostly Python/Numpy
+  - trust / agreement tracking remains list-and-dict based
+
+  The next highest-value step would be to batch the audit evaluation input path itself so the audit baseline and candidate scoring use fewer Python-level loader iterations and fewer tiny evaluation calls.
+
+
+  At this point, the main remaining Python-heavy continual-learning pieces are:
+
+  - InterleavedLoader batch assembly and shuffling
+  - parts of replay storage / total-limit enforcement
+  - some trainer-side task sample collection and synthetic TransWeave bookkeeping
+
+  If you want, I can continue into InterleavedLoader next, since that sits directly on the training path.
+
+Still to do from the original 4 at the top:
+  - vectorize causal feature construction and candidate scoring instead of scoring columns one at a time
+  - split SequentialTrainer into smaller collaborators so audit/replay/causal/TransWeave work can be optimized and tested independently
