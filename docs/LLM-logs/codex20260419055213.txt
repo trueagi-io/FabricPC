@@ -1,0 +1,1563 @@
+repos/freeFabricPC$ codex
+
+
+╭──────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.121.0)                   │
+│                                              │
+│ model:     gpt-5.4 medium   /model to change │
+│ directory: ~/repos/freeFabricPC              │
+╰──────────────────────────────────────────────╯
+
+  Tip: New Use /fast to enable our fastest inference at 2X plan usage.
+To continue this session, run codex resume 019da2b1-8dc4-7471-96a2-2c5246b7d4bb
+ni@singbuntu24:~/repos/freeFabricPC$ cat resume
+To continue this session, run codex resume 019da0e9-6a76-7340-b9db-7825add0bf0a
+ni@singbuntu24:~/repos/freeFabricPC$ codex resume 019da0e9-6a76-7340-b9db-7825add0bf0a
+ERROR: No saved session found with ID 019da0e9-6a76-7340-b9db-7825add0bf0a. Run `codex resume` without an ID to choose from existing sessions.
+ni@singbuntu24:~/repos/freeFabricPC$ codex
+⚠ Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces.
+
+╭──────────────────────────────────────────────╮
+│ >_ OpenAI Codex (v0.121.0)                   │
+│                                              │
+│ model:     gpt-5.4 medium   /model to change │
+│ directory: ~/repos/freeFabricPC              │
+╰──────────────────────────────────────────────╯
+
+  Tip: You can resume a previous conversation by running codex resume
+
+
+› please use the venv /home/ni/repos/freeFabricPC/virt-envs/ffpc1 to run a smoke test of FabricPC split cifar100 experiment found in examples and verify that JAX is using the GPU
+
+
+• I’m checking the repo for the split CIFAR-100 example and the expected entrypoint, then I’ll run it with /home/ni/repos/freeFabricPC/virt-envs/ffpc1 and confirm what JAX sees for devices.
+
+• The sandbox is blocking even basic shell startup here, so I’m rerunning the repo inspection outside the sandbox. After that I’ll execute the example in the requested venv and capture JAX’s visible devices.
+
+• Ran pwd
+  └ /home/ni/repos/freeFabricPC
+
+• Ran git status --short
+  └ fatal: not a git repository (or any of the parent directories): .git
+
+• Explored
+  └ Search split cifar100|split_cifar100|cifar100 in examples
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The actual project root is /home/ni/repos/freeFabricPC/FabricPC; the example is there. I’m checking the example’s smoke-test flags and then I’ll run JAX device probes and the experiment from that directory
+  with the requested interpreter.
+
+• Explored
+  └ List ls -la
+    Read split_cifar100_continual.py
+
+• Ran git status --short
+  └ ?? docs/LLM-logs/random-extras.txt
+    ?? results/
+
+• Explored
+  └ Read split_cifar100_continual.py, helpers.py
+
+✔ You approved codex to always run commands that start with source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -c "import jax; print(jax.__version__); print(jax.devices()); print('gpu', jax.devices('gpu'))"
+  └ 0.9.2
+    [CudaDevice(id=0)]
+    gpu [CudaDevice(id=0)]
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• JAX in that venv already reports CudaDevice(id=0). I’m running one explicit backend/device placement probe and then the example itself in quick-smoke mode so I can confirm the experiment completes under the
+  GPU-backed JAX setup.
+
+• Running source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -c "import jax, jax.numpy as jnp; x=jnp.ones((2048,2048)); y=x@x; print('backend', jax.default_backend()); print('devices',
+  │ jax.devices()); print('result_device', y.devices())"
+
+✔ You approved codex to always run commands that start with python -c "import jax, jax.numpy as jnp; x=jnp.ones((2048,2048)); y=x@x; prin...
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -c "import jax, jax.numpy as jnp; x=jnp.ones((2048,2048)); y=x@x; print('backend', jax.default_backend()); print('devices',
+  │ jax.devices()); print('result_device', y.devices())"
+  └ backend gpu
+    devices [CudaDevice(id=0)]
+    result_device {CudaDevice(id=0)}
+
+✔ You approved codex to always run commands that start with python examples/split_cifar100_continual.py --quick-smoke --num-tasks 5 --cla...
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --quick-smoke --num-tasks 5 --classes-per-task 5
+  └ WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+    I0000 00:00:1776551250.309003   23234 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders.
+    … +77 lines (ctrl + t to view transcript)
+    `align=0`. Did you mean to pass a tuple to create a subarray type? (Deprecated NumPy 2.4)
+      d = cPickle.load(f, encoding="bytes")
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The example is past dataset setup and into execution. I’m polling the run to see whether the quick-smoke finishes cleanly or trips on a runtime issue.
+
+• Waited for background terminal
+
+• The run hasn’t emitted new logs yet, which usually means it’s inside the first compiled training/eval step rather than stuck in setup. I’m giving it another interval before deciding whether the smoke path is
+  too heavy for a quick verification.
+
+• Waited for background terminal
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --quick-smoke --num-tasks 5 --classes-per-task 5
+  └ WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+    I0000 00:00:1776551250.309003   23234 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders.
+    … +228 lines (ctrl + t to view transcript)
+
+    Done!
+
+─ Worked for 1m 56s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Ran the smoke test with /home/ni/repos/freeFabricPC/virt-envs/ffpc1 from /home/ni/repos/freeFabricPC/FabricPC.
+
+  JAX is using the GPU in that venv:
+
+  - jax.default_backend() -> gpu
+  - jax.devices() -> [CudaDevice(id=0)]
+  - a test matmul result was placed on {CudaDevice(id=0)}
+
+  I ran:
+
+  source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate
+  python examples/split_cifar100_continual.py --quick-smoke --num-tasks 5 --classes-per-task 5
+
+  The smoke test completed successfully. Key results:
+
+  - 5 tasks finished
+  - average train accuracy: 0.6169
+  - average test accuracy: 0.5776
+  - total training time reported by the script: 127.6s
+  - average forgetting: 0.1445
+
+  Outputs were written to FabricPC/results/split_cifar100/split_cifar100_seed42_20260418_182741.
+
+  No code changes made.
+
+
+› run a more complete full test with 20 tasks with an eye towards analyzing the results and detecting problems with the code, and possibly improving it please
+
+
+• I’m checking the default training settings for this example and then I’ll run the full 20-task experiment in the requested venv, capture the outputs, and review the results for behavioral problems before
+  changing code.
+
+• Running source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ from fabricpc.continual.config import make_config
+  │ c = make_config(quick_smoke=False)
+  │ … +6 lines
+
+✔ You approved codex to run source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <... this time
+
+• Explored
+  └ Read config.py
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ from fabricpc.continual.config import make_config
+  │ c = make_config(quick_smoke=False)
+  │ … +6 lines
+  └ epochs_per_task 5
+    batch_size 256
+    fast_dev_max_train_batches None
+    fast_dev_max_test_batches None
+    lr 0.001
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Plan:
+
+  1. Run the 20-task experiment with default settings in /home/ni/repos/freeFabricPC/virt-envs/ffpc1.
+  2. Inspect the generated metrics and logs for signs of instability, regressions, or obvious implementation issues.
+  3. If the results point to a concrete code problem, patch it and rerun a focused verification.
+
+• Updated Plan
+  └ Running the full 20-task experiment first, then reviewing the outputs before making any changes.
+    □ Run full 20-task split CIFAR-100 experiment in ffpc1 venv
+    □ Inspect generated metrics/results for behavioral or code issues
+    □ Implement and verify any targeted fixes suggested by the results
+
+✔ You approved codex to always run commands that start with python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+  └ WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+    I0000 00:00:1776554064.720618   32822 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders.
+    … +5 lines (ctrl + t to view transcript)
+    `align=0`. Did you mean to pass a tuple to create a subarray type? (Deprecated NumPy 2.4)
+      d = cPickle.load(f, encoding="bytes")
+
+• The full run is underway. Dataset load is already warm from the earlier smoke test, so the remaining time will mostly be JAX compile plus 20-task training and evaluation.
+
+• Waited for background terminal
+
+• The process is still active but not printing incremental logs right now, which suggests the trainer is inside long compute sections rather than repeatedly restarting. I’m letting it run longer before I
+  inspect the result files.
+
+• Waited for background terminal
+
+• I haven’t gotten stdout yet from the trainer, so I’m checking the live process and output directory in parallel to make sure this is progress, not a silent hang.
+
+• Running ps -p 32822 -o pid,etime,%cpu,%mem,cmd
+
+• Explored
+  └ List *
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+  └ WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+    I0000 00:00:1776554064.720618   32822 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders.
+    … +873 lines (ctrl + t to view transcript)
+
+    Done!
+
+✔ You approved codex to always run commands that start with ps -p
+
+• Ran ps -p 32822 -o pid,etime,%cpu,%mem,cmd
+  └     PID     ELAPSED %CPU %MEM CMD
+
+─ Worked for 4m 39s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The Python PID from startup is gone, so the run likely finished and the session just hasn’t been drained yet. I’m pulling the remaining output now.
+
+• Waited for background terminal
+
+• The 20-task run finished. I’m reading the saved summaries now; there are already a few suspicious signals in the console output, especially the all-zero losses/causal metrics and the large mismatch between
+  two different training-time totals.
+
+• Running python - <<'PY'
+  │ import json, pathlib
+  │ p = pathlib.Path('results/split_cifar100/split_cifar100_seed42_20260418_191427/summaries.json')
+  │ … +7 lines
+
+✔ You approved codex to run python - <<'PY' ... this time
+
+• Explored
+  └ Read utils.py
+    Search time_seconds|Total Training Time|Average forgetting|causal_corr|mix_gate|agreement_gate|loss=0.0000|current_loss=0.0000 in fabricpc
+
+• Ran python - <<'PY'
+  │ import json, pathlib
+  │ p = pathlib.Path('results/split_cifar100/split_cifar100_seed42_20260418_191427/summaries.json')
+  │ … +7 lines
+  └ /bin/bash: line 1: python: command not found
+
+• Running source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import json, pathlib, numpy as np
+  │ run = pathlib.Path('results/split_cifar100/split_cifar100_seed42_20260418_191427')
+  │ … +13 lines
+
+✔ You approved codex to run source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <... this time
+
+• Explored
+  └ Read trainer.py
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import json, pathlib, numpy as np
+  │ run = pathlib.Path('results/split_cifar100/split_cifar100_seed42_20260418_191427')
+  │ … +13 lines
+  └ num_summaries 20
+    summary_keys ['causal_selector_agreement_gate', 'causal_selector_corr', 'causal_selector_coverage_gate', 'causal_selector_effective_scale', 'causal_selector_examples', 'causal_selector_mae',
+    … +10 lines (ctrl + t to view transcript)
+    first5_final [0.238, 0.21, 0.258, 0.238, 0.274]
+    last5_diag [0.584, 0.594, 0.556, 0.628, 0.686]
+
+• Explored
+  └ Read utils.py
+    Search training_time =|start_time = time.time\(|time.time\(\) - start_time|epoch_losses.append|loss.*0.0|metrics.get\(\"loss\" in trainer.py
+
+✔ You approved codex to run source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <... this time
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import json, pathlib
+  │ obj = json.loads(pathlib.Path('results/split_cifar100/split_cifar100_seed42_20260418_191427/summaries.json').read_text())
+  │ … +7 lines
+  └ task 0
+     epoch_acc [0.532, 0.548, 0.542, 0.628, 0.602]
+    … +8 lines (ctrl + t to view transcript)
+     epoch_loss [0.0, 0.0, 0.0, 0.0, 0.0]
+     train_loss 0.0 test_loss 0.0 train_energy 0.0 test_energy 0.0
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The saved JSON confirms the “zero losses/energy” issue is real, not just rounded console output. I’m tracing where the trainer pulls metric fields from the training/evaluation functions to see whether those
+  functions never produce the keys or whether the trainer is dropping them.
+
+• Explored
+  └ Read trainer.py
+    Search def train_pcn|def evaluate_pcn|return .*accuracy|return metrics|loss|energy in training
+    Read __init__.py
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The trainer expects a "loss" key from evaluation, but the PC evaluator appears to return only accuracy and internal energy. I’m opening that code next; this looks like one concrete explanation for the
+  meaningless zero losses in the experiment outputs.
+
+• Explored
+  └ Read train.py, causal.py
+    Search causal_max_effective_scale|effective_scale in config.py
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• One of the “all-zero causal” findings is at least partly configuration, not runtime failure: SupportConfig.causal_max_effective_scale is currently 0.0, which hard-disables causal mixing. I’m checking whether
+  the code still computes or logs downstream metrics as if that subsystem were active, and whether the audit path is also using nonexistent loss values.
+
+• Explored
+  └ Read trainer.py
+    Search chosen_current_loss|old_loss|current_loss|support swap audit|audit_rows|actual_gain|predicted_gain in trainer.py
+    Read train_backprop.py, trainer.py
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’ve got one clear code issue to fix: the predictive-coding evaluator never returns classification loss, so the trainer, audit code, and saved summaries all silently record 0.0. I’m patching that now, and
+  I’ll also make the time reporting less misleading since the per-task “training time” excludes evaluation/audit overhead while the final example total includes it.
+
+• Explored
+  └ Read train.py, split_cifar100_continual.py
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I found the exact source of the zero-loss bug: evaluate_pcn() only returns {"energy", "accuracy"}, but the continual trainer and audit code assume a "loss" field exists. I’m fixing that evaluator and
+  tightening the reporting labels so the experiment output distinguishes summed task-training time from full wall-clock time.
+
+• Explored
+  └ Read train_autoregressive.py
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’m editing the evaluator and result-reporting code now. After that I’ll run a focused verification in the same venv to confirm the saved summaries stop reporting fake zeros and the timing labels are clearer.
+
+• Edited 3 files (+28 -9)
+  └ FabricPC/examples/split_cifar100_continual.py (+2 -2)
+    421
+    422 -    print(f"\nTotal training time: {total_time:.1f}s")
+    423 -    print(f"Average time per task: {total_time / len(tasks):.1f}s")
+    422 +    print(f"\nWall-clock run time: {total_time:.1f}s")
+    423 +    print(f"Average wall time per task: {total_time / len(tasks):.1f}s")
+    424
+
+  └ FabricPC/fabricpc/continual/utils.py (+1 -1)
+    526      print(f"Average Test Accuracy:  {avg_test:.4f}")
+    527 -    print(f"Total Training Time:    {total_time:.1f}s")
+    527 +    print(f"Summed Task Train Time: {total_time:.1f}s")
+    528
+
+  └ FabricPC/fabricpc/training/train.py (+25 -6)
+     16  from fabricpc.graph.graph_net import compute_local_weight_gradients
+     17 +from fabricpc.training.train_autoregressive import compute_loss
+     18
+        ⋮
+    260      rng_key: jax.Array,
+    260 -) -> Tuple[float, int, int]:
+    261 +    loss_type: str = "cross_entropy",
+    262 +) -> Tuple[float, float, int, int]:
+    263      """
+        ⋮
+    272      Returns:
+    271 -        Tuple of (avg_energy, correct, batch_size)
+    273 +        Tuple of (avg_energy, loss, correct, batch_size)
+    274      """
+        ⋮
+    308
+    309 +    loss = jnp.array(0.0)
+    310 +
+    311      # Compute accuracy
+        ⋮
+    315          predictions = final_state.nodes[y_node].z_mu
+    316 +        loss = compute_loss(final_state, batch["y"], y_node, loss_type)
+    317          pred_labels = jnp.argmax(predictions, axis=1)
+        ⋮
+    320
+    316 -    return avg_energy, correct, batch_size
+    321 +    return avg_energy, loss, correct, batch_size
+    322
+        ⋮
+    345      """
+    346 +    loss_type = config.get("loss_type", "cross_entropy")
+    347 +
+    348      # Create JIT-compiled eval step
+    342 -    jit_eval_step = jax.jit(lambda p, b, k: eval_step(p, b, structure, k))
+    349 +    jit_eval_step = jax.jit(
+    350 +        lambda p, b, k: eval_step(p, b, structure, k, loss_type)
+    351 +    )
+    352
+        ⋮
+    362      total_energy = 0.0
+    363 +    total_loss = 0.0
+    364      total_correct = 0
+        ⋮
+    376          # Run JIT-compiled eval step
+    367 -        batch_energy, correct, batch_size = jit_eval_step(
+    377 +        batch_energy, batch_loss, correct, batch_size = jit_eval_step(
+    378              params, batch, batch_keys[batch_idx]
+        ⋮
+    381          total_energy += float(batch_energy) * int(batch_size)
+    382 +        total_loss += float(batch_loss) * int(batch_size)
+    383          total_correct += int(correct)
+        ⋮
+    386      avg_energy = total_energy / total_samples if total_samples > 0 else 0.0
+    387 +    avg_loss = total_loss / total_samples if total_samples > 0 else 0.0
+    388      accuracy = total_correct / total_samples if total_samples > 0 else 0.0
+    389
+    378 -    return {"energy": avg_energy, "accuracy": accuracy}
+    390 +    result = {
+    391 +        "energy": avg_energy,
+    392 +        "loss": avg_loss,
+    393 +        "accuracy": accuracy,
+    394 +    }
+    395 +    if loss_type == "cross_entropy":
+    396 +        result["perplexity"] = float(jnp.exp(avg_loss))
+    397 +    return result
+
+• Updated Plan
+  └ The full run exposed a real metrics bug in predictive-coding evaluation and misleading time labels, so I patched those and am now verifying them.
+    ✔ Run full 20-task split CIFAR-100 experiment in ffpc1 venv
+    ✔ Inspect generated metrics/results for behavioral or code issues
+    □ Implement and verify any targeted fixes suggested by the results
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The patch is in place. I’m running a short verification pass to confirm predictive-coding evaluation now records nonzero loss values and that the summary output labels distinguish wall-clock time from summed
+  task-training time.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --quick-smoke --num-tasks 5 --classes-per-task 5
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --quick-smoke --num-tasks 5 --classes-per-task 5
+  └ WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+    I0000 00:00:1776580677.904654  110038 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders.
+    … +227 lines (ctrl + t to view transcript)
+
+    Done!
+
+─ Worked for 2m 32s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The fix verified cleanly. Predictive-coding evaluation now reports nonzero cross-entropy losses, the audit path produces real gain data, and the summary now separates summed task-train time from end-to-end
+  wall-clock time.
+
+• Ran git status --short
+  └  M examples/split_cifar100_continual.py
+     M fabricpc/continual/utils.py
+     M fabricpc/training/train.py
+    ?? docs/LLM-logs/random-extras.txt
+    ?? results/
+
+✔ You approved codex to always run commands that start with sed -n '1,120p;260,395p'
+
+• Explored
+  └ Read train.py, utils.py, split_cifar100_continual.py
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Findings from the 20-task run:
+
+  1. The predictive-coding evaluator was not computing classification loss, so the 20-task run saved bogus 0.0 losses and audit baselines. That affected summary JSON, epoch loss logs, and causal-audit gain
+     data. I fixed this in FabricPC/fabricpc/training/train.py:17 and FabricPC/fabricpc/training/train.py:260.
+  2. The reporting mixed two different time notions: per-task training_time excluded eval/audit overhead, while the example’s final total was full wall clock. That made the output look inconsistent. I fixed the
+     labels in FabricPC/fabricpc/continual/utils.py:520 and FabricPC/examples/split_cifar100_continual.py:420.
+  3. The full 20-task behavior shows substantial forgetting, but that looks like model behavior rather than an immediate code bug. The run finished with diagonal mean test accuracy 0.6185, final-row mean
+     0.3096, and average forgetting 0.3252. Early tasks ended around 0.21-0.27 while the newest tasks were mostly 0.56-0.69.
+  4. The causal subsystem was effectively disabled by config in that run: causal_max_effective_scale = 0.0, so mix_gate stayed 0.0. After the evaluator fix, causal correlation/MAE became nonzero in a
+     verification run, which confirms the earlier all-zero causal outputs were partly a metrics bug and partly this config choice.
+
+  Verification:
+
+  - Full 20-task run completed on GPU and wrote results to FabricPC/results/split_cifar100/split_cifar100_seed42_20260418_191427.
+  - I then reran a 5-task smoke verification after the fix. Losses are now nonzero and timing labels are clear; results are in FabricPC/results/split_cifar100/split_cifar100_seed42_20260419_023800.
+
+  I did not rerun the full 20-task experiment after the fix, so the saved 20-task summaries.json still has the old zero-loss fields. If you want, I can run the full 20-task job again now and then tune the
+  config for lower forgetting, starting with the causal scale and support/audit settings.
+
+
+› I would like to please go in a different direction first. The github repository fork I'm working in (FabricPC), where a large number of code changes have been made, needs to be moved over into cFabricPC,
+  which is an up to date new fork of the upstream FabricPC repository. I want the continual/ and examples/ code that exist in FabricPC/ now to be added to cFabricPC and made to work properly in that repo
+  instead.
+
+
+• I’m comparing FabricPC and cFabricPC first so I can see how the continual-learning code and examples need to be transplanted without dragging along unrelated changes. After that I’ll copy the relevant code
+  over, resolve integration breakage, and run focused verification in the new fork.
+
+• Ran git -C /home/ni/repos/freeFabricPC/FabricPC status --short && git -C /home/ni/repos/freeFabricPC/cFabricPC status --short
+  └ ?? results/
+
+✔ You approved codex to always run commands that start with sort
+
+• Explored
+  └ Search FabricPC in freeFabricPC
+    List freeFabricPC
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The source repo has local untracked results/; the target repo looks clean. I’m diffing the relevant package layout now so I can bring over only the continual-learning and example surfaces plus whatever
+  dependencies they need in cFabricPC.
+
+• Explored
+  └ Search */continual* in fabricpc
+    List examples
+    Search */fabricpc/continual* in cFabricPC
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The target repo is missing the entire fabricpc/continual package and the split-MNIST/CIFAR examples, but it already has a newer base examples tree. I’m checking API differences between the two forks now so I
+  can adapt the transplanted code instead of blindly copying it and leaving it broken.
+
+• Running diff -rq /home/ni/repos/freeFabricPC/FabricPC/fabricpc /home/ni/repos/freeFabricPC/cFabricPC/fabricpc | head -200
+
+• Running diff -rq /home/ni/repos/freeFabricPC/FabricPC/examples /home/ni/repos/freeFabricPC/cFabricPC/examples | head -200
+
+✔ You approved codex to always run commands that start with diff -rq /home/ni/repos/freeFabricPC/FabricPC/fabricpc /home/ni/repos/freeFab...
+
+• Ran diff -rq /home/ni/repos/freeFabricPC/FabricPC/fabricpc /home/ni/repos/freeFabricPC/cFabricPC/fabricpc | head -200
+  └ Files /home/ni/repos/freeFabricPC/FabricPC/fabricpc/__init__.py and /home/ni/repos/freeFabricPC/cFabricPC/fabricpc/__init__.py differ
+    Only in /home/ni/repos/freeFabricPC/FabricPC/fabricpc: __pycache__
+    … +39 lines (ctrl + t to view transcript)
+    Files /home/ni/repos/freeFabricPC/FabricPC/fabricpc/utils/data/dataloader.py and /home/ni/repos/freeFabricPC/cFabricPC/fabricpc/utils/data/dataloader.py differ
+    Files /home/ni/repos/freeFabricPC/FabricPC/fabricpc/utils/helpers.py and /home/ni/repos/freeFabricPC/cFabricPC/fabricpc/utils/helpers.py differ
+
+✔ You approved codex to always run commands that start with sed 's#/home/ni/repos/freeFabricPC/cFabricPC/##'
+
+✔ You approved codex to always run commands that start with diff -rq /home/ni/repos/freeFabricPC/FabricPC/examples /home/ni/repos/freeFab...
+
+• Explored
+  └ List fabricpc
+
+• Ran diff -rq /home/ni/repos/freeFabricPC/FabricPC/examples /home/ni/repos/freeFabricPC/cFabricPC/examples | head -200
+  └ Files /home/ni/repos/freeFabricPC/FabricPC/examples/PC_backprop_compare.py and /home/ni/repos/freeFabricPC/cFabricPC/examples/PC_backprop_compare.py differ
+    Only in /home/ni/repos/freeFabricPC/FabricPC/examples: README.md
+    … +21 lines (ctrl + t to view transcript)
+    Files /home/ni/repos/freeFabricPC/FabricPC/examples/transformer_tuning.py and /home/ni/repos/freeFabricPC/cFabricPC/examples/transformer_tuning.py differ
+    Files /home/ni/repos/freeFabricPC/FabricPC/examples/transformer_v2_demo.py and /home/ni/repos/freeFabricPC/cFabricPC/examples/transformer_v2_demo.py differ
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I have enough context to start the transplant. I’m copying the full fabricpc/continual package and the split-* example files into cFabricPC first, then I’ll run imports and the smoke example there to surface
+  the integration breakage against the newer upstream base.
+
+• Running mkdir -p /home/ni/repos/freeFabricPC/cFabricPC/fabricpc/continual && rsync -a --delete --exclude '__pycache__' /home/ni/repos/freeFabricPC/FabricPC/fabricpc/continual/ /home/ni/repos/freeFabricPC/
+  │ cFabricPC/fabricpc/continual/
+
+✔ You approved codex to run mkdir -p /home/ni/repos/freeFabricPC/cFabricPC/fabricpc/continual && rsync -a... this time
+
+• Ran mkdir -p /home/ni/repos/freeFabricPC/cFabricPC/fabricpc/continual && rsync -a --delete --exclude '__pycache__' /home/ni/repos/freeFabricPC/FabricPC/fabricpc/continual/ /home/ni/repos/freeFabricPC/
+  │ cFabricPC/fabricpc/continual/
+  └ (no output)
+
+✔ You approved codex to run rsync -a /home/ni/repos/freeFabricPC/FabricPC/examples/split_mnist_causal.py ... this time
+
+• Ran rsync -a /home/ni/repos/freeFabricPC/FabricPC/examples/split_mnist_causal.py /home/ni/repos/freeFabricPC/FabricPC/examples/split_mnist_continual.py /home/ni/repos/freeFabricPC/FabricPC/examples/
+  │ split_mnist_quick.py /home/ni/repos/freeFabricPC/FabricPC/examples/split_cifar100_continual.py /home/ni/repos/freeFabricPC/cFabricPC/examples/
+  └ (no output)
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The transplant is copied over. I’m doing import-level verification in cFabricPC now and then I’ll run one of the split examples there to find the concrete API mismatches that need patching.
+
+• Running source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -c "import fabricpc.continual, fabricpc.continual.trainer, fabricpc.continual.nodes; print('continual import ok')"
+
+• Ran git -C /home/ni/repos/freeFabricPC/cFabricPC status --short
+  └ ?? examples/split_cifar100_continual.py
+    ?? examples/split_mnist_causal.py
+    ?? examples/split_mnist_continual.py
+    ?? examples/split_mnist_quick.py
+    ?? fabricpc/continual/
+
+✔ You approved codex to run source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -c ... this time
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -c "import fabricpc.continual, fabricpc.continual.trainer, fabricpc.continual.nodes; print('continual import ok')"
+  └ continual import ok
+
+✔ You approved codex to run source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python exa... this time
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_mnist_quick.py
+  └ WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+    I0000 00:00:1776581481.381216  117129 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders.
+    … +2 lines (ctrl + t to view transcript)
+    I0000 00:00:1776581482.196942  117129 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders.
+    To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The package imports cleanly in cFabricPC. The split-MNIST smoke example is running now; if it fails, that will tell me exactly which newer-upstream APIs need adaptation.
+
+• Waited for background terminal
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_mnist_quick.py
+  └ WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+    I0000 00:00:1776581481.381216  117129 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders.
+    … +87 lines (ctrl + t to view transcript)
+
+    Smoke test passed!
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The first migrated smoke example passed in cFabricPC without any API fixes, which is a good sign that the continual package sits cleanly on the newer fork. I’m running the split-CIFAR quick smoke there as a
+  second check because it exercises a different loader path and more of the continual stack.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --quick-smoke --num-tasks 5 --classes-per-task 5
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --quick-smoke --num-tasks 5 --classes-per-task 5
+  └ WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+    I0000 00:00:1776581542.138938  118622 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders.
+    … +227 lines (ctrl + t to view transcript)
+
+    Done!
+
+─ Worked for 2m 31s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The second migrated smoke test also passed in cFabricPC, so the transplanted continual package and split examples are working on the newer fork as-is. I’m doing one final repo-state check so I can summarize
+  the exact migration result and any remaining caveats.
+
+• Ran git -C /home/ni/repos/freeFabricPC/cFabricPC status --short
+  └ ?? examples/split_cifar100_continual.py
+    ?? examples/split_mnist_causal.py
+    … +2 lines (ctrl + t to view transcript)
+    ?? fabricpc/continual/
+    ?? results/
+
+• Explored
+  └ List continual
+    Search split_* in examples
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Migrated the continual-learning code from FabricPC into cFabricPC by adding fabricpc/continual/ and the split examples:
+
+  - examples/split_mnist_quick.py
+  - examples/split_mnist_continual.py
+  - examples/split_mnist_causal.py
+  - examples/split_cifar100_continual.py
+
+  Verification in cFabricPC passed:
+
+  - python -c "import fabricpc.continual, fabricpc.continual.trainer, fabricpc.continual.nodes" succeeded
+  - python examples/split_mnist_quick.py succeeded
+  - python examples/split_cifar100_continual.py --quick-smoke --num-tasks 5 --classes-per-task 5 succeeded
+
+  Current cFabricPC git status shows the migrated files as untracked plus a generated results/ directory from the smoke tests. I did not remove results/ since it was created by verification and I’m avoiding
+  destructive cleanup without being asked.
+
+  If you want, I can do the next step now:
+
+  1. stage just the migrated source files and leave results/ alone,
+  2. add any docs/README updates in cFabricPC,
+  3. run the fuller 20-task experiment from cFabricPC and continue tuning there.
+
+
+› 2 please
+
+
+• I’m checking the existing cFabricPC docs surface first so I can add the continual-learning examples in the right place instead of creating disconnected notes. Then I’ll patch the relevant README files and
+  keep the changes scoped to documentation only.
+
+• Explored
+  └ Search README.md in cFabricPC
+    List examples
+    Read README.md
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• cFabricPC only has the root README.md right now. I’m pulling the old examples README for useful structure, then I’ll update the root README and add an examples/README.md in cFabricPC so the new continual-
+  learning entrypoints are documented where people will look for them.
+
+• Explored
+  └ Read split_mnist_quick.py, README.md, split_mnist_continual.py
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’ve got enough context. I’m patching the root README to mention the new continual-learning surface, and I’m adding an examples/README.md in cFabricPC with entrypoints for the split-MNIST and split-CIFAR
+  workflows.
+
+• Edited 2 files (+100 -1)
+  └ cFabricPC/README.md (+25 -1)
+     44
+     45 +## Example Entry Points
+     46 +
+     47 +FabricPC now includes both core demos and continual-learning examples.
+     48 +
+     49 +- Basic MNIST demo: `python examples/mnist_demo.py`
+     50 +- Quick continual smoke test: `python examples/split_mnist_quick.py`
+     51 +- Full Split-MNIST continual run: `python examples/split_mnist_continual.py`
+     52 +- Split-MNIST causal diagnostics: `python examples/split_mnist_causal.py`
+     53 +- Split-CIFAR-100 continual run: `python examples/split_cifar100_continual.py`
+     54 +
+     55 +See [examples/README.md](examples/README.md) for the example inventory and common invocation patterns.
+     56 +
+     57  ## Features
+        ⋮
+     62  - JAX backend for GPU acceleration and scalability
+     63 +- Continual-learning research code for Split-MNIST and Split-CIFAR-100 experiments
+     64
+     65 +## Continual Learning
+     66 +
+     67 +The `fabricpc.continual` package provides task-sequential training utilities built on top of the main graph API, including:
+     68 +
+     69 +- Split-MNIST and Split-CIFAR-100 task loaders
+     70 +- Sequential training with accuracy-matrix and forgetting analysis
+     71 +- Column-based routing modules for modular continual-learning experiments
+     72 +- Support-selection, gradient-protection, EWC, and TransWeave utilities
+     73 +
+     74 +The main continual-learning entrypoints live in `examples/` and write run artifacts under `results/`.
+     75 +
+     76  ## Contributions
+        ⋮
+    149   - Kernel: (kH, kW, C_in, C_out)       e.g., (3, 3, 1, 64)
+    126 - - Output: (batch, H_out, W_out, C_out) e.g., (32, 26, 26, 64)
+    150 + - Output: (batch, H_out, W_out, C_out) e.g., (32, 26, 26, 64)
+
+  └ cFabricPC/examples/README.md (+75 -0)
+     1 +# FabricPC Examples
+     2 +
+     3 +This directory contains runnable examples for both baseline FabricPC usage and the migrated continual-learning experiments.
+     4 +
+     5 +## Quick Start
+     6 +
+     7 +From the repo root:
+     8 +
+     9 +```bash
+    10 +pip install -e ".[all]"
+    11 +python examples/mnist_demo.py
+    12 +```
+    13 +
+    14 +If you want a fast end-to-end check of the continual stack:
+    15 +
+    16 +```bash
+    17 +python examples/split_mnist_quick.py
+    18 +```
+    19 +
+    20 +## Continual Learning Examples
+    21 +
+    22 +### `split_mnist_quick.py`
+    23 +
+    24 +Minimal smoke test for the continual-learning pipeline.
+    25 +
+    26 +- Uses Split-MNIST
+    27 +- Uses `training_mode="backprop"` for speed
+    28 +- Trains only the first two tasks
+    29 +- Good first verification after environment or code changes
+    30 +
+    31 +### `split_mnist_continual.py`
+    32 +
+    33 +Full Split-MNIST continual-learning experiment.
+    34 +
+    35 +- Sequential digit-pair tasks
+    36 +- Column-based or plain MLP architectures
+    37 +- Accuracy-matrix, forgetting, and plot generation
+    38 +
+    39 +Common invocations:
+    40 +
+    41 +```bash
+    42 +python examples/split_mnist_continual.py
+    43 +python examples/split_mnist_continual.py --quick-smoke
+    44 +python examples/split_mnist_continual.py --training-mode backprop
+    45 +```
+    46 +
+    47 +### `split_mnist_causal.py`
+    48 +
+    49 +Split-MNIST experiment variant focused on causal/support diagnostics for the continual stack.
+    50 +
+    51 +Use this when you want to inspect the causal-selection and audit-related behavior rather than just the base sequential trainer.
+    52 +
+    53 +### `split_cifar100_continual.py`
+    54 +
+    55 +Split-CIFAR-100 continual-learning experiment.
+    56 +
+    57 +- Default setup is 20 tasks of 5 classes each
+    58 +- Supports `--quick-smoke` for shorter verification runs
+    59 +- Writes summaries, plots, and accuracy matrices under `results/split_cifar100`
+    60 +
+    61 +Common invocations:
+    62 +
+    63 +```bash
+    64 +python examples/split_cifar100_continual.py
+    65 +python examples/split_cifar100_continual.py --quick-smoke
+    66 +python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+    67 +```
+    68 +
+    69 +## Existing Core Demos
+    70 +
+    71 +The rest of this directory contains the core upstream-style demos for MNIST, transformers, multi-GPU training, MU-PC, ResNet/CIFAR, and Storkey Hopfield experiments.
+    72 +
+    73 +## Outputs
+    74 +
+    75 +The continual-learning examples create run directories under `results/` with saved configs, JSON summaries, accuracy matrices, and plots.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The doc changes are written. I’m doing a quick readback and repo-status check so I can point you to the updated docs cleanly and confirm I didn’t touch anything outside the intended README surface.
+
+• Explored
+  └ Read README.md
+
+• Ran git -C /home/ni/repos/freeFabricPC/cFabricPC status --short
+  └  M README.md
+    ?? examples/README.md
+    … +4 lines (ctrl + t to view transcript)
+    ?? fabricpc/continual/
+    ?? results/
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Updated the docs in cFabricPC to reflect the migrated continual-learning surface.
+
+  Changes:
+
+  - Added a continual-learning section and example entrypoints to cFabricPC/README.md
+  - Added cFabricPC/examples/README.md documenting:
+      - split_mnist_quick.py
+      - split_mnist_continual.py
+      - split_mnist_causal.py
+      - split_cifar100_continual.py
+
+  I kept this scoped to README/docs only. Current git status in cFabricPC still shows the migrated example files, fabricpc/continual/, and generated results/ as untracked, plus the modified root README.md.
+
+  If you want, the next clean step is 1: stage just the migrated source files and README updates while leaving results/ unstaged.
+
+
+› one additional patch I'd like you to now apply is to make sure all future results files get written to ../results/ instead of inside the repo to results/ directly
+
+
+• I’m locating where result directories are hardcoded in cFabricPC so I can shift the default output root to ../results/ without changing unrelated behavior. Then I’ll patch the shared/default paths and verify
+  with a smoke invocation.
+
+• Explored
+  └ Search \./results|results/|output-dir|output_dir in cFabricPC
+    Read split_mnist_causal.py, split_cifar100_continual.py
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The hardcoded defaults are in the continual examples and the docs mention the old location. I’m patching those defaults to ../results/... and updating the docs to match, then I’ll verify with a smoke run that
+  cFabricPC now writes outside the repo tree by default.
+
+• Explored
+  └ Search output-dir|output_dir|results/ in split_mnist_continual.py
+    Search create_run_directory|results/|output in split_mnist_causal.py
+    Read split_mnist_continual.py
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I confirmed only the two full continual examples currently write run artifacts by default. I’m changing those defaults to ../results/... and updating the README text so the documented output location matches
+  the new behavior.
+
+• Edited 4 files (+5 -5)
+  └ cFabricPC/README.md (+1 -1)
+    73
+    74 -The main continual-learning entrypoints live in `examples/` and write run artifacts under `results/`.
+    74 +The main continual-learning entrypoints live in `examples/` and write run artifacts under `../results/` by default.
+    75
+
+  └ cFabricPC/examples/README.md (+2 -2)
+    58  - Supports `--quick-smoke` for shorter verification runs
+    59 -- Writes summaries, plots, and accuracy matrices under `results/split_cifar100`
+    59 +- Writes summaries, plots, and accuracy matrices under `../results/split_cifar100` by default
+    60
+       ⋮
+    74
+    75 -The continual-learning examples create run directories under `results/` with saved configs, JSON summaries, accuracy matrices, and plots.
+    75 +The continual-learning examples create run directories under `../results/` by default, with saved configs, JSON summaries, accuracy matrices, and plots.
+
+  └ cFabricPC/examples/split_cifar100_continual.py (+1 -1)
+    244          type=str,
+    245 -        default="./results/split_cifar100",
+    245 +        default="../results/split_cifar100",
+    246          help="Output directory for results",
+
+  └ cFabricPC/examples/split_mnist_continual.py (+1 -1)
+    236          type=str,
+    237 -        default="./results/split_mnist",
+    237 +        default="../results/split_mnist",
+    238          help="Output directory for results",
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The path defaults are patched. I’m running a quick smoke invocation from cFabricPC now to confirm the run directory lands under ../results/ instead of inside the repo.
+
+✔ You approved codex to run source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python exa... this time
+
+• Waited for background terminal
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_mnist_continual.py --quick-smoke --training-mode backprop
+  └ WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+    I0000 00:00:1776581931.770642  123144 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders.
+    … +2 lines (ctrl + t to view transcript)
+    I0000 00:00:1776581932.604404  123144 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders.
+    To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+
+• The verification run is still active. I’m checking for the created run directory in parallel so I can confirm the output root without waiting for the whole job to finish.
+
+• Running find /home/ni/repos/freeFabricPC/cFabricPC/results -maxdepth 2 -type d 2>/dev/null | sort | tail -5
+
+✔ You approved codex to run find /home/ni/repos/freeFabricPC/cFabricPC/results -maxdepth 2 -type d 2>/dev... this time
+
+• Explored
+  └ Search /home/ni/repos/freeFabricPC/results/split_mnist/* in freeFabricPC
+
+• Ran find /home/ni/repos/freeFabricPC/cFabricPC/results -maxdepth 2 -type d 2>/dev/null | sort | tail -5
+  └ /home/ni/repos/freeFabricPC/cFabricPC/results
+    /home/ni/repos/freeFabricPC/cFabricPC/results/split_cifar100
+    /home/ni/repos/freeFabricPC/cFabricPC/results/split_cifar100/split_cifar100_seed42_20260419_025224
+
+─ Worked for 1m 46s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The old in-repo cFabricPC/results is still there from earlier runs, so I’m draining the active verification job and then I’ll check the exact run path it reported. That will tell us whether the new default is
+  taking effect.
+
+• Waited for background terminal
+
+• The run is still computing, likely inside the longer Split-MNIST continual path. I’m checking the live command line and the parent ../results tree directly so I can verify the destination without waiting for
+  full completion.
+
+• Running ps -ef | rg 'split_mnist_continual.py --quick-smoke --training-mode backprop'
+
+• Explored
+  └ List results
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_mnist_continual.py --quick-smoke --training-mode backprop
+  └ WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+    I0000 00:00:1776581931.770642  123144 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders.
+    … +222 lines (ctrl + t to view transcript)
+
+    Done!
+
+✔ You approved codex to run ps -ef | rg 'split_mnist_continual.py --quick-smoke --training-mode backprop' this time
+
+• Ran ps -ef | rg 'split_mnist_continual.py --quick-smoke --training-mode backprop'
+  └ ni        131196   22269  0 03:04 ?        00:00:00 /bin/bash -c ps -ef | rg 'split_mnist_continual.py --quick-smoke --training-mode backprop'
+    ni        131198  131196  0 03:04 ?        00:00:00 rg split_mnist_continual.py --quick-smoke --training-mode backprop
+
+─ Worked for 2m 10s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The new run directory is showing up under the parent tree at /home/ni/repos/freeFabricPC/results/split_mnist/..., which is the intended ../results/ location from inside cFabricPC. I’m doing one last poll just
+  to make sure the verification process has finished cleanly.
+
+• Waited for background terminal
+
+• Patched the default continual-learning output paths in cFabricPC so new runs write to ../results/ instead of inside the repo.
+
+  Changed:
+
+  - cFabricPC/examples/split_mnist_continual.py
+  - cFabricPC/examples/split_cifar100_continual.py
+  - cFabricPC/README.md
+  - cFabricPC/examples/README.md
+
+  Verified with:
+
+  python examples/split_mnist_continual.py --quick-smoke --training-mode backprop
+
+  That run reported:
+
+  - Output directory: ../results/split_mnist/split_mnist_seed42_20260419_025853
+
+  So the new default is taking effect. Existing old directories under cFabricPC/results/ were left untouched.
+
+
+› please bring over docs/LLM-logs/ content from FabricPC to cFabricPC as well
+
+
+• I’m checking the source and target docs/LLM-logs directories first so I can copy the log content over without clobbering anything unexpected in cFabricPC. Then I’ll sync the files and confirm the target
+  state.
+
+• Exploring
+  └ List LLM-logs
+
+• Running find /home/ni/repos/freeFabricPC/cFabricPC/docs/LLM-logs -maxdepth 1 -type f 2>/dev/null | sed 's#/home/ni/repos/freeFabricPC/cFabricPC/##' | sort | tail -50
+
+✔ You approved codex to run find /home/ni/repos/freeFabricPC/FabricPC/docs/LLM-logs -maxdepth 1 -type f |... this time
+
+• Explored
+  └ List docs
+
+✔ You approved codex to run find /home/ni/repos/freeFabricPC/cFabricPC/docs/LLM-logs -maxdepth 1 -type f ... this time
+
+• Explored
+  └ List LLM-logs
+
+• Ran find /home/ni/repos/freeFabricPC/cFabricPC/docs/LLM-logs -maxdepth 1 -type f 2>/dev/null | sed 's#/home/ni/repos/freeFabricPC/cFabricPC/##' | sort | tail -50
+  └ (no output)
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• cFabricPC doesn’t currently have a docs/LLM-logs directory, so I can copy the source logs in cleanly. I’m syncing that directory over now and then I’ll confirm the target contents.
+
+• Ran git -C /home/ni/repos/freeFabricPC/cFabricPC status --short
+  └  M README.md
+    ?? examples/README.md
+    … +4 lines (ctrl + t to view transcript)
+    ?? fabricpc/continual/
+    ?? results/
+
+• Running mkdir -p /home/ni/repos/freeFabricPC/cFabricPC/docs/LLM-logs && rsync -a /home/ni/repos/freeFabricPC/FabricPC/docs/LLM-logs/ /home/ni/repos/freeFabricPC/cFabricPC/docs/LLM-logs/
+
+✔ You approved codex to run mkdir -p /home/ni/repos/freeFabricPC/cFabricPC/docs/LLM-logs && rsync -a /hom... this time
+
+• Explored
+  └ List LLM-logs
+
+• Ran mkdir -p /home/ni/repos/freeFabricPC/cFabricPC/docs/LLM-logs && rsync -a /home/ni/repos/freeFabricPC/FabricPC/docs/LLM-logs/ /home/ni/repos/freeFabricPC/cFabricPC/docs/LLM-logs/
+  └ (no output)
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The first sync command didn’t leave a target directory behind, so I’m checking the docs path directly and then rerunning the copy in a simpler form. This looks like a command issue rather than a repo problem.
+
+• Explored
+  └ List docs
+    List LLM-logs
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• docs/LLM-logs is present in cFabricPC now. I’m listing the copied files and repo status one more time so I can confirm the transfer completed cleanly.
+
+• Ran git -C /home/ni/repos/freeFabricPC/cFabricPC status --short
+  └  M README.md
+    ?? docs/LLM-logs/
+    … +5 lines (ctrl + t to view transcript)
+    ?? fabricpc/continual/
+    ?? results/
+
+• Explored
+  └ List LLM-logs
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Copied docs/LLM-logs/ from FabricPC into cFabricPC.
+
+  cFabricPC now has the migrated log files under cFabricPC/docs/LLM-logs, including the claude*, codex*, random-extras.txt, and working_log_2026_04_11.txt files.
+
+  git status in cFabricPC now shows docs/LLM-logs/ as untracked alongside the other migrated files.
+
+■ Failed to paste image: no image on clipboard: Unknown error while interacting with the clipboard: incorrect type received from clipboard
+
+
+› Please run the fuller 20-task CIFAR-100 experiment from cFabricPC and continue tuning there.
+
+
+• I’m running the full 20-task Split-CIFAR-100 experiment from cFabricPC first so we have a clean baseline in the new fork. After that I’ll inspect the saved metrics and patch tuning changes there rather than
+  in the old repo.
+
+• Updated Plan
+  └ Baseline first in cFabricPC, then analyze and tune in place.
+    □ Run full 20-task Split-CIFAR-100 experiment in cFabricPC
+    □ Inspect metrics/results and identify tuning targets
+    □ Implement and verify tuning changes in cFabricPC
+
+• Ran git -C /home/ni/repos/freeFabricPC/cFabricPC status --short
+  └ (no output)
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The full run is underway in cFabricPC. Since CIFAR-100 is already cached, this should mostly be compile plus training/eval time rather than data-download overhead.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+
+• No new stdout yet, which is consistent with the longer compiled training path on this example. I’m letting it run longer before I inspect the output directory.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+
+• I haven’t gotten task-level logs back yet, so I’m checking the live process and the new ../results tree in parallel to distinguish active compute from a stuck run.
+
+• Running ps -ef | rg 'python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5'
+
+✔ You approved codex to always run commands that start with ps -ef
+
+• Explored
+  └ List split_cifar100
+
+• Ran ps -ef | rg 'python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5'
+  └ ni        134391   22269 99 03:26 ?        00:07:53 python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+    ni        139509   22269  0 03:33 ?        00:00:00 /bin/bash -c ps -ef | rg 'python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5'
+    ni        139511  139509  0 03:33 ?        00:00:00 rg python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+
+─ Worked for 5m 17s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The full process is still active and has already created a new run directory at /home/ni/repos/freeFabricPC/results/split_cifar100/split_cifar100_seed42_20260419_032658. I’m giving it a longer interval now so
+  I can drain the final metrics once it completes.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+
+• The baseline is progressing normally and the logged losses now look sane in cFabricPC. I’m letting the run finish so I can analyze the full accuracy matrix and tune against the completed baseline rather than
+  partial impressions.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+
+• The trainer is still active but not emitting new chunks right now, which is normal once it gets deeper into the task loop. I’m checking whether it has completed in the background before I start reading the
+  saved outputs.
+
+• Ran ps -p 134391 -o pid,etime,%cpu,%mem,cmd
+  └     PID     ELAPSED %CPU %MEM CMD
+     134391       17:00  115  8.2 python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+
+• Explored
+  └ List split_cifar100_seed42_20260419_032658
+
+─ Worked for 10m 17s ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The run is still active and has reached at least task 7 based on checkpoints in the output directory. I’m keeping it running; once it finishes I’ll pull the final matrix and start tuning from those saved
+  outputs.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+
+• The session is still open but not printing, so I’m checking whether the Python process has finally exited and whether the final summary files are present.
+
+• Ran ps -p 134391 -o pid,etime,%cpu,%mem,cmd
+  └     PID     ELAPSED %CPU %MEM CMD
+     134391       22:10  115  9.6 python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+
+• Explored
+  └ List split_cifar100_seed42_20260419_032658
+
+─ Worked for 5m 10s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• It’s past task 10 and still progressing normally. I’m letting the baseline finish; once it does I’ll mine the saved summaries and accuracy matrix and then start tuning in cFabricPC rather than guessing mid-
+  run.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+
+• I’m checking completion again before I move on to analysis. The long gaps here are from the trainer’s buffered output, not from repeated restarts.
+
+• Ran ps -p 134391 -o pid,etime,%cpu,%mem,cmd
+  └     PID     ELAPSED %CPU %MEM CMD
+     134391       27:21  114 10.7 python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+
+• Explored
+  └ List split_cifar100_seed42_20260419_032658
+
+─ Worked for 5m 10s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The baseline has progressed past task 12 based on checkpoints, so it’s still healthy. I’m continuing to wait for completion so I can compare full-run metrics before I touch tuning code.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+
+• The baseline is now deep enough to show the main pattern: decent diagonal task accuracy, substantial old-task collapse, and causal diagnostics that are informative but still gated off by mix_gate=0.0. I’m
+  still waiting for the full summary so I can tune against the final matrix rather than just the mid-run slice.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+
+• I’m checking one more time whether the process has exited and the final summary files are written, then I’ll move into analysis and tuning.
+
+• Explored
+  └ List split_cifar100_seed42_20260419_032658
+
+• Ran ps -p 134391 -o pid,etime,%cpu,%mem,cmd
+  └     PID     ELAPSED %CPU %MEM CMD
+     134391       37:39  114 13.1 python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+
+─ Worked for 10m 18s ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The run is up through task 16 checkpoints, so it’s still making forward progress. I’m giving it one final interval; after that I expect the complete summary and result files to be available.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+
+• I’m checking completion again now; the run should be near the end of the 20-task loop.
+
+• Ran ps -p 134391 -o pid,etime,%cpu,%mem,cmd
+  └     PID     ELAPSED %CPU %MEM CMD
+     134391       42:51  113 14.8 python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+
+• Explored
+  └ List split_cifar100_seed42_20260419_032658
+
+─ Worked for 5m 13s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The run has reached task 18 checkpoints, so only the last task and final reporting remain. I’m waiting for the completion chunk now.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5
+  └ WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+    I0000 00:00:1776583616.423452  134391 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders.
+    … +873 lines (ctrl + t to view transcript)
+
+    Done!
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The baseline in cFabricPC matches the earlier fork: diagonal mean test accuracy 0.6185, final-row mean 0.3096, average forgetting 0.3252. The biggest immediate tuning opportunity is that the causal selector
+  is learning useful correlations but still contributes nothing because mix_gate stays at 0.0 throughout.
+
+• Running source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import json, pathlib, numpy as np
+  │ run = pathlib.Path('/home/ni/repos/freeFabricPC/results/split_cifar100/split_cifar100_seed42_20260419_032658')
+  │ … +10 lines
+
+✔ You approved codex to run source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <... this time
+
+• Explored
+  └ Read config.py
+    Search causal_max_effective_scale|mix_gate < 0.05|Enable EWC|ewc-lambda|use_partitioned_aggregator in continual
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import json, pathlib, numpy as np
+  │ run = pathlib.Path('/home/ni/repos/freeFabricPC/results/split_cifar100/split_cifar100_seed42_20260419_032658')
+  │ … +10 lines
+  └ diag_mean 0.6184999999999998
+    final_row_mean 0.3096
+    … +3 lines (ctrl + t to view transcript)
+    final_old5 [0.238, 0.21, 0.258, 0.238, 0.274]
+    final_new5 [0.306, 0.3, 0.428, 0.326, 0.686]
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The baseline points to two concrete tuning levers in cFabricPC: EWC is available but off, and the causal selector is effectively disabled by causal_max_effective_scale=0.0 even though mean causal correlation
+  is about 0.80. I’m wiring a --causal-scale CLI option into the CIFAR example so I can test that path without changing global defaults blindly.
+
+• Explored
+  └ Read parity.py, split_cifar100_continual.py
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’m patching examples/split_cifar100_continual.py to expose --causal-scale, so I can tune the causal pathway explicitly in cFabricPC without hard-coding a new default across the whole package.
+
+• Edited cFabricPC/examples/split_cifar100_continual.py (+10 -0)
+    284      parser.add_argument(
+    285 +        "--causal-scale",
+    286 +        type=float,
+    287 +        default=None,
+    288 +        help="Override support.causal_max_effective_scale (default: config value)",
+    289 +    )
+    290 +    parser.add_argument(
+    291          "--partitioned",
+        ⋮
+    330
+    331 +    if args.causal_scale is not None:
+    332 +        config.support.causal_max_effective_scale = args.causal_scale
+    333 +
+    334      if args.partitioned:
+        ⋮
+    359          print(f"  EWC lambda: {config.ewc.lambda_ewc}")
+    360 +    print(f"  Causal scale: {config.support.causal_max_effective_scale}")
+    361
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The next step is a tuned run, but I want to avoid burning another 40+ minutes on a blind guess. I’m checking the existing EWC defaults and then I’ll use one targeted CIFAR proxy run to choose between “causal
+  on”, “EWC on”, or both before committing to a full retune.
+
+• Explored
+  └ Read config.py
+    Search lambda_ewc|class EWC|enable: bool = False|EWC in config.py
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’m using the clearest underused lever first: a second full 20-task run in cFabricPC with --causal-scale 0.5. That keeps the architecture and training schedule fixed while turning on the causal path that the
+  baseline was already learning but never using.
+
+• Updated Plan
+  └ Baseline finished; the causal selector is learning but fully gated off, so I'm testing an explicit causal-scale tuning run in cFabricPC.
+    ✔ Run full 20-task Split-CIFAR-100 experiment in cFabricPC
+    ✔ Inspect metrics/results and identify tuning targets
+    □ Implement and verify tuning changes in cFabricPC
+
+• The tuned full run is started. I’ll let it establish the run directory and then I’ll monitor it the same way as the baseline so I can compare the final matrix and forgetting directly.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --causal-scale 0.5
+
+• The tuned run is still in the long compute phase. I’m checking the live process and the new result directory so I can confirm it’s progressing under the new causal setting.
+
+• Ran ps -ef | rg 'python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --causal-scale 0.5'
+  └ ni        162413   22269 99 04:15 ?        00:06:41 python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --causal-scale 0.5
+    ni        166150   22269  0 04:21 ?        00:00:00 /bin/bash -c ps -ef | rg 'python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --causal-scale 0.5'
+    ni        166152  166150  0 04:21 ?        00:00:00 rg python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --causal-scale 0.5
+
+• Explored
+  └ List split_cifar100
+
+─ Worked for 5m 56s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The tuned run is active and writing to ../results/split_cifar100/split_cifar100_seed42_20260419_041559. I’m waiting for the task-level output and final metrics before I compare it with the baseline.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --causal-scale 0.5
+
+• I’m still waiting on the tuned run; the long silent stretches are the same buffered-training behavior as the baseline. Once it finishes I’ll compare the saved summaries side by side rather than infer from
+  partial logs.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --causal-scale 0.5
+
+• The tuned run is definitely changing behavior now: mix_gate is nonzero on several tasks and active columns are already diverging from the baseline support pattern. I’m waiting for the full matrix because the
+  early tasks show both gains and regressions, so the final old-task retention is what matters.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --causal-scale 0.5
+
+• I’m still waiting on the tuned full run. Once it completes, I’ll do a direct baseline-vs-tuned comparison from the saved result files and decide whether this is a real improvement or just a different
+  tradeoff.
+
+• Explored
+  └ List split_cifar100_seed42_20260419_041559
+
+• Ran ps -p 162413 -o pid,etime,%cpu,%mem,cmd
+  └     PID     ELAPSED %CPU %MEM CMD
+     162413       21:02  114  9.3 python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --causal-scale 0.5
+
+─ Worked for 15m 21s ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The tuned run is only around task 9-10 based on checkpoints, so it still has a while to go. I’m continuing to let it run; this is the cost of keeping the comparison apples-to-apples with the full baseline.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --causal-scale 0.5
+
+• I’m checking the tuned run again now so I can see whether it’s close enough to completion to start the comparison work.
+
+• Ran ps -p 162413 -o pid,etime,%cpu,%mem,cmd
+  └     PID     ELAPSED %CPU %MEM CMD
+     162413       26:14  114 10.4 python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --causal-scale 0.5
+
+• Explored
+  └ List split_cifar100_seed42_20260419_041559
+
+─ Worked for 5m 12s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The tuned run is past task 11 now. I’m still letting it run to completion so I can compare final forgetting and final-row mean directly against the baseline.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --causal-scale 0.5
+
+• The tuned run is far enough along to show a real pattern now: some tasks are up materially, some are slightly down, and the causal pathway is being used intermittently rather than staying dead. I’m still
+  waiting for the final matrix because the decisive question is whether old-task retention improves by the end.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --causal-scale 0.5
+
+• I’m checking whether the tuned run has reached the last tasks yet so I can line up the baseline comparison as soon as it finishes.
+
+• Ran ps -p 162413 -o pid,etime,%cpu,%mem,cmd
+  └     PID     ELAPSED %CPU %MEM CMD
+     162413       36:28  113 12.6 python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --causal-scale 0.5
+
+• Explored
+  └ List split_cifar100_seed42_20260419_041559
+
+─ Worked for 10m 13s ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The tuned run is through task 15 checkpoints, so only the tail end remains. I’m waiting for the completion chunk and then I’ll compare the two full runs from disk.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --causal-scale 0.5
+
+• I’m checking for completion again now. Once it’s done I’ll compute the baseline-vs-tuned deltas directly from the saved matrices.
+
+• Explored
+  └ List split_cifar100_seed42_20260419_041559
+
+• Ran ps -p 162413 -o pid,etime,%cpu,%mem,cmd
+  └     PID     ELAPSED %CPU %MEM CMD
+     162413       41:38  113 15.0 python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --causal-scale 0.5
+
+─ Worked for 5m 11s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The tuned run has reached task 18 checkpoints, so it’s effectively at the finish line now. I’m waiting for the final summary chunk and then I’ll compute the deltas against the baseline immediately.
+
+• Waited for background terminal · source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --causal-scale 0.5
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python examples/split_cifar100_continual.py --num-tasks 20 --classes-per-task 5 --causal-scale 0.5
+  └ WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+    I0000 00:00:1776586557.103230  162413 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders.
+    … +874 lines (ctrl + t to view transcript)
+
+    Done!
+
+─ Worked for 2m 39s ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+✔ You approved codex to run source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <... this time
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import json, pathlib, numpy as np
+  │ base = pathlib.Path('/home/ni/repos/freeFabricPC/results/split_cifar100/split_cifar100_seed42_20260419_032658')
+  │ … +35 lines
+  └ baseline_diag_mean 0.6185
+    tuned_diag_mean 0.6316
+    … +16 lines (ctrl + t to view transcript)
+    tuned_final_new5 [0.242, 0.394, 0.406, 0.524, 0.682]
+    largest_task_test_deltas [(4, -0.06), (2, -0.026), (3, -0.024), (13, -0.022), (11, -0.016)] [(8, 0.102), (12, 0.086), (5, 0.052), (18, 0.046), (6, 0.044)]
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The full tuned run is a real improvement, not just a tradeoff: final-row mean went from 0.3096 to 0.3428, average forgetting dropped from 0.3089 to 0.2888, and the oldest five tasks retained much more
+  accuracy. I’m baking that tuning into the CIFAR example now so cFabricPC uses the improved causal scale by default there.
+
+• Edited cFabricPC/examples/split_cifar100_continual.py (+3 -0)
+    222      config.support.topk_nonshared = config.columns.topk_nonshared
+    223 +    # The CIFAR continual setup benefits from actually enabling the learned
+    224 +    # causal selector; the baseline config leaves it disabled at 0.0.
+    225 +    config.support.causal_max_effective_scale = 0.5
+    226
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’ve patched the CIFAR example so its default config now turns on the causal path at the same 0.5 scale that improved the full run. I’m doing a quick non-training verification that the example now resolves to
+  that default even without passing --causal-scale.
+
+• Ran git -C /home/ni/repos/freeFabricPC/cFabricPC status --short
+  └  M examples/split_cifar100_continual.py
+
+✔ You approved codex to run source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <... this time
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ from fabricpc.continual.config import make_config
+  │ from examples.split_cifar100_continual import _configure_for_cifar100
+  │ … +4 lines
+  └ Traceback (most recent call last):
+      File "<stdin>", line 2, in <module>
+      File "/home/ni/repos/freeFabricPC/cFabricPC/examples/__init__.py", line 8, in <module>
+        from fabricpc.examples.plotting import visualize_experiment
+    ModuleNotFoundError: No module named 'fabricpc.examples'
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The first verification hit an unrelated examples/__init__.py import problem in cFabricPC, not a problem with the tuned CIFAR script itself. I’m rerunning the check by loading the script file directly so I can
+  confirm the new default without going through that package import path.
+
+✔ You approved codex to run source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <... this time
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import importlib.util, pathlib
+  │ from fabricpc.continual.config import make_config
+  │ … +8 lines
+  └ Traceback (most recent call last):
+      File "<stdin>", line 6, in <module>
+    … +3 lines (ctrl + t to view transcript)
+        from fabricpc.utils.helpers import set_jax_flags_before_importing_jax
+    ImportError: cannot import name 'set_jax_flags_before_importing_jax' from 'fabricpc.utils.helpers' (/home/ni/repos/freeFabricPC/cFabricPC/fabricpc/utils/helpers.py)
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• That import check exposed something more interesting: cFabricPC/fabricpc/utils/helpers.py doesn’t define set_jax_flags_before_importing_jax, even though the migrated examples are using it successfully when
+  run normally. I’m checking the helper file and the Python import path behavior, because that suggests the examples may currently be picking up parts of the old fork via the environment rather than being fully
+  self-contained in cFabricPC.
+
+• Explored
+  └ Read helpers.py
+    Search set_jax_flags_before_importing_jax in fabricpc
+
+✔ You approved codex to run source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -c ... this time
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -c "import fabricpc,sys; import fabricpc.utils.helpers as h; print(fabricpc.__file__); print(h.__file__); print(sys.path[:5])"
+  └ /home/ni/repos/freeFabricPC/cFabricPC/fabricpc/__init__.py
+    /home/ni/repos/freeFabricPC/cFabricPC/fabricpc/utils/helpers.py
+    ['', '/usr/lib/python312.zip', '/usr/lib/python3.12', '/usr/lib/python3.12/lib-dynload', '/home/ni/repos/freeFabricPC/virt-envs/ffpc1/lib/python3.12/site-packages']
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The helper mismatch is real in cFabricPC, and it’s safer to fix it than leave the migration depending on a fragile environment quirk. I’m verifying the import behavior directly and then I’ll patch the missing
+  helper into cFabricPC so the migrated examples are self-contained.
+
+✔ You approved codex to run source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -c ... this time
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -c "from fabricpc.utils.helpers import set_jax_flags_before_importing_jax; print(set_jax_flags_before_importing_jax)"
+  └ Traceback (most recent call last):
+      File "<string>", line 1, in <module>
+    ImportError: cannot import name 'set_jax_flags_before_importing_jax' from 'fabricpc.utils.helpers' (/home/ni/repos/freeFabricPC/cFabricPC/fabricpc/utils/helpers.py)
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The import fails directly, so cFabricPC is missing a helper the migrated examples depend on. I’m patching that now into the local fabricpc.utils module so the examples are actually runnable from this fork
+  without relying on anything external.
+
+• Explored
+  └ Read __init__.py
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• I’m editing cFabricPC/fabricpc/utils/helpers.py and fabricpc/utils/__init__.py now to add and export set_jax_flags_before_importing_jax. After that I’ll re-run the import check.
+
+• Edited 2 files (+25 -0)
+  └ cFabricPC/fabricpc/utils/__init__.py (+2 -0)
+     6      update_node_in_state,
+     7 +    set_jax_flags_before_importing_jax,
+     8      layernorm,
+       ⋮
+    24      "update_node_in_state",
+    25 +    "set_jax_flags_before_importing_jax",
+    26      "layernorm",
+
+  └ cFabricPC/fabricpc/utils/helpers.py (+23 -0)
+    20
+    21 +def set_jax_flags_before_importing_jax(jax_platforms: str = "cuda"):
+    22 +    """
+    23 +    Set JAX/XLA environment flags before importing JAX.
+    24 +
+    25 +    This keeps example scripts self-contained and avoids repeating the same
+    26 +    environment setup logic across entrypoints.
+    27 +    """
+    28 +    import os
+    29 +
+    30 +    os.environ.setdefault("JAX_PLATFORMS", jax_platforms)
+    31 +    os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+    32 +    os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+    33 +
+    34 +    xla_flags = os.environ.get("XLA_FLAGS", "")
+    35 +    if "--xla_gpu_deterministic_ops=true" not in xla_flags:
+    36 +        xla_flags = (xla_flags + " --xla_gpu_deterministic_ops=true").strip()
+    37 +    if os.environ.get("FABRICPC_DISABLE_TRITON_GEMM", "1") == "1":
+    38 +        if "--xla_gpu_enable_triton_gemm=false" not in xla_flags:
+    39 +            xla_flags = (xla_flags + " --xla_gpu_enable_triton_gemm=false").strip()
+    40 +    xla_flags = (xla_flags + " --xla_gpu_autotune_level=1").strip()
+    41 +    os.environ["XLA_FLAGS"] = xla_flags
+    42 +
+    43 +
+    44  def layernorm(
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• The missing helper is patched into cFabricPC now. I’m re-running the import checks and then a quick direct config check on the CIFAR example so I can close out both the migration bug and the tuned default
+  cleanly.
+
+• Running source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -c "from fabricpc.utils.helpers import set_jax_flags_before_importing_jax; print('helper_ok',
+  │ callable(set_jax_flags_before_importing_jax))"
+
+• Ran git -C /home/ni/repos/freeFabricPC/cFabricPC status --short
+  └  M examples/split_cifar100_continual.py
+     M fabricpc/utils/__init__.py
+     M fabricpc/utils/helpers.py
+
+✔ You approved codex to run source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -c ... this time
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python -c "from fabricpc.utils.helpers import set_jax_flags_before_importing_jax; print('helper_ok',
+  │ callable(set_jax_flags_before_importing_jax))"
+  └ helper_ok True
+
+✔ You approved codex to run source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <... this time
+
+• Ran source /home/ni/repos/freeFabricPC/virt-envs/ffpc1/bin/activate && python - <<'PY'
+  │ import importlib.util, pathlib
+  │ from fabricpc.continual.config import make_config
+  │ … +8 lines
+  └ causal_scale 0.5
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+• Ran the full 20-task CIFAR-100 experiment in cFabricPC twice and tuned the CIFAR example there.
+
+  Baseline run:
+
+  - Output: results/split_cifar100/split_cifar100_seed42_20260419_032658
+  - Diagonal mean: 0.6185
+  - Final-row mean: 0.3096
+  - Average forgetting: 0.3089
+  - Mean causal mix gate: 0.0
+
+  Tuned run with --causal-scale 0.5:
+
+  - Output: results/split_cifar100/split_cifar100_seed42_20260419_041559
+  - Diagonal mean: 0.6316
+  - Final-row mean: 0.3428
+  - Average forgetting: 0.2888
+  - Mean causal mix gate: 0.2284
+
+  That’s a real improvement:
+
+  - final_row_mean: +0.0332
+  - avg_forgetting: -0.0201
+  - diag_mean: +0.0131
+
+  The biggest gain was old-task retention. Final accuracies on the oldest five tasks moved from:
+
+  - baseline: [0.238, 0.210, 0.258, 0.238, 0.274]
+  - tuned: [0.308, 0.270, 0.388, 0.300, 0.344]
+
+  I then baked that tuning into cFabricPC by making the CIFAR example default to causal_max_effective_scale = 0.5 in cFabricPC/examples/split_cifar100_continual.py. I kept the --causal-scale override so you can
+  still change it from the CLI.
+
+  I also fixed a migration bug in cFabricPC: the migrated examples depended on set_jax_flags_before_importing_jax, but that helper was missing locally. I added and exported it in cFabricPC/fabricpc/utils/
+  helpers.py and cFabricPC/fabricpc/utils/__init__.py.
+
+  Current modified files in cFabricPC:
+
+  - cFabricPC/examples/split_cifar100_continual.py
+  - cFabricPC/fabricpc/utils/helpers.py
+  - cFabricPC/fabricpc/utils/__init__.py
+
+  If you want, I can next run one more full comparison with EWC added on top of this tuned causal setting, or stage the migration+tuning files cleanly in cFabricPC.

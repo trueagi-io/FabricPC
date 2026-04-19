@@ -220,6 +220,9 @@ def _configure_for_cifar100(
 
     # Support manager topk_nonshared must match columns.topk_nonshared
     config.support.topk_nonshared = config.columns.topk_nonshared
+    # The CIFAR continual setup benefits from actually enabling the learned
+    # causal selector; the baseline config leaves it disabled at 0.0.
+    config.support.causal_max_effective_scale = 0.5
 
     return config
 
@@ -282,6 +285,12 @@ def main():
         help="EWC regularization strength (default: 5000.0)",
     )
     parser.add_argument(
+        "--causal-scale",
+        type=float,
+        default=None,
+        help="Override support.causal_max_effective_scale (default: config value)",
+    )
+    parser.add_argument(
         "--partitioned",
         action="store_true",
         help="Use PartitionedAggregator (true architectural isolation)",
@@ -322,6 +331,9 @@ def main():
         config.ewc.enable = True
         config.ewc.lambda_ewc = args.ewc_lambda
 
+    if args.causal_scale is not None:
+        config.support.causal_max_effective_scale = args.causal_scale
+
     if args.partitioned:
         config.columns.use_partitioned_aggregator = True
         config.columns.use_attention_aggregator = False
@@ -348,6 +360,7 @@ def main():
     print(f"  EWC enabled: {config.ewc.enable}")
     if config.ewc.enable:
         print(f"  EWC lambda: {config.ewc.lambda_ewc}")
+    print(f"  Causal scale: {config.support.causal_max_effective_scale}")
 
     jax.config.update("jax_default_prng_impl", "threefry2x32")
     master_key = jax.random.PRNGKey(config.seed)

@@ -2,7 +2,10 @@
 
 import importlib
 
-from fabricpc.utils.helpers import layernorm
+from fabricpc.utils.helpers import (
+    set_jax_flags_before_importing_jax,
+    layernorm,
+)
 
 # Submodules
 from fabricpc.utils import data
@@ -17,6 +20,7 @@ def __getattr__(name: str):
 
 __all__ = [
     # Helpers
+    "set_jax_flags_before_importing_jax",
     "layernorm",
     # Submodules
     "data",
