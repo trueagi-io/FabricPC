@@ -698,10 +698,13 @@ class SupportManager:
 
         # Get current trust state
         diag = self.causal_trust.last_diag
-        mix_gate = diag.get("mix_gate", 0.0)
+        mix_gate = float(diag.get("mix_gate", 0.0))
+        effective_scale = float(diag.get("effective_scale", 0.0))
 
-        # If mix_gate is too low, skip causal guidance
-        if mix_gate < 0.05:
+        # If trusted causal influence is too low, skip causal guidance.
+        # `mix_gate` tracks normalized trust, while `effective_scale`
+        # carries the absolute configured strength.
+        if mix_gate < 0.05 or effective_scale <= 1e-8:
             return tuple(initial_selected)
 
         # Get fingerprint data for feature building
@@ -766,13 +769,17 @@ class SupportManager:
             fingerprint_confidence=fp_conf,
             current_task_id=task_id,
         )
-        candidate_pred = self.causal_predictor.predict(candidate_features)
+        # Scale raw predictions by the trusted effective scale so that
+        # `causal_max_effective_scale` changes actual swap decisions.
+        candidate_pred = (
+            self.causal_predictor.predict(candidate_features) * effective_scale
+        )
         candidate_order = np.argsort(candidate_pred)[::-1]
 
-        # Consider swapping in top candidates if they score well
-        # Use mix_gate to control how aggressive we are
+        # Consider swapping in top candidates if they score well.
+        # Higher trust lowers the margin required for a swap.
         selected = list(initial_selected)
-        swap_threshold = 0.01 * mix_gate  # Higher mix_gate = lower threshold
+        swap_threshold = 0.01 * max(0.1, 1.0 - mix_gate)
 
         chosen_contexts = [tuple(c for c in selected if c != col) for col in selected]
         chosen_features = self.causal_feature_builder.build_features_batch(
@@ -792,7 +799,7 @@ class SupportManager:
             fingerprint_confidence=fp_conf,
             current_task_id=task_id,
         )
-        chosen_pred = self.causal_predictor.predict(chosen_features)
+        chosen_pred = self.causal_predictor.predict(chosen_features) * effective_scale
         worst_idx = int(np.argmin(chosen_pred))
         worst_score = float(chosen_pred[worst_idx])
 
