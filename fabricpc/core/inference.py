@@ -136,7 +136,16 @@ class InferenceBase(ABC):
 
         This is the universal predictive coding mechanics shared by all inference algorithms.
         Phase 3 (latent update) is handled by the inference algorithm's latent_update() method.
+
+        muPC scaling is applied here (pre-scale inputs, post-scale gradients),
+        keeping node methods (forward_inference) scaling-unaware.
         """
+        from fabricpc.core.scaling import (
+            scale_inputs,
+            scale_input_grads,
+            scale_self_grad,
+        )
+
         for node_name in structure.nodes:
             # Get node and its info
             node = structure.nodes[node_name]
@@ -148,14 +157,23 @@ class InferenceBase(ABC):
             # Gather inputs for each slot
             in_edges_data = gather_inputs(node_info, structure, state)
 
+            # Pre-scale inputs by muPC forward scaling factors
+            sc = node_info.scaling_config
+            scaled_inputs = scale_inputs(in_edges_data, sc)
+
             # Compute predictions, error, and latent gradient contributions
             node_state, inedge_grads = node_class.forward_inference(
                 node_params,
-                in_edges_data,
+                scaled_inputs,
                 node_state,
                 node_info,
                 is_clamped=(node_name in clamps),
             )
+
+            # Post-scale gradients by muPC factors
+            inedge_grads = scale_input_grads(inedge_grads, sc)
+            scaled_self = scale_self_grad(node_state.latent_grad, sc)
+            node_state = node_state._replace(latent_grad=scaled_self)
 
             # Update the graph state with node state containing errors and energy
             state = state._replace(nodes={**state.nodes, node_name: node_state})

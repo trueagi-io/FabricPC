@@ -107,7 +107,15 @@ class EnergyFunctional(ABC):
         z_latent: jnp.ndarray, z_mu: jnp.ndarray, config: Dict[str, Any] = None
     ) -> jnp.ndarray:
         """
-        Compute gradient dE/dz_latent of the node's self latent state.
+        Compute gradient dE/dz_latent (element-wise / diagonal form).
+
+        This method is NOT called by the default framework path — autodiff
+        computes the self-latent gradient automatically via
+        ``jax.value_and_grad`` in ``forward_inference()``.
+
+        It is provided as a convenience for node subclasses that override
+        ``forward_inference()`` with explicit (non-autodiff) gradient
+        computation (see ``LinearExplicitGrad`` for the pattern).
 
         Args:
             z_latent: Latent states, shape (batch, *dims)
@@ -116,10 +124,6 @@ class EnergyFunctional(ABC):
 
         Returns:
             Gradient w.r.t. z_latent, same shape as z_latent
-
-        Note:
-            This is the signal used to update latent states during inference:
-            z_latent_new = z_latent - eta * grad_latent(z_latent, z_mu)
         """
         pass
 

@@ -68,7 +68,10 @@ class EmbeddingNode(NodeBase):
 
     @staticmethod
     def get_slots() -> Dict[str, SlotSpec]:
-        return {"in": SlotSpec(name="in", is_multi_input=False)}
+        # Discrete token indices, not a continuous signal — keep muPC scaling off.
+        return {
+            "in": SlotSpec(name="in", is_multi_input=False, is_variance_scalable=False)
+        }
 
     @staticmethod
     def initialize_params(
@@ -105,11 +108,6 @@ class EmbeddingNode(NodeBase):
 
         state = node_info.node_class.energy_functional(state, node_info)
         return jnp.sum(state.energy), state
-
-    @staticmethod
-    def _apply_forward_scaling(inputs, node_info):
-        """No-op: indices are discrete tokens, not continuous signals."""
-        return inputs
 
     @staticmethod
     def forward_inference(params, inputs, state, node_info, is_clamped=False):
@@ -297,7 +295,6 @@ class LnMlp1Node(NodeBase):
 
         act_obj = node_info.activation
         z_mu = type(act_obj).forward(h, act_obj.config)
-        f_prime = type(act_obj).derivative(h, act_obj.config)
 
         error = state.z_latent - z_mu
         state = state._replace(z_mu=z_mu, error=error)

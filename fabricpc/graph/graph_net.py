@@ -24,6 +24,7 @@ from fabricpc.utils.helpers import update_node_in_state
 from fabricpc.core.inference import gather_inputs
 
 
+# TODO move this method to a new file learning.py in the core/ module and remove this file.
 def compute_local_weight_gradients(
     params: GraphParams,
     final_state: GraphState,
@@ -32,7 +33,9 @@ def compute_local_weight_gradients(
     """
     Compute local weight gradients for each node using its own error signal.
 
-    This implements the local Hebbian learning rule for predictive coding:
+    This implements the local Hebbian learning rule for predictive coding.
+    muPC scaling is applied here (pre-scale inputs, post-scale weight
+    gradients), keeping node methods (forward_learning) scaling-unaware.
 
     Args:
         params: Current model parameters
@@ -42,6 +45,8 @@ def compute_local_weight_gradients(
     Returns:
         GraphParams containing gradients for the parameters
     """
+    from fabricpc.core.scaling import scale_inputs, scale_weight_grads
+
     gradients = {}
 
     for node_name, node in structure.nodes.items():
@@ -54,14 +59,21 @@ def compute_local_weight_gradients(
         in_edges_data = gather_inputs(node_info, structure, final_state)
 
         node_class = node_info.node_class
+        sc = node_info.scaling_config
 
-        # Compute local gradients using node's method
+        # Pre-scale inputs by muPC forward scaling factors
+        scaled_inputs = scale_inputs(in_edges_data, sc)
+
+        # Compute local gradients using node's method (pure autodiff)
         node_state, grad_params = node_class.forward_learning(
             params.nodes[node_name],
-            in_edges_data,
+            scaled_inputs,
             final_state.nodes[node_name],
             node_info,
         )
+
+        # Post-scale weight gradients by muPC factors
+        grad_params = scale_weight_grads(grad_params, sc)
 
         # Store gradients
         gradients[node_name] = grad_params
@@ -72,6 +84,7 @@ def compute_local_weight_gradients(
     return params_gradients
 
 
+# TODO move to a new file params_initializer.py.
 def initialize_params(
     structure: GraphStructure,
     rng_key: jax.Array,  # from jax.random.PRNGKey
@@ -129,6 +142,7 @@ def initialize_params(
     return GraphParams(nodes=node_params)
 
 
+# TODO - move this to utils. Call this function to replace boilerplate code for clamping latents in training loops.
 def set_latents_to_clamps(
     state: GraphState,
     clamps: Dict[str, jnp.ndarray],

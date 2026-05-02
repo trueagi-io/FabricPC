@@ -397,16 +397,16 @@ class TransformerBlock(NodeBase):
         node_info: NodeInfo,
     ) -> Tuple[NodeState, NodeParams]:
         node_class = node_info.node_class
-        scaled_inputs = node_class._apply_forward_scaling(inputs, node_info)
 
+        # Pure autodiff (inputs already scaled by callsite)
         (total_energy, new_state), params_grad = jax.value_and_grad(
             node_class.forward, argnums=0, has_aux=True
-        )(params, scaled_inputs, state, node_info)
+        )(params, inputs, state, node_info)
 
-        # Compensate for layernorm absorption by multiplying weight gradients by the "in" edge's forward_scale.
-        # LN(a*x) = LN(x) absorbs muPC forward scaling, so dE/dW is
-        # independent of a — making weight gradients ~1/a too large vs
-        # Linear nodes where dE/dW ∝ a*x. Multiply by a to compensate.
+        # LayerNorm compensation: LN(a*x) = LN(x) absorbs muPC forward
+        # scaling, so dE/dW is independent of a — making weight gradients
+        # ~1/a too large vs Linear nodes where dE/dW is proportional to a*x.
+        # Multiply by a to compensate.
         if node_info.scaling_config is not None:
             a = 1.0
             for edge_key, scale in node_info.scaling_config.forward_scale.items():

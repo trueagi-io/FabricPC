@@ -109,8 +109,13 @@ class ActivationBase(ABC):
             Derivative values, same shape as x
 
         Note:
-            This is the derivative f'(x) evaluated at x, where f is the activation.
-            Used in predictive coding for gain modulation.
+            This method is NOT called by the default framework path — autodiff
+            computes gradient automatically via
+            ``jax.value_and_grad`` in ``forward_inference()``.
+
+            It is provided as a convenience for node subclasses that override
+            ``forward_inference()`` with explicit (non-autodiff) gradient
+            computation (see ``LinearExplicitGrad`` for the pattern).
         """
         pass
 
@@ -130,6 +135,31 @@ class ActivationBase(ABC):
         Default returns 1.0 (no correction, appropriate for identity).
         """
         return 1.0
+
+    @staticmethod
+    def jacobian(x: jnp.ndarray, config: Dict[str, Any] = None) -> jnp.ndarray:
+        """
+        Full Jacobian matrix J_{ij} = df_i/dx_j, shape (..., D, D).
+
+        For element-wise activations, the Jacobian is diag(derivative(x)) —
+        use derivative() directly as the diagonal. Override this method for
+        non-element-wise activations (e.g., softmax) where off-diagonal
+        terms are needed.
+
+        This is a convenience for explicit (non-autodiff) gradient
+        implementations that need the full Jacobian.
+
+        Args:
+            x: Pre-activation values, shape (..., D)
+            config: Optional configuration dict
+
+        Returns:
+            Jacobian matrix, shape (..., D, D)
+        """
+        raise NotImplementedError(
+            "jacobian() not implemented for this activation. "
+            "For element-wise activations, use derivative() as the diagonal."
+        )
 
     @staticmethod
     def jacobian_gain(config: Dict[str, Any] = None) -> float:
@@ -313,6 +343,13 @@ class SoftmaxActivation(ActivationBase):
         # Diagonal of the Jacobian diag(s) - s @ s.T.
         # The off-diagonal terms are omitted; valid for element-wise PC gradients.
         return s * (1 - s)
+
+    @staticmethod
+    def jacobian(x: jnp.ndarray, config: Dict[str, Any] = None) -> jnp.ndarray:
+        """Full softmax Jacobian: J_{ij} = s_i * (delta_{ij} - s_j)."""
+        s = SoftmaxActivation.forward(x, config)
+        eye = jnp.eye(s.shape[-1])
+        return jnp.expand_dims(s, -1) * (eye - jnp.expand_dims(s, -2))
 
 
 class HardTanhActivation(ActivationBase):

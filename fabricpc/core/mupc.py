@@ -42,9 +42,9 @@ compensation for deep gradient propagation:
 
     c_td = a * jacobian_gain
 
-Chain rule correction (a): Because _apply_forward_scaling pre-scales
-inputs (x -> a*x) before the value_and_grad closure, autodiff yields
-dE/d(a*x). Multiplying by a restores dE/dx.
+Chain rule correction (a): Because scale_inputs() (in scaling.py)
+pre-scales inputs (x -> a*x) before the value_and_grad closure,
+autodiff yields dE/d(a*x). Multiplying by a restores dE/dx.
 
 Jacobian compensation (jacobian_gain): The per-hop Jacobian
 diag(act'(z)) @ (a*W) has RMS singular value ~ gain * rms(act'(z)),
@@ -320,7 +320,7 @@ def compute_mupc_scalings(
                 # Top-down gradient scaling: c_td = a * jacobian_gain.
                 #
                 # Two components:
-                # 1. Chain rule correction (a): _apply_forward_scaling pre-scales
+                # 1. Chain rule correction (a): scale_inputs() pre-scales
                 #    inputs (x -> a*x) outside the value_and_grad closure. Autodiff
                 #    yields dE/d(a*x); multiplying by a restores dE/dx.
                 # 2. Jacobian compensation (jacobian_gain): the per-hop Jacobian

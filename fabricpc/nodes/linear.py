@@ -228,6 +228,7 @@ class Linear(FlattenInputMixin, NodeBase):
         return total_energy, state
 
 
+# TODO move this class to its own node file.
 class LinearExplicitGrad(Linear):
     """
     Linear node with explicit (non-autodiff) gradient computation.
@@ -269,17 +270,27 @@ class LinearExplicitGrad(Linear):
         node_info: NodeInfo,
         is_clamped: bool,
     ) -> Tuple[NodeState, Dict[str, jnp.ndarray]]:
-        """Forward pass with explicit gradient computation."""
+        """Forward pass with explicit (non-autodiff) gradient computation.
+
+        Demonstrates the override pattern: computes input gradients and
+        self-latent gradient analytically using energy.grad_latent() and
+        activation.derivative(). muPC scaling is applied by the callsite.
+        """
         node_class = node_info.node_class
 
         # Forward pass to get new state
         _, state = node_class.forward(params, inputs, state, node_info)
 
-        # Gain-modulated error computation
+        # Explicit self-latent gradient
+        energy_obj = node_info.energy
+        self_grad = type(energy_obj).grad_latent(
+            state.z_latent, state.z_mu, energy_obj.config
+        )
+        state = state._replace(latent_grad=state.latent_grad + self_grad)
+
+        # Gain-modulated error for input gradients
         gain_mod_error = node_class.compute_gain_mod_error(state, node_info)
 
-        # Determine the energy functional to use
-        energy_obj = node_info.energy
         energy_type = type(energy_obj).__name__
         flatten_input = node_info.node_config.get("flatten_input", False)
         input_grads = {}
@@ -319,7 +330,10 @@ class LinearExplicitGrad(Linear):
         state: NodeState,
         node_info: NodeInfo,
     ) -> Tuple[NodeState, NodeParams]:
-        """Forward pass with explicit weight gradient computation."""
+        """Forward pass with explicit weight gradient computation.
+
+        muPC scaling is applied by the callsite.
+        """
         node_class = node_info.node_class
 
         # Forward pass to get new state

@@ -18,8 +18,9 @@ Energy formulation:
     where D = dimension of z (last axis) for scale-invariance.
 
 The standard PC energy path (via energy_functional()) is called normally.
-The Hopfield energy is added afterward via accumulate_hopfield_energy_and_grad(),
-which augments state.energy and state.latent_grad.
+The Hopfield energy is added afterward via accumulate_hopfield_energy(),
+which augments state.energy. The gradient dE_hop/dz is computed
+automatically via autodiff in forward_inference().
 
 Attractor dynamics arise naturally from the Hopfield energy gradient
 (strength/D)(W^2 - W)z, which is accumulated to latent_grad and applied
@@ -243,18 +244,20 @@ class StorkeyHopfield(NodeBase):
         return W
 
     @staticmethod
-    def accumulate_hopfield_energy_and_grad(
+    def accumulate_hopfield_energy(
         state: NodeState,
         W: jnp.ndarray,
         strength: jax.Array,
     ) -> NodeState:
-        """Add Hopfield attractor energy E = (1/2D) z^T (W^2 - W) z to state.
-        E = (1/2D) z^T (W^2) z -(1/2D) z^T (W) z
+        """Add Hopfield attractor energy E = (s/2D) z^T (W^2 - W) z to state.
 
         The Hopfield energy pulls z toward stored patterns (attractors in
         z-space). Combined with the PC energy (which pulls z toward the
         upstream prediction mu), the equilibrium z* is the PC-optimal
         compromise between top-down expectation and internal memory prior.
+
+        The gradient dE_hop/dz = (s/D)(W^2 - W)z is computed automatically
+        via autodiff in forward_inference().
 
         Args:
             state: NodeState with z_latent set.
@@ -262,16 +265,14 @@ class StorkeyHopfield(NodeBase):
             strength: Scalar hopfield_strength (learnable jnp.array or fixed float).
 
         Returns:
-            Updated NodeState with Hopfield energy and latent_grad added.
+            Updated NodeState with Hopfield energy added.
         """
         z = state.z_latent  # (batch, ..., D)
         wz = z @ W  # (batch, ..., D)
         D = z.shape[-1]
         E_hopfield = (0.5 / D) * jnp.sum(wz * (wz - z), axis=-1)  # (1/2D) z^T(W^2-W)z
-        hopfield_grad = (1.0 / D) * (wz @ W - wz)  # (1/D)(W^2-W)z
         return state._replace(
             energy=state.energy + strength * E_hopfield,
-            latent_grad=state.latent_grad + strength * hopfield_grad,
         )
 
     @staticmethod
@@ -338,7 +339,7 @@ class StorkeyHopfield(NodeBase):
         state = node_class.energy_functional(state, node_info)
 
         # Add Hopfield attractor energy scaled by strength
-        state = StorkeyHopfield.accumulate_hopfield_energy_and_grad(state, W, strength)
+        state = StorkeyHopfield.accumulate_hopfield_energy(state, W, strength)
 
         total_energy = jnp.sum(state.energy)
         return total_energy, state
