@@ -14,7 +14,8 @@ from fabricpc.nodes.base import (
     FlattenInputMixin,
 )
 
-from fabricpc.nodes.linear import Linear, LinearExplicitGrad
+from fabricpc.nodes.linear import Linear
+from fabricpc.nodes.linear_explicit_grad import LinearExplicitGrad
 from fabricpc.nodes.transformer import TransformerBlock
 from fabricpc.nodes.identity import IdentityNode
 from fabricpc.nodes.transformer_v2 import (

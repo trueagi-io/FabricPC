@@ -2,8 +2,6 @@
 
 from fabricpc.graph_initialization.graph_net import (
     initialize_params,
-    set_latents_to_clamps,
-    compute_local_weight_gradients,
 )
 
 from fabricpc.graph_initialization.state_initializer import (
@@ -15,10 +13,8 @@ from fabricpc.graph_initialization.state_initializer import (
 )
 
 __all__ = [
-    # Graph construction
+    # Params initialization
     "initialize_params",
-    "set_latents_to_clamps",
-    "compute_local_weight_gradients",
     # State initializers
     "StateInitBase",
     "GlobalStateInit",

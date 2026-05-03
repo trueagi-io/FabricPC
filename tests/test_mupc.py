@@ -24,10 +24,8 @@ from fabricpc.core.activations import IdentityActivation, ReLUActivation, TanhAc
 from fabricpc.core.mupc import MuPCConfig, MuPCScalingFactors
 from fabricpc.graph_initialization import initialize_params
 from fabricpc.graph_initialization.state_initializer import initialize_graph_state
-from fabricpc.graph_initialization.graph_net import (
-    compute_local_weight_gradients,
-    set_latents_to_clamps,
-)
+from fabricpc.utils.helpers import set_latents_to_clamps
+from fabricpc.core.learning import compute_local_weight_gradients
 
 # ============================================================================
 # Fixtures

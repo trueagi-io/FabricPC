@@ -197,7 +197,7 @@ def train_step_with_history(
         Call unstack_inference_history() on stacked_inference_history outside JIT.
     """
     from fabricpc.graph_initialization.state_initializer import initialize_graph_state
-    from fabricpc.training.train import compute_local_weight_gradients
+    from fabricpc.core.learning import compute_local_weight_gradients
 
     batch_size = next(iter(batch.values())).shape[0]
 

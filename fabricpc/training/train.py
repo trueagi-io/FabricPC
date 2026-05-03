@@ -16,7 +16,7 @@ from tqdm.auto import tqdm as _tqdm_cls
 
 from fabricpc.core.types import GraphParams, GraphState, GraphStructure
 from fabricpc.core.inference import run_inference
-from fabricpc.graph_initialization.graph_net import compute_local_weight_gradients
+from fabricpc.core.learning import compute_local_weight_gradients
 
 # ── pmap utilities ──────────────────────────────────────────────────
 

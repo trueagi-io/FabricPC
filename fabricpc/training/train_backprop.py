@@ -21,8 +21,7 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from fabricpc.core import GraphState
-from fabricpc.core.types import GraphParams, GraphStructure
+from fabricpc.core.types import GraphParams, GraphStructure, GraphState
 from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 from fabricpc.training.train_autoregressive import create_causal_mask, compute_loss
 

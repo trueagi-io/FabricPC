@@ -18,10 +18,8 @@ from fabricpc.nodes import Linear, IdentityNode
 from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.graph_initialization import initialize_params
 from fabricpc.graph_initialization.state_initializer import initialize_graph_state
-from fabricpc.graph_initialization.graph_net import (
-    set_latents_to_clamps,
-    compute_local_weight_gradients,
-)
+from fabricpc.utils.helpers import set_latents_to_clamps
+from fabricpc.core.learning import compute_local_weight_gradients
 from fabricpc.core.activations import IdentityActivation, TanhActivation
 from fabricpc.core.inference import InferenceSGD, run_inference
 from fabricpc.core.initializers import MuPCInitializer

@@ -14,7 +14,7 @@ Key Features:
 Example:
     >>> from fabricpc.nodes import Linear
     >>> from fabricpc.builder import Edge, TaskMap, graph
-    >>> from fabricpc.graph import initialize_params
+    >>> from fabricpc.graph_initialization import initialize_params
     >>> from fabricpc.training import train_pcn, evaluate_pcn
     >>>
     >>> # Define nodes
@@ -70,7 +70,7 @@ __all__ = [
     "GraphStructure",
     # Submodules (advanced use)
     "core",
-    "graph",
+    "graph_initialization",
     "nodes",
     "builder",
     "training",

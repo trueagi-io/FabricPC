@@ -12,7 +12,7 @@ import jax
 import jax.numpy as jnp
 
 from fabricpc.core.types import NodeState, NodeParams, GraphState
-from fabricpc.graph_initialization.graph_net import compute_local_weight_gradients
+from fabricpc.core.learning import compute_local_weight_gradients
 from fabricpc.graph_initialization import initialize_params
 from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 from fabricpc.core.inference import InferenceSGD

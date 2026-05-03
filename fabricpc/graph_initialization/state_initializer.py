@@ -10,7 +10,7 @@ State initializers determine how latent states are initialized across
 the entire graph before inference begins.
 
 Usage:
-    from fabricpc.graph.state_initializer import FeedforwardStateInit
+    from fabricpc.graph_initialization.state_initializer import FeedforwardStateInit
 
     structure = graph(
         nodes=[...], edges=[...], task_map=...,
