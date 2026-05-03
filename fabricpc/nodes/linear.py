@@ -237,7 +237,7 @@ class LinearExplicitGrad(Linear):
     Useful for:
     - Verifying correctness of manual gradient implementations
     - Prototyping optimized gradients
-    - Debugging gradient computation issuesr
+    - Debugging gradient computation issues
     """
 
     def __init__(
@@ -269,12 +269,13 @@ class LinearExplicitGrad(Linear):
         state: NodeState,
         node_info: NodeInfo,
         is_clamped: bool,
-    ) -> Tuple[NodeState, Dict[str, jnp.ndarray]]:
+    ) -> Tuple[NodeState, Dict[str, jnp.ndarray], jnp.ndarray]:
         """Forward pass with explicit (non-autodiff) gradient computation.
 
         Demonstrates the override pattern: computes input gradients and
         self-latent gradient analytically using energy.grad_latent() and
-        activation.derivative(). muPC scaling is applied by the callsite.
+        activation.derivative(). muPC scaling and accumulation into
+        ``state.latent_grad`` are handled by the callsite.
         """
         node_class = node_info.node_class
 
@@ -286,7 +287,6 @@ class LinearExplicitGrad(Linear):
         self_grad = type(energy_obj).grad_latent(
             state.z_latent, state.z_mu, energy_obj.config
         )
-        state = state._replace(latent_grad=state.latent_grad + self_grad)
 
         # Gain-modulated error for input gradients
         gain_mod_error = node_class.compute_gain_mod_error(state, node_info)
@@ -321,7 +321,7 @@ class LinearExplicitGrad(Linear):
 
             input_grads[edge_key] = grad_contribution
 
-        return state, input_grads
+        return state, input_grads, self_grad
 
     @staticmethod
     def forward_learning(

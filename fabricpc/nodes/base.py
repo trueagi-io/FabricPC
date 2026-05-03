@@ -358,7 +358,7 @@ class NodeBase(ABC):
         state: NodeState,
         node_info: NodeInfo,
         is_clamped: bool,
-    ) -> Tuple[NodeState, Dict[str, jnp.ndarray]]:
+    ) -> Tuple[NodeState, Dict[str, jnp.ndarray], jnp.ndarray]:
         """
         Forward pass with autodiff: computes updated state, gradients w.r.t.
         inputs (for updating upstream latents), and the self-latent gradient
@@ -370,7 +370,11 @@ class NodeBase(ABC):
         analytical gradients.
 
         muPC scaling is NOT applied here — it is handled by the callsite
-        (inference loop). Node methods are pure autodiff.
+        (inference loop). Node methods are pure autodiff. The returned
+        ``self_grad`` is the contribution from this node only, so the
+        callsite scales it independently and adds it to ``state.latent_grad``
+        without re-scaling pre-existing accumulated contributions from
+        downstream successors.
 
         Args:
             params: Node parameters (weights, biases)
@@ -381,11 +385,13 @@ class NodeBase(ABC):
             is_clamped: Whether this node is clamped to data
 
         Returns:
-            Tuple of (NodeState, gradient_wrt_inputs):
-                - NodeState: updated state with latent_grad containing
-                  the self-gradient (dE/dz_latent)
-                - gradient_wrt_inputs: dictionary of gradients w.r.t.
-                  each input edge (dE/d_input per edge)
+            Tuple of (NodeState, input_grads, self_grad):
+                - NodeState: updated state (z_mu, pre_activation, error,
+                  energy). ``latent_grad`` is *not* modified here.
+                - input_grads: dict of gradients w.r.t. each input edge
+                  (dE/d_input per edge), unscaled.
+                - self_grad: dE/dz_latent contribution from this node,
+                  unscaled, same shape as ``state.z_latent``.
         """
         node_class = node_info.node_class
 
@@ -400,12 +406,13 @@ class NodeBase(ABC):
                 error=jnp.zeros_like(state.error),
                 pre_activation=jnp.zeros_like(state.pre_activation),
             )
-            # Update the state's energy and self-latent gradient; will be zero since z_mu = z_latent
+            # Update the state's energy; will be zero since z_mu = z_latent
             new_state = node_class.energy_functional(new_state, node_info)
-            # Gradient to inputs is zero since there are no inputs
+            # No inputs, no contribution to latent_grad of self or upstream
             input_grads = {
                 edge_key: jnp.zeros_like(inputs[edge_key]) for edge_key in inputs
             }
+            self_grad = jnp.zeros_like(state.z_latent)
 
         elif node_info.out_degree == 0 and not is_clamped:
             # No post-synaptic targets and no clamped data!
@@ -424,6 +431,7 @@ class NodeBase(ABC):
             input_grads = {
                 edge_key: jnp.zeros_like(inputs[edge_key]) for edge_key in inputs
             }
+            self_grad = jnp.zeros_like(state.z_latent)
 
         else:
             # Internal or clamped output node: autodiff for input AND self-latent gradients.
@@ -435,17 +443,11 @@ class NodeBase(ABC):
                 )
                 return total_energy, new_s
 
-            (total_energy, new_state), (input_grads, z_latent_grad) = (
-                jax.value_and_grad(energy_fn, argnums=(0, 1), has_aux=True)(
-                    inputs, state.z_latent
-                )
-            )
+            (total_energy, new_state), (input_grads, self_grad) = jax.value_and_grad(
+                energy_fn, argnums=(0, 1), has_aux=True
+            )(inputs, state.z_latent)
 
-            new_state = new_state._replace(
-                latent_grad=new_state.latent_grad + z_latent_grad
-            )
-
-        return new_state, input_grads
+        return new_state, input_grads, self_grad
 
     # TODO rename to forward_and_weight_gradients() or something to clarify that this is the method used during training to compute both the forward pass and the gradients w.r.t. weights for learning.
     @staticmethod

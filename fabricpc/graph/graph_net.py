@@ -22,6 +22,7 @@ from fabricpc.core.types import (
 )
 from fabricpc.utils.helpers import update_node_in_state
 from fabricpc.core.inference import gather_inputs
+from fabricpc.core.scaling import scale_inputs, scale_weight_grads
 
 
 # TODO move this method to a new file learning.py in the core/ module and remove this file.
@@ -45,8 +46,6 @@ def compute_local_weight_gradients(
     Returns:
         GraphParams containing gradients for the parameters
     """
-    from fabricpc.core.scaling import scale_inputs, scale_weight_grads
-
     gradients = {}
 
     for node_name, node in structure.nodes.items():

@@ -24,6 +24,7 @@ from typing import Dict, Any
 import jax
 import jax.numpy as jnp
 
+from fabricpc.core.scaling import scale_inputs
 from fabricpc.core.types import (
     GraphState,
     GraphStructure,
@@ -269,11 +270,8 @@ class FeedforwardStateInit(StateInitBase):
                 node_class = node_info.node_class
                 edge_inputs = gather_inputs(node_info, structure, state)
 
-                # TODO fix any circular imports in project structure to avoid local import statements
                 # Apply muPC forward scaling (if any) before forward pass,
                 # matching what the inference loop does during training.
-                from fabricpc.core.scaling import scale_inputs
-
                 scaled_inputs = scale_inputs(edge_inputs, node_info.scaling_config)
                 _, projected = node_class.forward(
                     node_params, scaled_inputs, node_state, node_info

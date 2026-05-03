@@ -327,7 +327,7 @@ class TestForwardMethods:
                     in_edge_info = structure.edges[edge_key]
                     edge_inputs[edge_key] = state.nodes[in_edge_info.source].z_latent
 
-                new_state, input_grads = node_class.forward_inference(
+                new_state, input_grads, self_grad = node_class.forward_inference(
                     params.nodes[node_name],
                     edge_inputs,
                     node_state,
@@ -337,6 +337,14 @@ class TestForwardMethods:
 
                 assert new_state.z_mu.shape == node_state.z_latent.shape
                 assert new_state.error.shape == node_state.z_latent.shape
+
+                # self_grad must match z_latent shape and carry finite values.
+                # forward_inference must NOT mutate state.latent_grad — that's
+                # the callsite's responsibility — so the returned NodeState's
+                # latent_grad must equal the input's exactly.
+                assert self_grad.shape == node_state.z_latent.shape
+                assert jnp.all(jnp.isfinite(self_grad))
+                assert jnp.array_equal(new_state.latent_grad, node_state.latent_grad)
 
                 for edge_key in node_info.in_edges:
                     edge_info = structure.edges[edge_key]

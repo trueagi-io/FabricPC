@@ -115,7 +115,8 @@ class EmbeddingNode(NodeBase):
         input_grads = {
             edge_key: jnp.zeros_like(inp) for edge_key, inp in inputs.items()
         }
-        return new_state, input_grads
+        self_grad = jnp.zeros_like(new_state.z_latent)
+        return new_state, input_grads, self_grad
 
 
 # ==============================================================================

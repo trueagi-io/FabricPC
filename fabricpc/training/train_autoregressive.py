@@ -20,8 +20,9 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from fabricpc.core.types import GraphParams, GraphState, GraphStructure, NodeParams
-from fabricpc.core.inference import gather_inputs, run_inference
+from fabricpc.core.types import GraphParams, GraphState, GraphStructure
+from fabricpc.core.inference import run_inference
+from fabricpc.graph.graph_net import compute_local_weight_gradients
 from fabricpc.graph.state_initializer import initialize_graph_state
 
 
@@ -70,49 +71,6 @@ def compute_loss(
         raise ValueError(f"Unknown loss_type: {loss_type}")
 
     return loss
-
-
-def compute_local_weight_gradients_ar(
-    params: GraphParams,
-    final_state: GraphState,
-    structure: GraphStructure,
-) -> GraphParams:
-    """
-    Compute local weight gradients for autoregressive training.
-
-    This is similar to the standard local gradient computation but
-    can be extended for sequence-specific optimizations.
-
-    Args:
-        params: Current model parameters
-        final_state: Converged state after inference
-        structure: Graph structure
-
-    Returns:
-        GraphParams containing gradients
-    """
-    gradients = {}
-
-    for node_name, node in structure.nodes.items():
-        node_info = node.node_info
-        if node_info.in_degree == 0:
-            gradients[node_name] = NodeParams(weights={}, biases={})
-            continue
-
-        in_edges_data = gather_inputs(node_info, structure, final_state)
-        node_class = node_info.node_class
-
-        # Compute local gradients
-        node_state, grad_params = node_class.forward_learning(
-            params.nodes[node_name],
-            in_edges_data,
-            final_state.nodes[node_name],
-            node_info,
-        )
-
-        gradients[node_name] = grad_params
-
-    return GraphParams(nodes=gradients)
 
 
 def train_step_autoregressive(
@@ -194,7 +152,7 @@ def train_step_autoregressive(
     avg_energy = energy / batch_size
 
     # Compute local gradients
-    grads = compute_local_weight_gradients_ar(params, final_state, structure)
+    grads = compute_local_weight_gradients(params, final_state, structure)
 
     # Update parameters
     updates, opt_state = optimizer.update(grads, opt_state, params)

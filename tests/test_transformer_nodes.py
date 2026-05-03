@@ -133,9 +133,12 @@ class TestEmbeddingNode:
         inputs = {"indices->embed:in": input_indices}
 
         # Call forward_inference directly
-        new_state, input_grads = EmbeddingNode.forward_inference(
+        new_state, input_grads, self_grad = EmbeddingNode.forward_inference(
             node_params, inputs, node_state, node_info
         )
+
+        assert jnp.all(self_grad == 0.0), "Embedding node must return zero self-grad"
+        assert self_grad.shape == node_state.z_latent.shape
 
         # Check input gradients
         grad = input_grads["indices->embed:in"]

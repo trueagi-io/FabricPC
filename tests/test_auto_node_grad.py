@@ -137,11 +137,13 @@ class TestLinearAutoGradNode:
         )
 
         # Compare forward_inference results
-        state_linear, grads_linear = Linear.forward_inference(
+        state_linear, grads_linear, self_grad_linear = Linear.forward_inference(
             params, inputs, node_state, node_info, is_clamped=True
         )
-        state_autograd, grads_autograd = LinearExplicitGrad.forward_inference(
-            params, inputs, node_state, node_info_explicit, is_clamped=True
+        state_autograd, grads_autograd, self_grad_autograd = (
+            LinearExplicitGrad.forward_inference(
+                params, inputs, node_state, node_info_explicit, is_clamped=True
+            )
         )
 
         # Compare input gradients
@@ -160,6 +162,9 @@ class TestLinearAutoGradNode:
         assert jnp.allclose(
             state_linear.error, state_autograd.error, atol=grad_tolerance
         ), f"error mismatch for activation={activation}"
+        assert jnp.allclose(
+            self_grad_linear, self_grad_autograd, atol=grad_tolerance
+        ), f"self-grad mismatch for activation={activation}"
 
     @pytest.mark.parametrize("activation", ["identity", "relu", "tanh", "sigmoid"])
     def test_forward_learning_equivalence(self, rng_key, activation, grad_tolerance):
@@ -338,14 +343,14 @@ class TestLinearAutoGradNode:
             inputs = gather_inputs(node_info, structure_linear, state_linear)
 
             # Compute input gradients using forward_inference
-            _, grads_linear = Linear.forward_inference(
+            _, grads_linear, _ = Linear.forward_inference(
                 params_linear.nodes[node_name],
                 inputs,
                 state_linear.nodes[node_name],
                 node_info,
                 is_clamped=(node_name == "output"),  # Clamp output node
             )
-            _, grads_autograd = LinearExplicitGrad.forward_inference(
+            _, grads_autograd, _ = LinearExplicitGrad.forward_inference(
                 params_autograd.nodes[node_name],
                 inputs,
                 state_autograd.nodes[node_name],

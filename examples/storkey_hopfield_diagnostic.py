@@ -468,13 +468,14 @@ def instrumented_forward_value_and_grad(params, state, clamps, structure):
 
         in_edges_data = gather_inputs(node_info, structure, state)
 
-        node_state, inedge_grads = node_class.forward_inference(
+        node_state, inedge_grads, self_grad = node_class.forward_inference(
             node_params,
             in_edges_data,
             node_state,
             node_info,
             is_clamped=(node_name in clamps),
         )
+        node_state = node_state._replace(latent_grad=node_state.latent_grad + self_grad)
 
         state = state._replace(nodes={**state.nodes, node_name: node_state})
 
