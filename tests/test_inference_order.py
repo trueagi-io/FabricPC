@@ -1,22 +1,35 @@
 """
 Tests for inference iteration order independence and self-grad scaling.
 
-The clinfra refactor moved muPC scaling out of NodeBase into scaling.py
-applied at the inference-loop callsite. The original implementation in
-fabricpc/core/inference.py scaled the *entire* node_state.latent_grad
-after forward_inference. By that point latent_grad may already contain
-contributions from previously-iterated downstream successors (added when
-those successors propagate inedge_grads back to their source nodes).
-Re-scaling those by self_grad_scale is wrong: they were already scaled
-by the appropriate topdown_grad_scale at the successor.
+These tests pin two invariants of the Phase-2 inference loop
+(``InferenceBase.forward_value_and_grad``):
 
-muPC currently hard-codes ``self_grad_scale = 1.0`` so the bug is masked
-in default configurations. These tests inject a non-unity self_grad_scale
-to surface the architectural bug independently of muPC's chosen value.
+1. **Insertion-order independence.** The per-node ``latent_grad`` produced
+   by one forward+grad pass must not depend on the order in which nodes
+   were inserted into ``structure.nodes``. Each test builds the same
+   graph twice with different ``nodes=[...]`` orderings, runs one pass
+   from identical initial state, and asserts ``latent_grad`` (plus
+   ``z_mu``, ``error``, ``energy``) match per node.
 
-The bug manifests whenever structure.nodes insertion order is not strict
-forward-topological — including reverse-insertion order on DAGs and any
-iteration order on cyclic graphs (where no valid topological order exists).
+2. **Self-grad accumulation, not replacement.** ``scale_self_grad`` must
+   apply only to the new ``dE/dz_latent`` contribution from the current
+   node — never to the cumulative ``latent_grad`` value, which can
+   already contain contributions added by earlier-visited successors.
+   The sentinel test seeds a known prior value into a node's
+   ``latent_grad`` and checks it survives a forward+grad pass as a pure
+   addition.
+
+To make the scaling logic observable, tests inject a non-unity
+``self_grad_scale`` (muPC's default is 1.0, which would mask any
+arithmetic on ``latent_grad`` that happens to multiply by it). Coverage
+spans:
+
+- DAG chain ``x → h → y`` under topological, reverse, and arbitrary
+  insertion orders, with and without muPC scaling.
+- Cyclic graph ``x → a ⇄ b → y`` where no valid topological order
+  exists, with and without muPC scaling.
+- Sentinel injection on the chain to verify pre-existing ``latent_grad``
+  is preserved as a pure addend.
 """
 
 import dataclasses

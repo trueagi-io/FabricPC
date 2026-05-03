@@ -112,10 +112,16 @@ class EmbeddingNode(NodeBase):
     @staticmethod
     def forward_inference(params, inputs, state, node_info, is_clamped=False):
         _, new_state = node_info.node_class.forward(params, inputs, state, node_info)
+        # Discrete indices: no gradient flows back through the input edge.
         input_grads = {
             edge_key: jnp.zeros_like(inp) for edge_key, inp in inputs.items()
         }
-        self_grad = jnp.zeros_like(new_state.z_latent)
+        # Self-grad anchors z_latent to the lookup z_mu. Computed explicitly
+        # because this override skips the base autodiff path.
+        energy_obj = node_info.energy
+        self_grad = type(energy_obj).grad_latent(
+            new_state.z_latent, new_state.z_mu, energy_obj.config
+        )
         return new_state, input_grads, self_grad
 
 

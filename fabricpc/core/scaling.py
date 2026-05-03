@@ -86,20 +86,22 @@ def scale_weight_grads(
 ) -> NodeParams:
     """Post-scale weight gradients by muPC weight gradient scaling.
 
-    Handles both edge-keyed weights (e.g., Linear) and param-name-keyed
-    weights (e.g., TransformerBlock) by falling back to uniform scaling
-    from the mean of all edge scales.
+    Per-weight scaling is applied only when the weight's key matches an
+    edge_key present in `weight_grad_scale`. Weights whose names do not
+    match any edge_key (e.g., internal parameters of TransformerBlock
+    such as W_q/W_k/W_v whose tensor shapes are tied to attention head
+    geometry rather than input edges) pass through at scale 1.0; such
+    nodes are expected to handle their own scaling inside forward().
+
+    `weight_grad_scale` is populated only for edges whose target slot is
+    variance-scalable (see compute_mupc_scalings). Non-scalable slots
+    (mask, skip, residual) contribute no entries and therefore do not
+    influence weight-gradient scaling.
     """
     if scaling_config is None:
         return params_grad
     wg_scale = scaling_config.weight_grad_scale
-    if all(k in wg_scale for k in params_grad.weights):
-        scaled_weights = {
-            k: grad * wg_scale[k] for k, grad in params_grad.weights.items()
-        }
-    else:
-        uniform_scale = sum(wg_scale.values()) / len(wg_scale)
-        scaled_weights = {
-            k: grad * uniform_scale for k, grad in params_grad.weights.items()
-        }
+    scaled_weights = {
+        k: grad * wg_scale.get(k, 1.0) for k, grad in params_grad.weights.items()
+    }
     return NodeParams(weights=scaled_weights, biases=params_grad.biases)

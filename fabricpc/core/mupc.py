@@ -92,8 +92,13 @@ class MuPCScalingFactors:
             correction (a) with Jacobian compensation (jacobian_gain) for
             deep gradient propagation. Applied after autodiff in
             forward_inference().
-        weight_grad_scale: Per-edge scaling for weight gradients.
-            Applied after autodiff in forward_learning().
+        weight_grad_scale: Per-edge scaling for weight gradients,
+            populated only for edges whose target slot is variance-scalable.
+            Non-scalable slots (mask, skip, residual) are absent. Applied
+            in scale_weight_grads() to weights whose key matches an
+            edge_key; weights with non-edge keys (e.g., transformer
+            internal projections) pass through at 1.0 and are expected to
+            handle scaling internally.
     """
 
     forward_scale: Dict[str, float]
@@ -287,10 +292,12 @@ def compute_mupc_scalings(
             slot_info = node_info.slots[slot_name]
 
             if not slot_info.is_variance_scalable:
-                # Non-scalable slot: identity pass-through at scale 1.0
+                # Non-scalable slot: identity pass-through at scale 1.0.
+                # weight_grad_scale is intentionally omitted — non-scalable
+                # slots (mask, skip, residual) do not drive weight-gradient
+                # scaling, so their edges are absent from the dict.
                 forward_scale[edge_key] = 1.0
                 topdown_grad_scale[edge_key] = 1.0
-                weight_grad_scale[edge_key] = 1.0
             else:
                 # Scalable slot: full muPC formula
                 # K_slot = in-degree of this specific slot

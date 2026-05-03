@@ -23,7 +23,7 @@ Final train energy: 221.06
 Final test loss: 2.5351, Perplexity: 12.62
 Prompt: 'ROMEO: '
 ----------------------------------------
-ROMEO: asharshar'dsheameara
+ROMEO: heacfeeearecayayoule
 ----------------------------------------
 
 Backprop Training
