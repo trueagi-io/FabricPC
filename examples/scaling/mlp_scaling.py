@@ -56,7 +56,7 @@ from typing import List, Dict, Tuple, Optional
 
 from fabricpc.nodes import Linear
 from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params, FeedforwardStateInit
+from fabricpc.graph_initialization import initialize_params, FeedforwardStateInit
 from fabricpc.core.activations import IdentityActivation, SigmoidActivation
 from fabricpc.core.inference import InferenceSGD
 import optax

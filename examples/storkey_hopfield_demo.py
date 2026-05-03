@@ -60,7 +60,7 @@ import optax
 
 from fabricpc.nodes import Linear, IdentityNode, StorkeyHopfield
 from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params
+from fabricpc.graph_initialization import initialize_params
 from fabricpc.core import TanhActivation
 from fabricpc.core.activations import SoftmaxActivation
 from fabricpc.core.energy import CrossEntropyEnergy

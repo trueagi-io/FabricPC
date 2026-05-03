@@ -22,9 +22,9 @@ from fabricpc.core.inference import InferenceSGD, run_inference
 from fabricpc.core.initializers import MuPCInitializer
 from fabricpc.core.activations import IdentityActivation, ReLUActivation, TanhActivation
 from fabricpc.core.mupc import MuPCConfig, MuPCScalingFactors
-from fabricpc.graph import initialize_params
-from fabricpc.graph.state_initializer import initialize_graph_state
-from fabricpc.graph.graph_net import (
+from fabricpc.graph_initialization import initialize_params
+from fabricpc.graph_initialization.state_initializer import initialize_graph_state
+from fabricpc.graph_initialization.graph_net import (
     compute_local_weight_gradients,
     set_latents_to_clamps,
 )

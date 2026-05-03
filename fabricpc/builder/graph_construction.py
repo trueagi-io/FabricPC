@@ -6,7 +6,7 @@ from fabricpc.core.types import GraphStructure, NodeInfo, EdgeInfo, SlotInfo
 from fabricpc.core.inference import InferenceBase
 from fabricpc.builder.edge import Edge, SlotRef
 from fabricpc.nodes.base import NodeBase
-from fabricpc.graph.state_initializer import StateInitBase
+from fabricpc.graph_initialization.state_initializer import StateInitBase
 
 
 class TaskMap:
@@ -212,7 +212,7 @@ def graph(
         raise TypeError(f"task_map must be TaskMap or dict, got {type(task_map)}")
 
     # 7. Build GraphStructure
-    from fabricpc.graph.state_initializer import FeedforwardStateInit
+    from fabricpc.graph_initialization.state_initializer import FeedforwardStateInit
 
     gs_config = {
         "graph_state_initializer": graph_state_initializer or FeedforwardStateInit(),

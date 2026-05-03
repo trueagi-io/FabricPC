@@ -16,9 +16,9 @@ import jax.numpy as jnp
 
 from fabricpc.nodes import Linear, IdentityNode
 from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params
-from fabricpc.graph.state_initializer import initialize_graph_state
-from fabricpc.graph.graph_net import (
+from fabricpc.graph_initialization import initialize_params
+from fabricpc.graph_initialization.state_initializer import initialize_graph_state
+from fabricpc.graph_initialization.graph_net import (
     set_latents_to_clamps,
     compute_local_weight_gradients,
 )

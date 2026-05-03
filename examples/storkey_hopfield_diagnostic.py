@@ -35,14 +35,14 @@ import optax
 
 from fabricpc.nodes import Linear, IdentityNode, StorkeyHopfield
 from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params
+from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.activations import SoftmaxActivation, TanhActivation
 from fabricpc.core.energy import CrossEntropyEnergy, GaussianEnergy
 from fabricpc.core.inference import InferenceSGD, gather_inputs, run_inference
 from fabricpc.core.initializers import XavierInitializer
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.training.train import train_step
-from fabricpc.graph.state_initializer import initialize_graph_state
+from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 from fabricpc.utils.helpers import update_node_in_state
 from fabricpc.utils.data.dataloader import (
     FashionMnistLoader,

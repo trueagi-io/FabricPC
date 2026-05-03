@@ -43,9 +43,9 @@ from fabricpc.core.inference import InferenceSGD
 from fabricpc.core.initializers import NormalInitializer
 from fabricpc.core.mupc import MuPCConfig, MuPCScalingFactors
 from fabricpc.core.types import GraphParams, GraphState
-from fabricpc.graph import initialize_params
-from fabricpc.graph.graph_net import set_latents_to_clamps
-from fabricpc.graph.state_initializer import initialize_graph_state
+from fabricpc.graph_initialization import initialize_params
+from fabricpc.graph_initialization.graph_net import set_latents_to_clamps
+from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 from fabricpc.nodes import Linear
 from fabricpc.nodes.identity import IdentityNode
 

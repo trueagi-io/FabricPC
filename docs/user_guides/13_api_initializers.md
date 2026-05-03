@@ -79,7 +79,8 @@ All state initializers extend `StateInitBase` from `fabricpc.graph.state_initial
 Runs a forward pass through the network in topological order and sets `z_latent = z_mu`. Provides fast convergence for feedforward DAGs.
 
 ```python
-from fabricpc.graph.state_initializer import FeedforwardStateInit
+from fabricpc.graph_initialization.state_initializer import FeedforwardStateInit
+
 structure = graph(..., state_init=FeedforwardStateInit())
 ```
 
@@ -90,7 +91,8 @@ Requires `params` (used during forward pass).
 All nodes use the graph-level initializer (typically `NormalInitializer`).
 
 ```python
-from fabricpc.graph.state_initializer import GlobalStateInit
+from fabricpc.graph_initialization.state_initializer import GlobalStateInit
+
 structure = graph(..., state_init=GlobalStateInit())
 ```
 
@@ -99,6 +101,7 @@ structure = graph(..., state_init=GlobalStateInit())
 Each node uses its own `latent_init` initializer.
 
 ```python
-from fabricpc.graph.state_initializer import NodeDistributionStateInit
+from fabricpc.graph_initialization.state_initializer import NodeDistributionStateInit
+
 structure = graph(..., state_init=NodeDistributionStateInit())
 ```

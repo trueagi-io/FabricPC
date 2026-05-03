@@ -23,8 +23,8 @@ from fabricpc.builder import Edge, TaskMap, graph
 from fabricpc.core.inference import InferenceSGD
 from fabricpc.core.mupc import MuPCConfig
 from fabricpc.core.initializers import MuPCInitializer
-from fabricpc.graph import initialize_params
-from fabricpc.graph.state_initializer import (
+from fabricpc.graph_initialization import initialize_params
+from fabricpc.graph_initialization.state_initializer import (
     initialize_graph_state,
     FeedforwardStateInit,
 )

@@ -22,8 +22,8 @@ import optax
 
 from fabricpc.core.types import GraphParams, GraphState, GraphStructure
 from fabricpc.core.inference import run_inference
-from fabricpc.graph.graph_net import compute_local_weight_gradients
-from fabricpc.graph.state_initializer import initialize_graph_state
+from fabricpc.graph_initialization.graph_net import compute_local_weight_gradients
+from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 
 
 def create_causal_mask(seq_len: int) -> jnp.ndarray:

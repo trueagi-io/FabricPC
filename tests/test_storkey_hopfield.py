@@ -6,9 +6,9 @@ import jax.numpy as jnp
 
 from fabricpc.nodes import Linear, IdentityNode, StorkeyHopfield
 from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params
-from fabricpc.graph.state_initializer import initialize_graph_state
-from fabricpc.graph.graph_net import compute_local_weight_gradients
+from fabricpc.graph_initialization import initialize_params
+from fabricpc.graph_initialization.state_initializer import initialize_graph_state
+from fabricpc.graph_initialization.graph_net import compute_local_weight_gradients
 from fabricpc.core.inference import InferenceSGD, run_inference
 from fabricpc.core.activations import SigmoidActivation, SoftmaxActivation
 from fabricpc.core.energy import CrossEntropyEnergy

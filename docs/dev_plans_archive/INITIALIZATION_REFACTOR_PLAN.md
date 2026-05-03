@@ -134,7 +134,7 @@ Replace `initialize_state()` function body to delegate:
 
 ```python
 def initialize_state(structure, batch_size, rng_key, clamps=None, state_init_config=None, params=None) -> GraphState:
-    from fabricpc.graph.state_initializer import initialize_graph_state
+    from fabricpc.graph_initialization.state_initializer import initialize_graph_state
     return initialize_graph_state(structure, batch_size, rng_key, clamps, state_init_config, params)
 ```
 
@@ -176,8 +176,9 @@ from fabricpc.core.initializers import (
 ```
 
 **`fabricpc/graph/__init__.py`:**
+
 ```python
-from fabricpc.graph.state_initializer import (
+from fabricpc.graph_initialization.state_initializer import (
     StateInitBase, register_state_init, get_state_init_class,
     list_state_init_types, initialize_graph_state,
 )

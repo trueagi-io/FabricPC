@@ -56,7 +56,7 @@ from fabricpc.nodes import (
     EmbeddingNode,
 )
 from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params, FeedforwardStateInit
+from fabricpc.graph_initialization import initialize_params, FeedforwardStateInit
 from fabricpc.core.mupc import MuPCConfig
 from fabricpc.core.activations import (
     SoftmaxActivation,
@@ -75,7 +75,7 @@ from fabricpc.training.train_autoregressive import (
     evaluate_autoregressive,
     create_causal_mask,
 )
-from fabricpc.graph import initialize_graph_state
+from fabricpc.graph_initialization import initialize_graph_state
 from fabricpc.utils.dashboarding.inference_tracking import (
     run_inference_with_full_history,
 )

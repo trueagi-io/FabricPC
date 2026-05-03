@@ -29,7 +29,7 @@ set_jax_flags_before_importing_jax()
 import argparse
 import jax
 import jax.numpy as jnp
-from fabricpc.graph import initialize_params
+from fabricpc.graph_initialization import initialize_params
 from fabricpc.training import (
     train_pcn,
     evaluate_transformer,
@@ -37,7 +37,7 @@ from fabricpc.training import (
     evaluate_backprop,
 )
 from fabricpc.core.inference import run_inference, InferenceSGD
-from fabricpc.graph.state_initializer import initialize_graph_state
+from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 from fabricpc.nodes.transformer_v2 import create_deep_transformer
 from fabricpc.utils.data import CharDataLoader
 import optax

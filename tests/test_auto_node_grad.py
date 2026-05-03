@@ -16,7 +16,7 @@ from fabricpc.nodes import (
     LinearExplicitGrad,
 )
 from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params
+from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.activations import (
     IdentityActivation,
     ReLUActivation,
@@ -25,7 +25,7 @@ from fabricpc.core.activations import (
 )
 from fabricpc.core.energy import GaussianEnergy
 from fabricpc.core.initializers import NormalInitializer
-from fabricpc.graph.state_initializer import initialize_graph_state
+from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 
 
 @pytest.fixture

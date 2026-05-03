@@ -34,7 +34,7 @@ import argparse
 
 from fabricpc.nodes import Linear, IdentityNode
 from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params
+from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.activations import (
     SigmoidActivation,
     SoftmaxActivation,

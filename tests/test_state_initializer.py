@@ -13,7 +13,7 @@ import jax.numpy as jnp
 from fabricpc.nodes import Linear
 from fabricpc.nodes.transformer import TransformerBlock
 from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params
+from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.inference import InferenceSGD, run_inference
 from fabricpc.core.activations import (
     IdentityActivation,
@@ -22,7 +22,7 @@ from fabricpc.core.activations import (
     GeluActivation,
 )
 from fabricpc.core.initializers import NormalInitializer
-from fabricpc.graph.state_initializer import (
+from fabricpc.graph_initialization.state_initializer import (
     GlobalStateInit,
     NodeDistributionStateInit,
     FeedforwardStateInit,

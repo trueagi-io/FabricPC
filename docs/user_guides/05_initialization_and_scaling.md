@@ -472,7 +472,7 @@ After building the graph and initializing parameters, you need to set initial la
 Runs a forward pass through the network and sets `z_latent = z_mu` for each node.
 
 ```python
-from fabricpc.graph.state_initializer import FeedforwardStateInit
+from fabricpc.graph_initialization.state_initializer import FeedforwardStateInit
 
 structure = graph(
     nodes=[...],
@@ -495,7 +495,7 @@ structure = graph(
 Initializes all nodes with the same distribution.
 
 ```python
-from fabricpc.graph.state_initializer import GlobalStateInit
+from fabricpc.graph_initialization.state_initializer import GlobalStateInit
 from fabricpc.core.initializers import NormalInitializer
 
 structure = graph(
@@ -522,7 +522,7 @@ structure = graph(
 Each node uses its own `latent_init` initializer specified during node construction.
 
 ```python
-from fabricpc.graph.state_initializer import NodeDistributionStateInit
+from fabricpc.graph_initialization.state_initializer import NodeDistributionStateInit
 
 hidden = Linear(
     shape=(256,),
@@ -555,7 +555,7 @@ For most use cases, especially deep networks:
 ```python
 from fabricpc.core.mupc import MuPCConfig
 from fabricpc.core.initializers import MuPCInitializer
-from fabricpc.graph.state_initializer import FeedforwardStateInit
+from fabricpc.graph_initialization.state_initializer import FeedforwardStateInit
 
 # Node definition
 hidden = Linear(

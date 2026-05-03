@@ -51,7 +51,7 @@ import optax
 from fabricpc.nodes import Linear, IdentityNode, LinearResidual
 from fabricpc.nodes.skip_connection import SkipConnection
 from fabricpc.builder import Edge, TaskMap, graph, GraphNamespace
-from fabricpc.graph import initialize_params
+from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.activations import TanhActivation, SoftmaxActivation
 from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.core.inference import InferenceSGD

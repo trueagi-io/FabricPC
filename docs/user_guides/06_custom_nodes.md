@@ -250,45 +250,45 @@ The forward method must:
 ### Step 6: Use the Custom Node
 
 ```python
-from fabricpc.graph.builder import graph, Edge
-from fabricpc.graph.task_map import TaskMap
+from fabricpc.graph_initialization.builder import graph, Edge
+from fabricpc.graph_initialization.task_map import TaskMap
 
 # Create nodes
 input_node = IdentityNode(shape=(28, 28, 1), name="input")
 
 conv1 = Conv2DNode(
-    shape=(26, 26, 16),  # VALID padding: 28-3+1 = 26
-    kernel_size=(3, 3),
-    stride=(1, 1),
-    padding="VALID",
-    name="conv1",
+   shape=(26, 26, 16),  # VALID padding: 28-3+1 = 26
+   kernel_size=(3, 3),
+   stride=(1, 1),
+   padding="VALID",
+   name="conv1",
 )
 
 conv2 = Conv2DNode(
-    shape=(24, 24, 32),
-    kernel_size=(3, 3),
-    stride=(1, 1),
-    padding="VALID",
-    name="conv2",
+   shape=(24, 24, 32),
+   kernel_size=(3, 3),
+   stride=(1, 1),
+   padding="VALID",
+   name="conv2",
 )
 
 output_node = Linear(
-    shape=(10,),
-    flatten_input=True,
-    name="output",
+   shape=(10,),
+   flatten_input=True,
+   name="output",
 )
 
 # Build graph
 structure = graph(
-    nodes=[input_node, conv1, conv2, output_node],
-    edges=[
-        Edge(source=input_node, target=conv1.slot("in")),
-        Edge(source=conv1, target=conv2.slot("in")),
-        Edge(source=conv2, target=output_node.slot("in")),
-    ],
-    task_map=TaskMap(x=input_node, y=output_node),
-    inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
-    scaling=MuPCConfig(),
+   nodes=[input_node, conv1, conv2, output_node],
+   edges=[
+      Edge(source=input_node, target=conv1.slot("in")),
+      Edge(source=conv1, target=conv2.slot("in")),
+      Edge(source=conv2, target=output_node.slot("in")),
+   ],
+   task_map=TaskMap(x=input_node, y=output_node),
+   inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
+   scaling=MuPCConfig(),
 )
 ```
 
@@ -401,42 +401,43 @@ Example test:
 ```python
 import jax
 import jax.numpy as jnp
-from fabricpc.graph.builder import graph, Edge
-from fabricpc.graph.task_map import TaskMap
+from fabricpc.graph_initialization.builder import graph, Edge
+from fabricpc.graph_initialization.task_map import TaskMap
 from fabricpc.core.inference import InferenceSGD
 from fabricpc.core.initializers import initialize_params
 
+
 def test_conv2d_energy_decreases():
-    """Test that inference reduces energy for Conv2D node."""
-    # Build graph
-    input_node = IdentityNode(shape=(28, 28, 1), name="input")
-    conv = Conv2DNode(shape=(28, 28, 16), kernel_size=(3, 3), name="conv")
-    output = IdentityNode(shape=(28, 28, 16), name="output")
+   """Test that inference reduces energy for Conv2D node."""
+   # Build graph
+   input_node = IdentityNode(shape=(28, 28, 1), name="input")
+   conv = Conv2DNode(shape=(28, 28, 16), kernel_size=(3, 3), name="conv")
+   output = IdentityNode(shape=(28, 28, 16), name="output")
 
-    structure = graph(
-        nodes=[input_node, conv, output],
-        edges=[
-            Edge(source=input_node, target=conv.slot("in")),
-            Edge(source=conv, target=output.slot("in")),
-        ],
-        task_map=TaskMap(x=input_node, y=output),
-        inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
-    )
+   structure = graph(
+      nodes=[input_node, conv, output],
+      edges=[
+         Edge(source=input_node, target=conv.slot("in")),
+         Edge(source=conv, target=output.slot("in")),
+      ],
+      task_map=TaskMap(x=input_node, y=output),
+      inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
+   )
 
-    # Initialize parameters
-    rng_key = jax.random.PRNGKey(0)
-    params = initialize_params(structure, rng_key)
+   # Initialize parameters
+   rng_key = jax.random.PRNGKey(0)
+   params = initialize_params(structure, rng_key)
 
-    # Create dummy data
-    batch_size = 4
-    x = jax.random.normal(rng_key, (batch_size, 28, 28, 1))
-    y = jax.random.normal(rng_key, (batch_size, 28, 28, 16))
+   # Create dummy data
+   batch_size = 4
+   x = jax.random.normal(rng_key, (batch_size, 28, 28, 1))
+   y = jax.random.normal(rng_key, (batch_size, 28, 28, 16))
 
-    # Run inference and track energy
-    # ... (see existing test examples in tests/)
+   # Run inference and track energy
+   # ... (see existing test examples in tests/)
 
-    # Assert energy decreases
-    assert final_energy < initial_energy
+   # Assert energy decreases
+   assert final_energy < initial_energy
 ```
 
 ## Summary

@@ -13,8 +13,8 @@ import jax.numpy as jnp
 import numpy as np
 
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
-from fabricpc.graph import initialize_params
-from fabricpc.graph.state_initializer import (
+from fabricpc.graph_initialization import initialize_params
+from fabricpc.graph_initialization.state_initializer import (
     initialize_graph_state,
     FeedforwardStateInit,
 )
