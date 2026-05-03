@@ -6,9 +6,9 @@ FabricPC's gradient computation has two problems:
 
 1. **Dual-path gradients**: Self-latent gradients (`dE/dz_latent`) are computed explicitly via `energy_cls.grad_latent()` inside `energy_functional()`, while input gradients (`dE/d(inputs)`) use `jax.value_and_grad`. These should use one uniform mechanism.
 
-2. **muPC scaling baked into NodeBase**: Forward scaling, topdown gradient scaling, self-gradient scaling, and weight gradient scaling are all hardcoded into `forward_inference()`, `forward_learning()`, and `energy_functional()`. Scaling should be a composable layer that node methods don't need to know about.
+2. **muPC scaling baked into NodeBase**: Forward scaling, topdown gradient scaling, self-gradient scaling, and weight gradient scaling are all hardcoded into `forward_and_latent_grads()`, `forward_and_weight_grads()`, and `energy_functional()`. Scaling should be a composable layer that node methods don't need to know about.
 
-**Outcome**: Node methods become pure autodiff. muPC scaling is applied at the callsite. Users who override `forward_inference()` / `forward_learning()` with explicit gradients don't need to handle scaling at all.
+**Outcome**: Node methods become pure autodiff. muPC scaling is applied at the callsite. Users who override `forward_and_latent_grads()` / `forward_and_weight_grads()` with explicit gradients don't need to handle scaling at all.
 
 ---
 
@@ -51,7 +51,7 @@ def energy_functional(state: NodeState, node_info: NodeInfo) -> NodeState:
 
 Remove: `grad_latent()` call, `self_grad_scale` application, `latent_grad` accumulation.
 
-**B. `forward_inference()` uses the closure pattern** (lines 444-465):
+**B. `forward_and_latent_grads()` uses the closure pattern** (lines 444-465):
 
 The internal/clamped node branch becomes:
 
@@ -75,11 +75,11 @@ else:
 
 No muPC scaling here — that moves to Part 2.
 
-**C. `forward_learning()` becomes pure autodiff** (lines 479-532):
+**C. `forward_and_weight_grads()` becomes pure autodiff** (lines 479-532):
 
 ```python
 @staticmethod
-def forward_learning(params, inputs, state, node_info):
+def forward_and_weight_grads(params, inputs, state, node_info):
     node_class = node_info.node_class
     (total_energy, new_state), params_grad = jax.value_and_grad(
         node_class.forward, argnums=0, has_aux=True
@@ -113,7 +113,7 @@ Update `forward()` (line 341) to call `accumulate_hopfield_energy` instead.
 
 ### Changes to `fabricpc/nodes/linear.py` — LinearExplicitGrad
 
-`LinearExplicitGrad.forward_inference()` (line 265-313) bypasses autodiff. Since `energy_functional()` no longer accumulates the self-gradient, add explicit self-gradient computation:
+`LinearExplicitGrad.forward_and_latent_grads()` (line 265-313) bypasses autodiff. Since `energy_functional()` no longer accumulates the self-gradient, add explicit self-gradient computation:
 
 ```python
 _, state = node_class.forward(params, inputs, state, node_info)
@@ -132,11 +132,11 @@ Note: no muPC scaling here. That's applied by the callsite (Part 2), transparent
 
 ### Changes to `fabricpc/nodes/transformer_v2.py` — EmbeddingNode
 
-`EmbeddingNode.forward_inference()` (line 115) calls `forward()` directly and returns zero input grads. Since `energy_functional()` no longer writes `latent_grad`, embedding nodes won't get a self-gradient. This is correct because embeddings are typically clamped (latent_grad is irrelevant for clamped nodes). No change needed.
+`EmbeddingNode.forward_and_latent_grads()` (line 115) calls `forward()` directly and returns zero input grads. Since `energy_functional()` no longer writes `latent_grad`, embedding nodes won't get a self-gradient. This is correct because embeddings are typically clamped (latent_grad is irrelevant for clamped nodes). No change needed.
 
 ### No changes needed in these node forward() implementations
 
-These call `energy_functional()` inside `forward()`. After the refactor, `energy_functional()` only sets energy. The autodiff in `forward_inference()` handles the self-gradient. Zero code changes:
+These call `energy_functional()` inside `forward()`. After the refactor, `energy_functional()` only sets energy. The autodiff in `forward_and_latent_grads()` handles the self-gradient. Zero code changes:
 
 - `fabricpc/nodes/linear.py` — `Linear.forward()`
 - `fabricpc/nodes/identity.py` — `IdentityNode.forward()`
@@ -201,10 +201,11 @@ def scale_weight_grads(params_grad, scaling_config):
 
 ### Changes to `fabricpc/core/inference.py` — `forward_value_and_grad()`
 
-Apply scaling at the callsite, wrapping `forward_inference()`:
+Apply scaling at the callsite, wrapping `forward_and_latent_grads()`:
 
 ```python
 from fabricpc.core.scaling import scale_inputs, scale_input_grads, scale_self_grad
+
 
 def forward_value_and_grad(params, state, clamps, structure):
     for node_name in structure.nodes:
@@ -216,7 +217,7 @@ def forward_value_and_grad(params, state, clamps, structure):
         scaled_inputs = scale_inputs(in_edges_data, sc)
 
         # Pure autodiff gradient computation (node knows nothing about scaling)
-        node_state, inedge_grads = node_class.forward_inference(
+        node_state, inedge_grads = node_class.forward_and_latent_grads(
             node_params, scaled_inputs, node_state, node_info,
             is_clamped=(node_name in clamps),
         )
@@ -238,10 +239,11 @@ def forward_value_and_grad(params, state, clamps, structure):
 
 ### Changes to `fabricpc/graph/graph_net.py` — `compute_local_weight_gradients()`
 
-Apply scaling at the callsite, wrapping `forward_learning()`:
+Apply scaling at the callsite, wrapping `forward_and_weight_grads()`:
 
 ```python
 from fabricpc.core.scaling import scale_inputs, scale_weight_grads
+
 
 def compute_local_weight_gradients(params, final_state, structure):
     gradients = {}
@@ -254,7 +256,7 @@ def compute_local_weight_gradients(params, final_state, structure):
         scaled_inputs = scale_inputs(in_edges_data, sc)
 
         # Pure autodiff weight gradient computation
-        node_state, grad_params = node_class.forward_learning(
+        node_state, grad_params = node_class.forward_and_weight_grads(
             params.nodes[node_name], scaled_inputs,
             final_state.nodes[node_name], node_info,
         )
@@ -266,13 +268,13 @@ def compute_local_weight_gradients(params, final_state, structure):
     ...
 ```
 
-### Changes to `fabricpc/nodes/transformer.py` — TransformerBlock.forward_learning()
+### Changes to `fabricpc/nodes/transformer.py` — TransformerBlock.forward_and_weight_grads()
 
 The override becomes simpler — only the LayerNorm compensation, no muPC boilerplate:
 
 ```python
 @staticmethod
-def forward_learning(params, inputs, state, node_info):
+def forward_and_weight_grads(params, inputs, state, node_info):
     node_class = node_info.node_class
 
     # Pure autodiff (inputs are already scaled by callsite)
@@ -301,7 +303,7 @@ Note: the callsite will also apply `scale_weight_grads()` after this returns, bu
 
 ## Part 3: Activation and Energy Convenience APIs
 
-For users who override `forward_inference()` / `forward_learning()` with explicit gradients.
+For users who override `forward_and_latent_grads()` / `forward_and_weight_grads()` with explicit gradients.
 
 ### `ActivationBase.jacobian()` in `fabricpc/core/activations.py`
 
@@ -342,13 +344,13 @@ def jacobian(x: jnp.ndarray, config: Dict[str, Any] = None) -> jnp.ndarray:
 
 | File | Change |
 |------|--------|
-| **`fabricpc/nodes/base.py`** | `energy_functional()` energy-only. `forward_inference()` z_latent closure. `forward_learning()` pure autodiff. Remove `_apply_forward_scaling()`. |
+| **`fabricpc/nodes/base.py`** | `energy_functional()` energy-only. `forward_and_latent_grads()` z_latent closure. `forward_and_weight_grads()` pure autodiff. Remove `_apply_forward_scaling()`. |
 | **`fabricpc/core/scaling.py`** | **NEW**. `scale_inputs()`, `scale_input_grads()`, `scale_self_grad()`, `scale_weight_grads()`. |
-| **`fabricpc/core/inference.py`** | `forward_value_and_grad()`: apply scaling at callsite around `forward_inference()`. |
-| **`fabricpc/graph/graph_net.py`** | `compute_local_weight_gradients()`: apply scaling at callsite around `forward_learning()`. |
+| **`fabricpc/core/inference.py`** | `forward_value_and_grad()`: apply scaling at callsite around `forward_and_latent_grads()`. |
+| **`fabricpc/graph/graph_net.py`** | `compute_local_weight_gradients()`: apply scaling at callsite around `forward_and_weight_grads()`. |
 | **`fabricpc/nodes/storkey_hopfield.py`** | `accumulate_hopfield_energy_and_grad()` → `accumulate_hopfield_energy()` (energy only). |
-| **`fabricpc/nodes/linear.py`** | `LinearExplicitGrad.forward_inference()`: add explicit self-gradient. |
-| **`fabricpc/nodes/transformer.py`** | `TransformerBlock.forward_learning()`: remove muPC boilerplate, keep LN compensation. |
+| **`fabricpc/nodes/linear.py`** | `LinearExplicitGrad.forward_and_latent_grads()`: add explicit self-gradient. |
+| **`fabricpc/nodes/transformer.py`** | `TransformerBlock.forward_and_weight_grads()`: remove muPC boilerplate, keep LN compensation. |
 | **`fabricpc/core/activations.py`** | Add `jacobian()` to `ActivationBase` + `SoftmaxActivation`. |
 | **`fabricpc/core/energy.py`** | Update `grad_latent()` docstring. |
 

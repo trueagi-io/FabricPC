@@ -20,7 +20,7 @@ Energy formulation:
 The standard PC energy path (via energy_functional()) is called normally.
 The Hopfield energy is added afterward via accumulate_hopfield_energy(),
 which augments state.energy. The gradient dE_hop/dz is computed
-automatically via autodiff in forward_inference().
+automatically via autodiff in forward_and_latent_grads().
 
 Attractor dynamics arise naturally from the Hopfield energy gradient
 (strength/D)(W^2 - W)z, which is accumulated to latent_grad and applied
@@ -257,7 +257,7 @@ class StorkeyHopfield(NodeBase):
         compromise between top-down expectation and internal memory prior.
 
         The gradient dE_hop/dz = (s/D)(W^2 - W)z is computed automatically
-        via autodiff in forward_inference().
+        via autodiff in forward_and_latent_grads().
 
         Args:
             state: NodeState with z_latent set.

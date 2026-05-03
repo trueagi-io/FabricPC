@@ -350,9 +350,8 @@ class NodeBase(ABC):
     # Default implementations - can be overridden for explicit gradients
     # =========================================================================
 
-    # TODO rename to forward_and_latent_gradients() or something to clarify that this is the method used during inference to compute both the forward pass and the gradients w.r.t. inputs for updating latents of in-neighbors.
     @staticmethod
-    def forward_inference(
+    def forward_and_latent_grads(
         params: NodeParams,
         inputs: Dict[str, jnp.ndarray],
         state: NodeState,
@@ -363,6 +362,7 @@ class NodeBase(ABC):
         Forward pass with autodiff: computes updated state, gradients w.r.t.
         inputs (for updating upstream latents), and the self-latent gradient
         (dE/dz_latent).
+        Called in the inference phase of predictive coding.
 
         Override this method to implement explicit (non-autodiff) gradient
         computation. When overriding, use ``energy.grad_latent()`` and
@@ -449,16 +449,16 @@ class NodeBase(ABC):
 
         return new_state, input_grads, self_grad
 
-    # TODO rename to forward_and_weight_gradients() or something to clarify that this is the method used during training to compute both the forward pass and the gradients w.r.t. weights for learning.
     @staticmethod
-    def forward_learning(
+    def forward_and_weight_grads(
         params: NodeParams,
         inputs: Dict[str, jnp.ndarray],
         state: NodeState,
         node_info: NodeInfo,
     ) -> Tuple[NodeState, NodeParams]:
         """
-        Forward pass with autodiff: computes weight gradients for local learning.
+        Forward pass with autodiff: computes the node's local energy gradient w.r.t. weights.
+        Called in the learning phase of predictive coding.
 
         Override this method to implement explicit weight gradient computation
         or apply node-specific post-processing (e.g., LayerNorm compensation).
@@ -492,7 +492,7 @@ class NodeBase(ABC):
         Compute energy E(z_latent, z_mu) and update state.
 
         The self-latent gradient (dE/dz_latent) is NOT computed here — it
-        is obtained via autodiff in forward_inference(). For explicit
+        is obtained via autodiff in forward_and_latent_grads(). For explicit
         gradient overrides, use ``energy.grad_latent()`` directly.
 
         Args:

@@ -91,7 +91,7 @@ class MuPCScalingFactors:
             presynaptic nodes. Equals a * jacobian_gain, combining chain rule
             correction (a) with Jacobian compensation (jacobian_gain) for
             deep gradient propagation. Applied after autodiff in
-            forward_inference().
+            forward_and_latent_grads().
         weight_grad_scale: Per-edge scaling for weight gradients,
             populated only for edges whose target slot is variance-scalable.
             Non-scalable slots (mask, skip, residual) are absent. Applied

@@ -191,7 +191,7 @@ def _forward_phase(params, state, clamps, structure):
         node_params = params.nodes[node_name]
 
         in_edges_data = gather_inputs(node_info, structure, state)
-        node_state, inedge_grads = node_class.forward_inference(
+        node_state, inedge_grads = node_class.forward_and_latent_grads(
             node_params, in_edges_data, node_state, node_info,
             is_clamped=(node_name in clamps),
         )
@@ -327,7 +327,7 @@ Move `eta_infer` and `infer_steps` from `train_config` to `graph(..., inference=
 ## Order of Operations
 
 1. Remove `substructure` from `NodeState` in `types.py`
-2. Refactor `linear.py`: `compute_gain_mod_error()` returns value; `forward_inference()`/`forward_learning()` use return value directly
+2. Refactor `linear.py`: `compute_gain_mod_error()` returns value; `forward_and_latent_grads()`/`forward_and_weight_grads()` use return value directly
 3. Refactor `transformer.py`: `_mha()` drops substructure return
 4. Remove `substructure={}` from state initializers and all `NodeState(...)` constructors in tests
 5. Add `InferenceBase`, `InferenceSGD`, `_forward_phase()` to `fabricpc/core/inference.py` — keep existing functions as backward-compatible wrappers, remove substructure reset loop
@@ -372,8 +372,8 @@ Remove `substructure: Dict[str, jnp.ndarray]` field from `NodeState` NamedTuple.
 
 ### `fabricpc/nodes/linear.py`
 - **`compute_gain_mod_error()`**: Instead of storing in `state.substructure`, return `gain_mod_error` directly.
-- **`forward_inference()`**: Call `compute_gain_mod_error()` to get the value directly (or compute `error * f_prime(pre_activation)` inline), use it for gradient computation without touching `substructure`.
-- **`forward_learning()`**: Same pattern.
+- **`forward_and_latent_grads()`**: Call `compute_gain_mod_error()` to get the value directly (or compute `error * f_prime(pre_activation)` inline), use it for gradient computation without touching `substructure`.
+- **`forward_and_weight_grads()`**: Same pattern.
 
 ### `fabricpc/nodes/transformer.py`
 - **`_mha()`**: Remove the substructure dict return. Return only the projection (or keep as tuple with `_` at call site).

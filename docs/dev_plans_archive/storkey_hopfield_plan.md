@@ -76,7 +76,7 @@ total_energy = jnp.sum(state.energy)
 - If `hopfield_strength=None` (default): learnable scalar parameter initialized to 1.0, stored in `params.biases["hopfield_strength"]`
 - If `hopfield_strength=<float>`: fixed value stored in config only (not in params)
 
-### No `forward_inference()` or `forward_learning()` override needed
+### No `forward_and_latent_grads()` or `forward_and_weight_grads()` override needed
 
 Base class autodiff on `forward()` correctly computes:
 - **Input gradients** (for inference): autodiff w.r.t. inputs flows through the identity addition `probe + ...`
@@ -91,7 +91,7 @@ Base class autodiff on `forward()` correctly computes:
 
 ### W stored under edge key
 
-W is stored as `params.weights[edge_key]` (not as a separate `_hopfield_W` key). This ensures JAX autodiff in `forward_learning()` (argnums=0 → params) captures W gradients through both the recurrence path and the Hopfield energy term.
+W is stored as `params.weights[edge_key]` (not as a separate `_hopfield_W` key). This ensures JAX autodiff in `forward_and_weight_grads()` (argnums=0 → params) captures W gradients through both the recurrence path and the Hopfield energy term.
 
 ## Constructor Parameters
 
@@ -107,12 +107,12 @@ W is stored as `params.weights[edge_key]` (not as a separate `_hopfield_W` key).
 
 ## Gradient Flow Analysis
 
-**Inference** (`forward_inference`, argnums=1 → inputs):
+**Inference** (`forward_and_latent_grads`, argnums=1 → inputs):
 - `d(total_energy)/d(probe)` flows through the identity addition `pre_act = probe + ...` → nonzero gradient
 - This gradient is accumulated to the pre-synaptic node's `latent_grad` in `forward_value_and_grad()`
 - Source node's z_latent updates during inference
 
-**Learning** (`forward_learning`, argnums=0 → params):
+**Learning** (`forward_and_weight_grads`, argnums=0 → params):
 - `d(total_energy)/d(W)` captures contributions from:
   - Recurrence path: `strength * (z_latent @ W)` contributes to z_mu → E_pc → total_energy
   - Hopfield energy: `accumulate_hopfield_energy_and_grad` adds E_hop which also depends on W through `total_energy = sum(state.energy)`
@@ -136,7 +136,6 @@ W is stored as `params.weights[edge_key]` (not as a separate `_hopfield_W` key).
 |------|--------|
 | `fabricpc/nodes/storkey_hopfield.py` | Full node implementation |
 | `fabricpc/nodes/__init__.py` | `StorkeyHopfield` import and `__all__` entry |
-| `fabricpc/nodes/base.py` | Removed TODO comment on line 283 |
 | `tests/test_storkey_hopfield.py` | 15 tests (shapes, energy, gradients, symmetry, config, integration) |
 | `examples/storkey_hopfield_demo.py` | MNIST A/B experiment: Hopfield vs MLP baseline |
 
@@ -163,7 +162,6 @@ Uses `ABExperiment` with `ExperimentArm` for each model, `MnistLoader` with `ten
 | Step | Status |
 |------|--------|
 | `fabricpc/nodes/storkey_hopfield.py` — full StorkeyHopfield class | Done |
-| `fabricpc/nodes/base.py` — removed TODO comment | Done |
 | `fabricpc/nodes/__init__.py` — added export | Done |
 | `tests/test_storkey_hopfield.py` — 15 tests | Done |
 | `examples/storkey_hopfield_demo.py` — A/B MNIST demo | Done |

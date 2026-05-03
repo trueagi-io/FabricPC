@@ -263,7 +263,7 @@ class LinearExplicitGrad(Linear):
         )
 
     @staticmethod
-    def forward_inference(
+    def forward_and_latent_grads(
         params: NodeParams,
         inputs: Dict[str, jnp.ndarray],
         state: NodeState,
@@ -324,7 +324,7 @@ class LinearExplicitGrad(Linear):
         return state, input_grads, self_grad
 
     @staticmethod
-    def forward_learning(
+    def forward_and_weight_grads(
         params: NodeParams,
         inputs: Dict[str, jnp.ndarray],
         state: NodeState,

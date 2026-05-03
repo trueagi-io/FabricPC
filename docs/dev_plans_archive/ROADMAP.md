@@ -586,13 +586,14 @@ This can improve:
 Reference: Salvatori et al. "Incremental Predictive Coding" (2022)
 """
 
+
 def ipc_inference_step(
-    params: GraphParams,
-    state: GraphState,
-    clamps: Dict[str, jnp.ndarray],
-    structure: GraphStructure,
-    eta_infer: float,
-    update_order: str = "forward"  # "forward", "backward", "random"
+        params: GraphParams,
+        state: GraphState,
+        clamps: Dict[str, jnp.ndarray],
+        structure: GraphStructure,
+        eta_infer: float,
+        update_order: str = "forward"  # "forward", "backward", "random"
 ) -> GraphState:
     """
     Single iPC inference step with sequential node updates.
@@ -626,7 +627,7 @@ def ipc_inference_step(
         in_edges_data = gather_inputs(node_info, structure, state)
 
         # Compute forward pass and input gradients for this node
-        node_state, inedge_grads = node_class.forward_inference(
+        node_state, inedge_grads = node_class.forward_and_latent_grads(
             params.nodes[node_name], in_edges_data,
             state.nodes[node_name], node_info
         )
@@ -648,13 +649,13 @@ def ipc_inference_step(
 
 
 def run_ipc_inference(
-    params: GraphParams,
-    initial_state: GraphState,
-    clamps: Dict[str, jnp.ndarray],
-    structure: GraphStructure,
-    infer_steps: int,
-    eta_infer: float = 0.1,
-    update_order: str = "forward",
+        params: GraphParams,
+        initial_state: GraphState,
+        clamps: Dict[str, jnp.ndarray],
+        structure: GraphStructure,
+        infer_steps: int,
+        eta_infer: float = 0.1,
+        update_order: str = "forward",
 ) -> GraphState:
     """
     Run iPC inference for multiple steps.
@@ -662,6 +663,7 @@ def run_ipc_inference(
     The inner loop is not easily vectorizable due to sequential
     dependencies, but can be JIT compiled.
     """
+
     def body_fn(t, state):
         return ipc_inference_step(
             params, state, clamps, structure, eta_infer, update_order
@@ -693,18 +695,20 @@ This enables:
 from typing import NamedTuple
 import jax.numpy as jnp
 
+
 class SchedulerState(NamedTuple):
     """State tracked by the dynamic scheduler."""
     node_etas: Dict[str, float]  # Per-node learning rates
     energy_history: Dict[str, jnp.ndarray]  # Rolling energy window
     step: int
 
+
 def create_scheduler(
-    structure: GraphStructure,
-    base_eta: float = 0.1,
-    window_size: int = 5,
-    min_eta: float = 0.001,
-    max_eta: float = 1.0,
+        structure: GraphStructure,
+        base_eta: float = 0.1,
+        window_size: int = 5,
+        min_eta: float = 0.001,
+        max_eta: float = 1.0,
 ) -> SchedulerState:
     """Initialize scheduler with uniform learning rates."""
     node_etas = {name: base_eta for name in structure.nodes}
@@ -716,9 +720,9 @@ def create_scheduler(
 
 
 def update_scheduler(
-    scheduler: SchedulerState,
-    state: GraphState,
-    config: Dict[str, Any],
+        scheduler: SchedulerState,
+        state: GraphState,
+        config: Dict[str, Any],
 ) -> SchedulerState:
     """
     Update learning rates based on current energy landscape.
@@ -769,15 +773,15 @@ def update_scheduler(
 
 
 def scheduled_inference_step(
-    params: GraphParams,
-    state: GraphState,
-    clamps: Dict[str, jnp.ndarray],
-    structure: GraphStructure,
-    scheduler: SchedulerState,
+        params: GraphParams,
+        state: GraphState,
+        clamps: Dict[str, jnp.ndarray],
+        structure: GraphStructure,
+        scheduler: SchedulerState,
 ) -> Tuple[GraphState, SchedulerState]:
     """
     Inference step with per-node adaptive learning rates.
-    Uses forward_inference to compute predictions, errors, and gradients.
+    Uses forward_and_latent_grads to compute predictions, errors, and gradients.
     """
     # Zero latent gradients
     for node_name in structure.nodes:
@@ -794,7 +798,7 @@ def scheduled_inference_step(
         node_class = get_node_class(node_info.node_type)
         in_edges_data = gather_inputs(node_info, structure, state)
 
-        node_state, inedge_grads = node_class.forward_inference(
+        node_state, inedge_grads = node_class.forward_and_latent_grads(
             params.nodes[node_name], in_edges_data,
             state.nodes[node_name], node_info
         )
@@ -925,6 +929,7 @@ from fabricpc.core.types import (
 )
 from fabricpc.nodes.base import NodeBase, SlotSpec
 
+
 @register_node("hypernode")
 class HyperNode(NodeBase):
     """
@@ -976,7 +981,7 @@ class HyperNode(NodeBase):
                 int_dim = int(np.prod(int_shape))
                 key_boundary, subkey = jax.random.split(key_boundary)
                 boundary_weights[f"boundary_{slot_name}"] = (
-                    jax.random.normal(subkey, (ext_dim, int_dim)) * 0.01
+                        jax.random.normal(subkey, (ext_dim, int_dim)) * 0.01
                 )
 
         return NodeParams(
@@ -1044,7 +1049,7 @@ class HyperNode(NodeBase):
         return jnp.sum(energy), state
 
     @staticmethod
-    def forward_inference(params, inputs, state, node_info):
+    def forward_and_latent_grads(params, inputs, state, node_info):
         """
         Forward pass with gradient computation for inputs.
 
@@ -1079,7 +1084,7 @@ class HyperNode(NodeBase):
             sub_node_class = get_node_class(sub_node_info.node_type)
             in_edges_data = gather_inputs(sub_node_info, subgraph_structure, subgraph_state)
 
-            _, inedge_grads = sub_node_class.forward_inference(
+            _, inedge_grads = sub_node_class.forward_and_latent_grads(
                 subgraph_params.nodes[node_name], in_edges_data,
                 subgraph_state.nodes[node_name], sub_node_info
             )

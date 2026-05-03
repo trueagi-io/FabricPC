@@ -111,10 +111,10 @@ class EnergyFunctional(ABC):
 
         This method is NOT called by the default framework path — autodiff
         computes the self-latent gradient automatically via
-        ``jax.value_and_grad`` in ``forward_inference()``.
+        ``jax.value_and_grad`` in ``forward_and_latent_grads()``.
 
         It is provided as a convenience for node subclasses that override
-        ``forward_inference()`` with explicit (non-autodiff) gradient
+        ``forward_and_latent_grads()`` with explicit (non-autodiff) gradient
         computation (see ``LinearExplicitGrad`` for the pattern).
 
         Args:

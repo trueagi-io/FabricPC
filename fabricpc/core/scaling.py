@@ -3,17 +3,17 @@ muPC scaling utilities for predictive coding gradient computation.
 
 Composable scaling functions applied at callsites (inference loop, learning loop)
 to separate variance-preserving scaling from node computation. Node methods
-(forward_inference, forward_learning) are pure autodiff — they know nothing
+(forward_and_latent_grads, forward_and_weight_grads) are pure autodiff — they know nothing
 about muPC scaling.
 
 Usage in inference loop (inference.py):
     scaled_inputs = scale_inputs(inputs, node_info.scaling_config)
-    node_state, grads = node_class.forward_inference(params, scaled_inputs, ...)
+    node_state, grads = node_class.forward_and_latent_grads(params, scaled_inputs, ...)
     grads = scale_input_grads(grads, node_info.scaling_config)
 
 Usage in learning loop (graph_net.py):
     scaled_inputs = scale_inputs(inputs, node_info.scaling_config)
-    node_state, grad_params = node_class.forward_learning(params, scaled_inputs, ...)
+    node_state, grad_params = node_class.forward_and_weight_grads(params, scaled_inputs, ...)
     grad_params = scale_weight_grads(grad_params, node_info.scaling_config)
 """
 

@@ -28,7 +28,7 @@ Results:
 python examples/storkey_hopfield_demo.py --k_values 500 --noise_levels 2.0 --strength 2.0 --n_trials 5 --num_epochs 5
      K    Noise    Hopfield Accuracy %         MLP Accuracy %     Delta%    p-value   Sig        d
 ---------------------------------------------------------------------------------------------------
-   500      2.0          64.80+/-0.16            60.38+/-0.20      +4.42     0.0001     *    6.677
+   500      2.0          64.94+/-0.33            60.33+/-0.34      +4.61      0.0000     *    11.115
 ---------------------------------------------------------------------------------------------------
 
 python examples/storkey_hopfield_demo.py --k_values 5,10,20,50,100,500 --noise_levels 0.0,0.5,1.0,1.5,2.0 --strength 1.0 --n_trials 10 --num_epochs 5

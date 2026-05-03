@@ -110,7 +110,7 @@ class EmbeddingNode(NodeBase):
         return jnp.sum(state.energy), state
 
     @staticmethod
-    def forward_inference(params, inputs, state, node_info, is_clamped=False):
+    def forward_and_latent_grads(params, inputs, state, node_info, is_clamped=False):
         _, new_state = node_info.node_class.forward(params, inputs, state, node_info)
         # Discrete indices: no gradient flows back through the input edge.
         input_grads = {

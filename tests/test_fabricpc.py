@@ -312,8 +312,8 @@ class TestForwardMethods:
         state = GraphState(nodes=nodes, batch_size=batch_size)
         return params, structure, state
 
-    def test_forward_inference_shapes(self, forward_setup):
-        """Test that forward_inference returns correct shapes."""
+    def test_forward_and_latent_grads_shapes(self, forward_setup):
+        """Test that forward_and_latent_grads returns correct shapes."""
         params, structure, state = forward_setup
 
         for node_name, node in structure.nodes.items():
@@ -327,7 +327,7 @@ class TestForwardMethods:
                     in_edge_info = structure.edges[edge_key]
                     edge_inputs[edge_key] = state.nodes[in_edge_info.source].z_latent
 
-                new_state, input_grads, self_grad = node_class.forward_inference(
+                new_state, input_grads, self_grad = node_class.forward_and_latent_grads(
                     params.nodes[node_name],
                     edge_inputs,
                     node_state,
@@ -339,7 +339,7 @@ class TestForwardMethods:
                 assert new_state.error.shape == node_state.z_latent.shape
 
                 # self_grad must match z_latent shape and carry finite values.
-                # forward_inference must NOT mutate state.latent_grad — that's
+                # forward_and_latent_grads must NOT mutate state.latent_grad — that's
                 # the callsite's responsibility — so the returned NodeState's
                 # latent_grad must equal the input's exactly.
                 assert self_grad.shape == node_state.z_latent.shape
@@ -352,8 +352,8 @@ class TestForwardMethods:
                     expected_shape = (state.batch_size, *source_shape)
                     assert input_grads[edge_key].shape == expected_shape
 
-    def test_forward_learning_shapes(self, forward_setup):
-        """Test that forward_learning returns correct shapes."""
+    def test_forward_and_weight_grads_shapes(self, forward_setup):
+        """Test that forward_and_weight_grads returns correct shapes."""
         params, structure, state = forward_setup
 
         for node_name, node in structure.nodes.items():
@@ -368,7 +368,7 @@ class TestForwardMethods:
                     in_edge_info = structure.edges[edge_key]
                     edge_inputs[edge_key] = state.nodes[in_edge_info.source].z_latent
 
-                new_state, param_grads = node_class.forward_learning(
+                new_state, param_grads = node_class.forward_and_weight_grads(
                     node_params, edge_inputs, node_state, node_info
                 )
 

@@ -453,7 +453,7 @@ def instrumented_forward_value_and_grad(params, state, clamps, structure):
     """Replicate forward_value_and_grad with gradient decomposition snapshots.
 
     Captures hopfield.latent_grad at two key moments:
-      1. After hopfield's own forward_inference (contains PC_self + Hop_self)
+      1. After hopfield's own forward_and_latent_grads (contains PC_self + Hop_self)
       2. After class node accumulates its backward grad (adds Top_down)
     """
     snapshots = {}
@@ -468,7 +468,7 @@ def instrumented_forward_value_and_grad(params, state, clamps, structure):
 
         in_edges_data = gather_inputs(node_info, structure, state)
 
-        node_state, inedge_grads, self_grad = node_class.forward_inference(
+        node_state, inedge_grads, self_grad = node_class.forward_and_latent_grads(
             node_params,
             in_edges_data,
             node_state,

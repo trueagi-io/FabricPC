@@ -191,7 +191,7 @@ class TransformerBlock(NodeBase):
         """Return embed_dim as fan_in for muPC scaling.
 
         Pre-norm LayerNorm absorbs the external muPC forward_scale a
-        (LN(a*x) = LN(x)), so forward_learning() compensates by scaling
+        (LN(a*x) = LN(x)), so forward_and_weight_grads() compensates by scaling
         weight gradients by a. We return embed_dim so muPC computes the
         correct a for this node's width.
         """
@@ -390,7 +390,7 @@ class TransformerBlock(NodeBase):
         return total_energy, state
 
     @staticmethod
-    def forward_learning(
+    def forward_and_weight_grads(
         params: NodeParams,
         inputs: Dict[str, jnp.ndarray],
         state: NodeState,

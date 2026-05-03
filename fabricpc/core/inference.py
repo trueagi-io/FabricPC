@@ -143,7 +143,7 @@ class InferenceBase(ABC):
         Phase 3 (latent update) is handled by the inference algorithm's latent_update() method.
 
         muPC scaling is applied here (pre-scale inputs, post-scale gradients),
-        keeping node methods (forward_inference) scaling-unaware. The
+        keeping node methods (forward_and_latent_grads) scaling-unaware. The
         self-grad contribution is scaled and *added* to ``latent_grad``
         without re-scaling pre-existing accumulations from previously
         iterated downstream successors — those were already scaled by
@@ -166,7 +166,7 @@ class InferenceBase(ABC):
 
             # Compute predictions, error, input gradients, and the self-latent
             # gradient contribution (dE/dz_latent for this node only).
-            node_state, inedge_grads, self_grad = node_class.forward_inference(
+            node_state, inedge_grads, self_grad = node_class.forward_and_latent_grads(
                 node_params,
                 scaled_inputs,
                 node_state,

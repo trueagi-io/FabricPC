@@ -23,7 +23,7 @@ The StorkeyHopfield node drops MNIST accuracy from 93% (`hopfield_strength=0.0`)
 
 - `fabricpc/nodes/storkey_hopfield.py` — Node under investigation (forward: L243-304, energy: L212-241)
 - `fabricpc/core/inference.py` — Inference loop (forward_value_and_grad: L128-171, update_latents: L174-198)
-- `fabricpc/nodes/base.py` — forward_inference (L335-431), energy_functional (L479-512)
+- `fabricpc/nodes/base.py` — forward_and_latent_grads (L335-431), energy_functional (L479-512)
 - `fabricpc/training/train.py` — train_step (L77-115), train_pcn (L118-), evaluate_pcn (L311-)
 - `examples/storkey_hopfield_demo.py` — Model construction template
 
@@ -46,8 +46,8 @@ Output: Table of strength vs accuracy vs energy. Reveals whether decay is gradua
 
 During `forward_value_and_grad`, nodes are processed in topological order: pixels, hidden, hopfield, class. The hopfield node's `latent_grad` accumulates in a known sequence:
 
-1. After hopfield's `forward_inference`: `latent_grad = PC_self + Hop_self`
-2. After class's `forward_inference` accumulates backward grad: `latent_grad = PC_self + Hop_self + Top_down`
+1. After hopfield's `forward_and_latent_grads`: `latent_grad = PC_self + Hop_self`
+2. After class's `forward_and_latent_grads` accumulates backward grad: `latent_grad = PC_self + Hop_self + Top_down`
 
 **Instrumentation:** Write `instrumented_forward_value_and_grad()` that replicates the loop from `inference.py:128-171` but captures snapshots of `hopfield.latent_grad` after the hopfield node processes (before class backward) and after class backward. Then decompose:
 

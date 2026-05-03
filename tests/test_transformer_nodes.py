@@ -113,7 +113,7 @@ class TestEmbeddingNode:
 
     def test_gradient_blocking(self, embedding_graph, rng_key):
         """
-        Critical Test: Ensure forward_inference returns 0 gradients for inputs.
+        Critical Test: Ensure forward_and_latent_grads returns 0 gradients for inputs.
         Discrete inputs cannot receive gradients.
         """
         params, structure = embedding_graph
@@ -132,8 +132,8 @@ class TestEmbeddingNode:
         # Inputs gathered from the "indices" node
         inputs = {"indices->embed:in": input_indices}
 
-        # Call forward_inference directly
-        new_state, input_grads, self_grad = EmbeddingNode.forward_inference(
+        # Call forward_and_latent_grads directly
+        new_state, input_grads, self_grad = EmbeddingNode.forward_and_latent_grads(
             node_params, inputs, node_state, node_info
         )
 

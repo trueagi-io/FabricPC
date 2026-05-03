@@ -323,17 +323,17 @@ The mixin provides:
 
 ### Explicit Gradients
 
-By default, JAX autodiff computes gradients during learning. For hand-coded gradients (e.g., for efficiency or control), override `forward_inference()` and `forward_learning()`:
+By default, JAX autodiff computes gradients during learning. For hand-coded gradients (e.g., for efficiency or control), override `forward_and_latent_grads()` and `forward_and_weight_grads()`:
 
 ```python
 class MyNode(NodeBase):
     @staticmethod
-    def forward_inference(params, inputs, state, node_info):
+    def forward_and_latent_grads(params, inputs, state, node_info):
         # Forward pass for inference (same as forward())
         return MyNode.forward(params, inputs, state, node_info)
 
     @staticmethod
-    def forward_learning(params, inputs, state, node_info, scaling_factors=None):
+    def forward_and_weight_grads(params, inputs, state, node_info, scaling_factors=None):
         # Forward pass with explicit gradient computation
         # ...
         # Return (total_energy, updated_state, custom_grads)
@@ -449,7 +449,7 @@ Creating custom nodes involves:
 4. **Implement `forward()`**: Compute predictions, errors, and energy
 5. **Optional overrides**:
    - `get_weight_fan_in()`: For correct muPC scaling
-   - `forward_inference()` / `forward_learning()`: For explicit gradients
+   - `forward_and_latent_grads()` / `forward_and_weight_grads()`: For explicit gradients
 6. **Test**: Verify shapes, energy convergence, and gradient flow
 
 With these methods in place, your custom node integrates seamlessly with the rest of FabricPC's infrastructure: graph building, inference, learning, and scaling.
