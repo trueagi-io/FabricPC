@@ -209,7 +209,7 @@ def _forward_phase(params, state, clamps, structure):
 
 ## Integration: `graph()` builder
 
-### `fabricpc/builder/graph_builder.py`
+### `fabricpc/builder/graph_construction.py`
 
 Add `inference` parameter to `graph()`, store in `GraphStructure.config`:
 
@@ -283,7 +283,7 @@ This means **all 31 existing call sites continue to work without changes** durin
 
 ### Phase 2: Builder integration (1 file)
 
-3. **`fabricpc/builder/graph_builder.py`** — Add `inference=None` parameter to `graph()`, default to `InferenceSGD()`, store in config.
+3. **`fabricpc/builder/graph_construction.py`** — Add `inference=None` parameter to `graph()`, default to `InferenceSGD()`, store in config.
 
 ### Phase 3: Remove `eta_infer` and `infer_steps` from training callers (4 files)
 
@@ -332,7 +332,7 @@ Move `eta_infer` and `infer_steps` from `train_config` to `graph(..., inference=
 4. Remove `substructure={}` from state initializers and all `NodeState(...)` constructors in tests
 5. Add `InferenceBase`, `InferenceSGD`, `_forward_phase()` to `fabricpc/core/inference.py` — keep existing functions as backward-compatible wrappers, remove substructure reset loop
 6. Export new classes from `fabricpc/core/__init__.py`
-7. Add `inference` param to `graph()` in `fabricpc/builder/graph_builder.py`
+7. Add `inference` param to `graph()` in `fabricpc/builder/graph_construction.py`
 8. Update training callers (4 files) to drop `eta_infer` and `infer_steps` passthrough
 9. Update `inference_tracking.py` to use inference object
 10. Update examples (8 files) to set `eta_infer` and `infer_steps` on inference object
@@ -407,7 +407,7 @@ Remove `substructure: Dict[str, jnp.ndarray]` field from `NodeState` NamedTuple.
   - _forward_phase() extracts shared Phase 1-2 logic                                                                                                
   - Backward-compatible run_inference() / inference_step() wrapper functions preserved                                                              
                                                                                                                                                     
-  3. Integrated with graph() builder (graph_builder.py)                                                                                             
+  3. Integrated with graph() builder (graph_construction.py)                                                                                             
   - New inference= parameter, defaults to InferenceSGD()                                                                                            
   - Stored in GraphStructure.config["inference"]                                                                                                    
                                                                                                                                                     

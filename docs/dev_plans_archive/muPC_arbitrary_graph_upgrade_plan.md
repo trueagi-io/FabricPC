@@ -180,7 +180,7 @@ class MuPCConfig:
 
 Emit `DeprecationWarning` in `__post_init__` if `depth_metric` is provided.
 
-### Step 2: Pass `node_order` in `fabricpc/builder/graph_builder.py`
+### Step 2: Pass `node_order` in `fabricpc/builder/graph_construction.py`
 
 Line 189, change:
 ```python
@@ -239,7 +239,7 @@ Print per-layer forward scales for a 20-layer chain and verify:
 |------|--------|
 | `fabricpc/nodes/identity.py` | Override `get_weight_fan_in()` to return 1 (no weight matrix) |
 | `fabricpc/core/mupc.py` | Remove depth metric usage; remove `has_weights()` check; rewrite `compute_mupc_scalings()` with unified `a=1/sqrt(fan_in*K)` formula; update `MuPCConfig` (add `terminal_input_variance`, deprecate `depth_metric`/`min_depth`) |
-| `fabricpc/builder/graph_builder.py` | Pass `node_order` to `compute_mupc_scalings()` (1-line change) |
+| `fabricpc/builder/graph_construction.py` | Pass `node_order` to `compute_mupc_scalings()` (1-line change) |
 | `examples/mupc_mnist_demo.py` | Remove depth_metric; add `--infer_steps`/`--eta_infer` args |
 | `tests/test_mupc.py` | New `TestVariancePropagation` class; update existing formula tests; backward-compat test |
 | `scripts/diagnose_deep_mupc.py` | **New file**: temporary diagnostic for verifying the fix |
@@ -266,7 +266,7 @@ Core formula change: a = 1/sqrt(fan_in * K)
   |-----------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------|                                                                                                                
   | fabricpc/nodes/identity.py        | Added get_weight_fan_in() override returning 1 (no weight matrix)                                                                                 |                                                                                                                
   | fabricpc/core/mupc.py             | Rewrote compute_mupc_scalings() — removed depth metric and has_weights() checks; unified formula; deprecated depth_metric/min_depth on MuPCConfig |                                                                                                                
-  | fabricpc/builder/graph_builder.py | Pass node_order to compute_mupc_scalings()                                                                                                        |                                                                                                                
+  | fabricpc/builder/graph_construction.py | Pass node_order to compute_mupc_scalings()                                                                                                        |                                                                                                                
   | examples/mupc_mnist_demo.py       | Removed ShortestPathDepth, added --infer_steps/--eta_infer CLI args                                                                               |                                                                                                                
   | tests/test_mupc.py                | New TestVariancePropagation (5 tests), TestBackwardCompatibility (3 tests), updated TestIdentityNodeScaling                                       |                                                                                                                
   | scripts/diagnose_deep_mupc.py     | New diagnostic script                                                                                                                             |                                                                                                                

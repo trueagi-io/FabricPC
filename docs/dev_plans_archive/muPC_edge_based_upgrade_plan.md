@@ -15,7 +15,7 @@ This plan introduces:
 |------|--------|
 | `fabricpc/nodes/base.py` | Add `is_variance_scalable` to `SlotSpec` |
 | `fabricpc/core/types.py` | Add `is_variance_scalable` to `SlotInfo` |
-| `fabricpc/builder/graph_builder.py` | Propagate `is_variance_scalable` from SlotSpec → SlotInfo |
+| `fabricpc/builder/graph_construction.py` | Propagate `is_variance_scalable` from SlotSpec → SlotInfo |
 | `fabricpc/core/mupc.py` | Redesign scaling algorithm for per-edge, per-slot scaling |
 | `fabricpc/nodes/linear_residual.py` | **New file**: `LinearResidual` node |
 | `fabricpc/nodes/skip_connection.py` | Update slot to `is_variance_scalable=False` |
@@ -50,9 +50,9 @@ class SlotInfo:
     in_neighbors: Tuple[str, ...]
 ```
 
-## Step 3: Propagate in graph_builder
+## Step 3: Propagate in graph_construction
 
-**File:** `fabricpc/builder/graph_builder.py:32-55` — `_build_slots()`
+**File:** `fabricpc/builder/graph_construction.py:32-55` — `_build_slots()`
 
 Add `is_variance_scalable=slot_spec.is_variance_scalable` when constructing `SlotInfo` (line 48).
 
@@ -309,7 +309,7 @@ N blocks → N+2 nodes (vs 2N+2), 2N+1 edges (vs 3N+2). Graph depth halved.
                                                                                                                                                                                                                                                                                                            
   1. SlotSpec (base.py): Added is_variance_scalable: bool = True — per-slot control over muPC scaling                                                                                                                                                                                                      
   2. SlotInfo (types.py): Added is_variance_scalable field, propagated from SlotSpec                                                                                                                                                                                                                       
-  3. graph_builder.py: Passes is_variance_scalable from SlotSpec to SlotInfo during graph construction                                                                                                                                                                                                     
+  3. graph_construction.py: Passes is_variance_scalable from SlotSpec to SlotInfo during graph construction                                                                                                                                                                                                     
   4. SkipConnection (skip_connection.py): Slot now explicitly declares is_variance_scalable=False                                                                                                                                                                                                          
   5. LinearResidual (linear_residual.py): New node with "in" (scalable, weighted) and "skip" (non-scalable, identity) slots. z_mu = activation(W @ x_in + b) + x_skip                                                                                                                                      
   6. mupc.py: Redesigned algorithm:                                                                                                                                                                                                                                                                        
@@ -354,7 +354,7 @@ Add new SlotSpec attribute is_skip_connection as condition for muPC depth scalin
   Core dataclass changes:
   - fabricpc/nodes/base.py — Added is_skip_connection: bool = False to SlotSpec with __post_init__ that auto-forces is_variance_scalable=False
   - fabricpc/core/types.py — Added is_skip_connection: bool to SlotInfo
-  - fabricpc/builder/graph_builder.py — Propagates is_skip_connection from SlotSpec to SlotInfo
+  - fabricpc/builder/graph_construction.py — Propagates is_skip_connection from SlotSpec to SlotInfo
 
   muPC logic:
   - fabricpc/core/mupc.py — Renamed _count_unscalable_depth() to _count_skip_connections_depth(), now checks s.is_skip_connection instead of not s.is_variance_scalable. Updated docstrings.

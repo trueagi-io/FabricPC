@@ -14,7 +14,7 @@ from fabricpc.graph.state_initializer import (
     initialize_graph_state,
 )
 
-# TODO rename this module to something more specific about initializing the graph state and parameters, like graph_initialization.py or graph_utils.py. The current name is too generic and doesn't reflect the fact that this module contains functions related to initializing the graph state and parameters, rather than the main graph construction function (graph) which is in builder.graph_builder.
+# TODO rename this module to something more specific about initializing the graph state and parameters, like graph_initialization.py or graph_utils.py.
 
 __all__ = [
     # Graph construction

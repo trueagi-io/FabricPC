@@ -270,7 +270,7 @@ class Edge:
 ### `fabricpc/builder/namespace.py`
 Thread-local stack-based `GraphNamespace` context manager.
 
-### `fabricpc/builder/graph_builder.py`
+### `fabricpc/builder/graph_construction.py`
 
 **`TaskMap`**: Accepts node objects or strings. Auto-resolves `.name`.
 
@@ -321,10 +321,11 @@ def graph(nodes, edges, task_map, graph_state_initializer=None) -> GraphStructur
 ```
 
 ### `fabricpc/builder/__init__.py`
+
 ```python
 from fabricpc.builder.edge import Edge, SlotRef
 from fabricpc.builder.namespace import GraphNamespace
-from fabricpc.builder.graph_builder import graph, TaskMap
+from fabricpc.builder.graph_construction import graph, TaskMap
 ```
 
 ---
@@ -427,7 +428,7 @@ grad = type(energy_obj).grad_latent(z_latent, z_mu, energy_obj.config)
 | `fabricpc/builder/__init__.py` | **NEW** | Edge, SlotRef, GraphNamespace, graph, TaskMap |
 | `fabricpc/builder/edge.py` | **NEW** | Edge, SlotRef |
 | `fabricpc/builder/namespace.py` | **NEW** | GraphNamespace context manager |
-| `fabricpc/builder/graph_builder.py` | **NEW** | graph(), TaskMap, _build_slots, _topological_sort |
+| `fabricpc/builder/graph_construction.py` | **NEW** | graph(), TaskMap, _build_slots, _topological_sort |
 | `fabricpc/core/activations.py` | **MODIFY** | Remove registry; add __init__ to each class; rewrite get_activation() |
 | `fabricpc/core/energy.py` | **MODIFY** | Remove registry; add __init__; rewrite compute functions |
 | `fabricpc/core/initializers.py` | **MODIFY** | Remove registry; add __init__ |
@@ -513,7 +514,7 @@ The state initializer refactor is complete. Here's a summary of all changes:
   Core changes:                                                                                                                                                                                                                            
   - fabricpc/graph/state_initializer.py — Added __init__(**config) to StateInitBase and typed constructors to all 3 concrete classes. Removed the entire registry (_state_init_registry, register_state_init, get_state_init_class, list_state_init_types). Updated initialize_graph_state() parameter from state_init_config: Dict to state_init: StateInitBase.
   - fabricpc/graph/__init__.py — Removed registry exports, added GlobalStateInit, NodeDistributionStateInit, FeedforwardStateInit.                                                                                                         
-  - fabricpc/builder/graph_builder.py — Default changed from {"type": "feedforward"} to FeedforwardStateInit(). Updated docstring.                                                                                                         
+  - fabricpc/builder/graph_construction.py — Default changed from {"type": "feedforward"} to FeedforwardStateInit(). Updated docstring.                                                                                                         
                                                                                                                                                                                                                                            
   Caller updates (removed state_init_config= kwarg, now uses default from structure config):                                                                                                                                               
   - fabricpc/training/train.py — 2 call sites                                                                                                                                                                                              

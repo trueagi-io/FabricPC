@@ -312,7 +312,7 @@ NEW FILES:
 MODIFIED FILES:
   fabricpc/core/initializers.py      - Add MuPCInitializer class
   fabricpc/core/types.py             - Add scaling_config field to NodeInfo
-  fabricpc/builder/graph_builder.py  - Compute and attach scaling factors at build time
+  fabricpc/builder/graph_construction.py  - Compute and attach scaling factors at build time
   fabricpc/nodes/base.py             - Apply scaling in forward_and_latent_grads, forward_and_weight_grads, energy_functional
                                        (NO changes to any node's forward() method!)
 ```
@@ -425,7 +425,7 @@ class NodeInfo:
 
 This is part of the static graph structure (not a pytree leaf), so it doesn't affect JAX tracing.
 
-### Step 5: Compute and Attach Scalings at Graph Build Time — in `fabricpc/builder/graph_builder.py`
+### Step 5: Compute and Attach Scalings at Graph Build Time — in `fabricpc/builder/graph_construction.py`
 
 Modify the `graph()` function to optionally accept a `scaling` parameter:
 
@@ -598,7 +598,7 @@ structure = graph(
 2. `fabricpc/core/initializers.py` — add `MuPCInitializer` class
 3. `fabricpc/core/mupc.py` — new file, depends on depth_metric
 4. `fabricpc/core/types.py` — add `scaling_config` to `NodeInfo`
-5. `fabricpc/builder/graph_builder.py` — compute and attach scalings
+5. `fabricpc/builder/graph_construction.py` — compute and attach scalings
 6. `fabricpc/nodes/base.py` — apply all four scalings via input pre-scaling + post-hoc gradient corrections
 7. Tests and example script
 
@@ -623,7 +623,7 @@ Implementation Summary
                                                                                                                                                                                                                              
   - fabricpc/core/initializers.py — Added MuPCInitializer (W ~ N(0, gain^2), unit-variance weights with scaling decoupled to forward pass)                                                                                   
   - fabricpc/core/types.py — Added scaling_config: Any = None field to NodeInfo                                                                                                                                              
-  - fabricpc/builder/graph_builder.py — Added optional scaling parameter to graph(). When a MuPCConfig is provided, computes per-node scalings and attaches them to NodeInfo.scaling_config                                  
+  - fabricpc/builder/graph_construction.py — Added optional scaling parameter to graph(). When a MuPCConfig is provided, computes per-node scalings and attaches them to NodeInfo.scaling_config                                  
   - fabricpc/nodes/base.py — Applied all four scalings without modifying any node's forward():                                                                                                                               
     - _apply_forward_scaling(): pre-scales inputs by per-edge forward_scale (since W@(ax) = a(W@x))                                                                                                                          
     - forward_and_latent_grads(): pre-scales inputs + applies topdown_grad_scale to input_grads after autodiff                                                                                                                      
