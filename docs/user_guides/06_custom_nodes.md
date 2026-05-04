@@ -250,8 +250,8 @@ The forward method must:
 ### Step 6: Use the Custom Node
 
 ```python
-from fabricpc.graph_initialization.builder import graph, Edge
-from fabricpc.graph_initialization.task_map import TaskMap
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import graph, TaskMap
 
 # Create nodes
 input_node = IdentityNode(shape=(28, 28, 1), name="input")
@@ -401,10 +401,10 @@ Example test:
 ```python
 import jax
 import jax.numpy as jnp
-from fabricpc.graph_initialization.builder import graph, Edge
-from fabricpc.graph_initialization.task_map import TaskMap
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import graph, TaskMap
 from fabricpc.core.inference import InferenceSGD
-from fabricpc.core.initializers import initialize_params
+from fabricpc.graph_initialization import initialize_params
 
 
 def test_conv2d_energy_decreases():

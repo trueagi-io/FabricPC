@@ -76,7 +76,7 @@ A node cannot connect to itself via an Edge. The graph builder will raise an err
 
 Each node must have a unique name. Use `GraphNamespace` for scoped naming:
 ```python
-from fabricpc.builder.namespace import GraphNamespace
+from fabricpc.core.topology import GraphNamespace
 with GraphNamespace("encoder"):
     h1 = Linear(shape=(256,), name="h1")  # becomes "encoder/h1"
 ```

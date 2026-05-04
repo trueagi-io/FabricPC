@@ -37,14 +37,15 @@ import dataclasses
 import jax
 import jax.numpy as jnp
 
-from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
 from fabricpc.core.activations import IdentityActivation, TanhActivation
 from fabricpc.core.inference import InferenceSGD
 from fabricpc.core.initializers import NormalInitializer
 from fabricpc.core.mupc import MuPCConfig, MuPCScalingFactors
 from fabricpc.core.types import GraphParams, GraphState
 from fabricpc.graph_initialization import initialize_params
-from fabricpc.utils.helpers import set_latents_to_clamps
+from fabricpc.core.state_ops import set_latents_to_clamps
 from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 from fabricpc.nodes import Linear
 from fabricpc.nodes.identity import IdentityNode

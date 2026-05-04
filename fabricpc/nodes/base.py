@@ -42,6 +42,7 @@ import jax.numpy as jnp
 import numpy as np
 from dataclasses import dataclass
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo, SlotInfo, EdgeInfo
+from fabricpc.core.topology import SlotRef, _get_current_namespace
 
 if TYPE_CHECKING:
     from fabricpc.core.activations import ActivationBase
@@ -182,8 +183,6 @@ class NodeBase(ABC):
             weight_init: InitializerBase instance, or None
             **extra_config: Node-specific config (use_bias, flatten_input, etc.)
         """
-        from fabricpc.builder.namespace import _get_current_namespace
-
         ns = _get_current_namespace()
         self._name = f"{ns}/{name}" if ns else name
         self._shape = tuple(shape)
@@ -224,8 +223,6 @@ class NodeBase(ABC):
         Raises:
             KeyError: If slot_name is not defined for this node type
         """
-        from fabricpc.builder.edge import SlotRef
-
         slot_specs = type(self).get_slots()
         if slot_name not in slot_specs:
             raise KeyError(

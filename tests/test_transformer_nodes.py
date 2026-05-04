@@ -22,7 +22,8 @@ from fabricpc.core.inference import run_inference, InferenceSGD
 from fabricpc.training import train_step
 import optax
 from fabricpc.nodes import Linear
-from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
 
 from fabricpc.nodes.transformer_v2 import (
     EmbeddingNode,

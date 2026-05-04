@@ -26,7 +26,8 @@ from fabricpc.utils.helpers import layernorm
 
 # Builder Imports
 from fabricpc.nodes.linear import Linear
-from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
 from fabricpc.core.activations import (
     GeluActivation,
     IdentityActivation,

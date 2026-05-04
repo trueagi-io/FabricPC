@@ -33,7 +33,7 @@ from fabricpc.core.types import (
     GraphParams,
     NodeState,
 )
-from fabricpc.utils.helpers import set_latents_to_clamps
+from fabricpc.core.state_ops import set_latents_to_clamps
 
 # =============================================================================
 # State Initializer Base Class

@@ -36,7 +36,8 @@ import jax.numpy as jnp
 import optax
 
 from fabricpc.nodes import IdentityNode, StorkeyHopfield
-from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
 from fabricpc.graph_initialization import initialize_params
 from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 from fabricpc.core.inference import InferenceSGD, run_inference

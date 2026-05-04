@@ -2,11 +2,11 @@
 
 import types
 from dataclasses import replace
-from typing import List, Dict, Any, Optional, Tuple, Union
+from typing import List, Dict, Optional, Tuple
 from fabricpc.core.types import GraphStructure, NodeInfo, EdgeInfo, SlotInfo
 from fabricpc.core.inference import InferenceBase
 from fabricpc.core.mupc import MuPCConfig, compute_mupc_scalings
-from fabricpc.builder.edge import Edge, SlotRef
+from fabricpc.core.topology import Edge, SlotRef
 from fabricpc.nodes.base import NodeBase
 from fabricpc.graph_initialization.state_initializer import (
     StateInitBase,

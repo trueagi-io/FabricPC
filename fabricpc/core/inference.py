@@ -37,7 +37,7 @@ from fabricpc.core.types import (
     NodeInfo,
     NodeState,
 )
-from fabricpc.utils.helpers import update_node_in_state
+from fabricpc.core.state_ops import update_node_in_state
 
 # =============================================================================
 # Utility Functions

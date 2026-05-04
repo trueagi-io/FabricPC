@@ -15,10 +15,11 @@ import jax
 import jax.numpy as jnp
 
 from fabricpc.nodes import Linear, IdentityNode
-from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
 from fabricpc.graph_initialization import initialize_params
 from fabricpc.graph_initialization.state_initializer import initialize_graph_state
-from fabricpc.utils.helpers import set_latents_to_clamps
+from fabricpc.core.state_ops import set_latents_to_clamps
 from fabricpc.core.learning import compute_local_weight_gradients
 from fabricpc.core.activations import IdentityActivation, TanhActivation
 from fabricpc.core.inference import InferenceSGD, run_inference

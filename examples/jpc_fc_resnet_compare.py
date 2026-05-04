@@ -104,7 +104,8 @@ import optax
 
 from fabricpc.nodes import IdentityNode
 from fabricpc.nodes.base import NodeBase, SlotSpec
-from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
 from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.activations import IdentityActivation, ReLUActivation
 from fabricpc.core.energy import GaussianEnergy

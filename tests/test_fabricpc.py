@@ -20,7 +20,8 @@ import optax
 from fabricpc.training import train_step
 from fabricpc.nodes import Linear
 from fabricpc.nodes.identity import IdentityNode
-from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
 from fabricpc.core.activations import (
     IdentityActivation,
     ReLUActivation,

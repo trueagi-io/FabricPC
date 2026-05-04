@@ -19,7 +19,8 @@ import numpy as np
 from fabricpc.nodes import Linear
 from fabricpc.nodes.identity import IdentityNode
 from fabricpc.nodes.transformer import TransformerBlock
-from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
 from fabricpc.core.inference import InferenceSGD
 from fabricpc.core.mupc import MuPCConfig
 from fabricpc.core.initializers import MuPCInitializer

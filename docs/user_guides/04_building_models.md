@@ -311,7 +311,7 @@ Edge(source=skip_connection, target=output.slot("in"))
 The `TaskMap` connects your data to nodes in the graph:
 
 ```python
-from fabricpc.graph_initialization.task_map import TaskMap
+from fabricpc.graph_assembly import TaskMap
 
 task_map = TaskMap(x=input_node, y=output_node)
 ```
@@ -327,8 +327,8 @@ The task map tells FabricPC which nodes to clamp during supervised learning.
 The `graph()` builder function assembles nodes, edges, and configuration into an immutable `GraphStructure`:
 
 ```python
-from fabricpc.graph_initialization.builder import graph
-from fabricpc.graph_initialization.task_map import TaskMap
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import graph, TaskMap
 from fabricpc.core.inference import InferenceSGD
 from fabricpc.core.mupc import MuPCConfig
 

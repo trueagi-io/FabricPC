@@ -55,7 +55,8 @@ from fabricpc.nodes import (
     SkipConnection,
     EmbeddingNode,
 )
-from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
 from fabricpc.graph_initialization import initialize_params, FeedforwardStateInit
 from fabricpc.core.mupc import MuPCConfig
 from fabricpc.core.activations import (

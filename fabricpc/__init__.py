@@ -13,7 +13,8 @@ Key Features:
 
 Example:
     >>> from fabricpc.nodes import Linear
-    >>> from fabricpc.builder import Edge, TaskMap, graph
+    >>> from fabricpc.core.topology import Edge
+    >>> from fabricpc.graph_assembly import TaskMap, graph
     >>> from fabricpc.graph_initialization import initialize_params
     >>> from fabricpc.training import train_pcn, evaluate_pcn
     >>>
@@ -42,13 +43,16 @@ from importlib.metadata import version
 __version__ = version("fabricpc")
 
 # Submodules (for advanced use)
+# nodes must precede graph_assembly: graph_assembly imports nodes.base,
+# and nodes.transformer_v2 imports back from graph_assembly. Loading nodes
+# first ensures nodes.base is fully initialized before graph_assembly runs.
 from fabricpc import (
     core,
     graph_initialization,
     nodes,
     training,
     utils,
-    builder,
+    graph_assembly,
     experiments,
 )
 
@@ -70,9 +74,9 @@ __all__ = [
     "GraphStructure",
     # Submodules (advanced use)
     "core",
+    "graph_assembly",
     "graph_initialization",
     "nodes",
-    "builder",
     "training",
     "utils",
     "experiments",
