@@ -37,13 +37,15 @@ def layernorm(
     return gamma * (x - mean) / jnp.sqrt(variance + eps) + beta
 
 
-# TODO call this method to reduce boilerplate code for clamping latents in training loops.
 def set_latents_to_clamps(
     state: GraphState,
     clamps: Dict[str, jnp.ndarray],
 ) -> GraphState:
     """
     Set the latent states of specified nodes to their clamped values.
+
+    The clamp's dtype is preserved (e.g. integer token indices stay int).
+    Callers that need a specific dtype should cast values before applying clamps.
 
     Args:
         state: Current graph state
@@ -55,6 +57,6 @@ def set_latents_to_clamps(
     for node_name, clamp_value in clamps.items():
         if node_name in state.nodes:
             state = update_node_in_state(
-                state, node_name, z_latent=jnp.asarray(clamp_value, dtype=jnp.float32)
+                state, node_name, z_latent=jnp.asarray(clamp_value)
             )
     return state

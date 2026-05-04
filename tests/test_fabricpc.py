@@ -294,14 +294,14 @@ class TestForwardMethods:
         batch_size = 4
 
         node_names = list(structure.nodes.keys())
-        node_keys = jax.random.split(rng_key, len(node_names))
+        rng_keys = jax.random.split(rng_key, len(node_names))
 
         nodes = {}
         for i, (node_name, node) in enumerate(structure.nodes.items()):
             node_info = node.node_info
             full_shape = (batch_size, *node_info.shape)
             nodes[node_name] = NodeState(
-                z_latent=jax.random.normal(node_keys[i], full_shape),
+                z_latent=jax.random.normal(rng_keys[i], full_shape),
                 latent_grad=jnp.zeros(full_shape),
                 z_mu=jnp.zeros(full_shape),
                 error=jnp.zeros(full_shape),

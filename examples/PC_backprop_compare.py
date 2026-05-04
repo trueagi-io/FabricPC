@@ -30,6 +30,7 @@ set_jax_flags_before_importing_jax()  # "cpu", "cuda" or "tpu"
 import jax
 import argparse
 import importlib.util
+import os
 
 from fabricpc.nodes import Linear
 from fabricpc.builder import Edge, TaskMap, graph

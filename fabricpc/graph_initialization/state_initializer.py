@@ -24,6 +24,8 @@ from typing import Dict, Any
 import jax
 import jax.numpy as jnp
 
+from fabricpc.core.inference import gather_inputs
+from fabricpc.core.initializers import initialize, NormalInitializer
 from fabricpc.core.scaling import scale_inputs
 from fabricpc.core.types import (
     GraphState,
@@ -31,6 +33,7 @@ from fabricpc.core.types import (
     GraphParams,
     NodeState,
 )
+from fabricpc.utils.helpers import set_latents_to_clamps
 
 # =============================================================================
 # State Initializer Base Class
@@ -116,15 +119,13 @@ class GlobalStateInit(StateInitBase):
         params: GraphParams = None,
     ) -> GraphState:
         """Initialize states from a distribution."""
-        from fabricpc.core.initializers import initialize, NormalInitializer
-
         global_init_config = config.get("initializer", None)
         if global_init_config is None:
             global_init_config = NormalInitializer(mean=0.0, std=0.05)
 
         node_names = list(structure.nodes.keys())
-        node_keys = jax.random.split(rng_key, len(node_names))
-        node_key_map = dict(zip(node_names, node_keys))
+        rng_keys = jax.random.split(rng_key, len(node_names))
+        rng_key_map = dict(zip(node_names, rng_keys))
 
         node_state_dict = {}
 
@@ -132,23 +133,24 @@ class GlobalStateInit(StateInitBase):
             node_info = node.node_info
             shape = (batch_size, *node_info.shape)
 
-            if node_name in clamps:
-                z_latent = jnp.asarray(clamps[node_name], dtype=jnp.float32)
-            else:
-                z_latent = initialize(
-                    node_key_map[node_name], shape, global_init_config
-                )
-
-            node_state_dict[node_name] = NodeState(
-                z_latent=z_latent,
-                z_mu=jnp.zeros(shape),
-                error=jnp.zeros(shape),
-                energy=jnp.zeros((batch_size,)),
-                pre_activation=jnp.zeros(shape),
-                latent_grad=jnp.zeros(shape),
+            z_latent = initialize(rng_key_map[node_name], shape, global_init_config)
+            dtype = (
+                jnp.asarray(clamps[node_name]).dtype
+                if node_name in clamps
+                else z_latent.dtype
             )
 
-        return GraphState(nodes=node_state_dict, batch_size=batch_size)
+            node_state_dict[node_name] = NodeState(
+                z_latent=z_latent.astype(dtype),
+                z_mu=jnp.zeros(shape, dtype=dtype),
+                error=jnp.zeros(shape, dtype=dtype),
+                energy=jnp.zeros((batch_size,), dtype=dtype),
+                pre_activation=jnp.zeros(shape, dtype=dtype),
+                latent_grad=jnp.zeros(shape, dtype=dtype),
+            )
+
+        state = GraphState(nodes=node_state_dict, batch_size=batch_size)
+        return set_latents_to_clamps(state, clamps)
 
 
 class NodeDistributionStateInit(StateInitBase):
@@ -171,11 +173,9 @@ class NodeDistributionStateInit(StateInitBase):
         params: GraphParams = None,
     ) -> GraphState:
         """Initialize states from a distribution."""
-        from fabricpc.core.initializers import initialize
-
         node_names = list(structure.nodes.keys())
-        node_keys = jax.random.split(rng_key, len(node_names))
-        node_key_map = dict(zip(node_names, node_keys))
+        rng_keys = jax.random.split(rng_key, len(node_names))
+        rng_key_map = dict(zip(node_names, rng_keys))
 
         node_state_dict = {}
 
@@ -183,22 +183,25 @@ class NodeDistributionStateInit(StateInitBase):
             node_info = node.node_info
             shape = (batch_size, *node_info.shape)
 
-            if node_name in clamps:
-                z_latent = jnp.asarray(clamps[node_name], dtype=jnp.float32)
-            else:
-                latent_init = node_info.latent_init
-                z_latent = initialize(node_key_map[node_name], shape, latent_init)
-
-            node_state_dict[node_name] = NodeState(
-                z_latent=z_latent,
-                z_mu=jnp.zeros(shape),
-                error=jnp.zeros(shape),
-                energy=jnp.zeros((batch_size,)),
-                pre_activation=jnp.zeros(shape),
-                latent_grad=jnp.zeros(shape),
+            latent_init = node_info.latent_init
+            z_latent = initialize(rng_key_map[node_name], shape, latent_init)
+            dtype = (
+                jnp.asarray(clamps[node_name]).dtype
+                if node_name in clamps
+                else z_latent.dtype
             )
 
-        return GraphState(nodes=node_state_dict, batch_size=batch_size)
+            node_state_dict[node_name] = NodeState(
+                z_latent=z_latent.astype(dtype),
+                z_mu=jnp.zeros(shape, dtype=dtype),
+                error=jnp.zeros(shape, dtype=dtype),
+                energy=jnp.zeros((batch_size,), dtype=dtype),
+                pre_activation=jnp.zeros(shape, dtype=dtype),
+                latent_grad=jnp.zeros(shape, dtype=dtype),
+            )
+
+        state = GraphState(nodes=node_state_dict, batch_size=batch_size)
+        return set_latents_to_clamps(state, clamps)
 
 
 class FeedforwardStateInit(StateInitBase):
@@ -226,38 +229,39 @@ class FeedforwardStateInit(StateInitBase):
         params: GraphParams = None,
     ) -> GraphState:
         """Initialize states via feedforward propagation."""
-        from fabricpc.core.initializers import initialize
-        from fabricpc.core.inference import gather_inputs
-
         if params is None:
             raise ValueError("FeedforwardStateInit requires params to be provided")
 
         node_names = list(structure.nodes.keys())
-        node_keys = jax.random.split(rng_key, len(node_names))
-        node_key_map = dict(zip(node_names, node_keys))
+        rng_keys = jax.random.split(rng_key, len(node_names))
+        rng_key_map = dict(zip(node_names, rng_keys))
 
-        # First pass: initialize all nodes with clamps or fallback in case of graph cycles
+        # First pass: initialize all nodes with their default initializer (used as
+        # fallback for graph cycles). Clamps are overlaid afterwards.
         node_state_dict = {}
         for node_name, node in structure.nodes.items():
             node_info = node.node_info
             shape = (batch_size, *node_info.shape)
 
-            if node_name in clamps:
-                z_latent = jnp.asarray(clamps[node_name], dtype=jnp.float32)
-            else:
-                latent_init = node_info.latent_init
-                z_latent = initialize(node_key_map[node_name], shape, latent_init)
+            latent_init = node_info.latent_init
+            z_latent = initialize(rng_key_map[node_name], shape, latent_init)
+            dtype = (
+                jnp.asarray(clamps[node_name]).dtype
+                if node_name in clamps
+                else z_latent.dtype
+            )
 
             node_state_dict[node_name] = NodeState(
-                z_latent=z_latent,
-                z_mu=jnp.zeros(shape),
-                error=jnp.zeros(shape),
-                energy=jnp.zeros((batch_size,)),
-                pre_activation=jnp.zeros(shape),
-                latent_grad=jnp.zeros(shape),
+                z_latent=z_latent.astype(dtype),
+                z_mu=jnp.zeros(shape, dtype=dtype),
+                error=jnp.zeros(shape, dtype=dtype),
+                energy=jnp.zeros((batch_size,), dtype=dtype),
+                pre_activation=jnp.zeros(shape, dtype=dtype),
+                latent_grad=jnp.zeros(shape, dtype=dtype),
             )
 
         state = GraphState(nodes=node_state_dict, batch_size=batch_size)
+        state = set_latents_to_clamps(state, clamps)
 
         # Second pass: feedforward propagation in topological order
         for node_name in structure.node_order:
@@ -286,13 +290,13 @@ class FeedforwardStateInit(StateInitBase):
                     )  # leave energy and error already initialized to zeros
 
                 else:
-                    # Respect clamped values, retain newly computed error
+                    # z_latent already set to clamp by first pass + set_latents_to_clamps;
+                    # retain newly computed z_mu/error/energy
                     node_state = node_state._replace(
-                        z_latent=jnp.asarray(clamps[node_name], dtype=jnp.float32),
                         z_mu=projected.z_mu,
                         error=projected.error,
                         energy=projected.energy,
-                    )  # error and energy are valid for clamped nodes
+                    )
 
                 # Update state
                 state = state._replace(nodes={**state.nodes, node_name: node_state})

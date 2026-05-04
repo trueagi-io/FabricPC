@@ -1,6 +1,6 @@
 """JAX graph for predictive coding networks."""
 
-from fabricpc.graph_initialization.graph_net import (
+from fabricpc.graph_initialization.params_initializer import (
     initialize_params,
 )
 
