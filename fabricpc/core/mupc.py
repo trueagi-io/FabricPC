@@ -106,6 +106,13 @@ class MuPCScalingFactors:
     topdown_grad_scale: Dict[str, float]
     weight_grad_scale: Dict[str, float]
 
+    # Edges arriving at non-variance-scalable slots are absent from all three
+    # per-edge dicts (forward_scale, topdown_grad_scale, weight_grad_scale).
+    # Callsites treat missing keys as identity pass-through (no multiplication),
+    # which preserves input dtype — required for integer clamps that flow from
+    # terminal source nodes into a downstream forward (e.g. token indices into
+    # EmbeddingNode), where x * 1.0 would silently promote int → float.
+
 
 @dataclass(frozen=True)
 class MuPCConfig:
@@ -292,53 +299,55 @@ def compute_mupc_scalings(
             slot_info = node_info.slots[slot_name]
 
             if not slot_info.is_variance_scalable:
-                # Non-scalable slot: identity pass-through at scale 1.0.
-                # weight_grad_scale is intentionally omitted — non-scalable
-                # slots (mask, skip, residual) do not drive weight-gradient
-                # scaling, so their edges are absent from the dict.
-                forward_scale[edge_key] = 1.0
-                topdown_grad_scale[edge_key] = 1.0
+                # Non-scalable slot: identity pass-through. Edge is omitted
+                # from all three per-edge dicts; scaling callsites treat a
+                # missing key as a no-op (no multiplication) instead of
+                # multiplying by 1.0. This preserves input dtype — necessary
+                # for integer clamps flowing from terminal source nodes into
+                # a downstream forward (e.g. token indices into EmbeddingNode),
+                # where x * 1.0 would silently promote int → float.
+                continue
+
+            # Scalable slot: full muPC formula
+            # K_slot = in-degree of this specific slot
+            K_slot = len(slot_info.in_neighbors)
+
+            source_node = nodes[edge_info.source]
+            source_shape = source_node.node_info.shape
+
+            # Unified fan_in from node class. Weighted nodes return their
+            # weight-matrix fan_in (Kaiming convention); weightless nodes
+            # (e.g. IdentityNode) return 1.
+            fan_in = node_class.get_weight_fan_in(source_shape, node_config)
+
+            # Forward scaling formula with activation gain and depth:
+            #   Hidden: a = gain/sqrt(fan_in * K_slot * L)
+            #       — K_slot handles multi-input variance amplification per slot
+            #       — L bounds total variance growth to (1+1/L)^L ~ e
+            #   Output: a = gain/(fan_in * sqrt(K_slot * L))
+            #       — matches muPC O(1/N) convention
+            if is_output:
+                a = gain / (fan_in * math.sqrt(K_slot * L))
             else:
-                # Scalable slot: full muPC formula
-                # K_slot = in-degree of this specific slot
-                K_slot = len(slot_info.in_neighbors)
+                a = gain / math.sqrt(fan_in * K_slot * L)
 
-                source_node = nodes[edge_info.source]
-                source_shape = source_node.node_info.shape
+            forward_scale[edge_key] = a
 
-                # Unified fan_in from node class. Weighted nodes return their
-                # weight-matrix fan_in (Kaiming convention); weightless nodes
-                # (e.g. IdentityNode) return 1.
-                fan_in = node_class.get_weight_fan_in(source_shape, node_config)
+            # Top-down gradient scaling: c_td = a * jacobian_gain.
+            #
+            # Two components:
+            # 1. Chain rule correction (a): scale_inputs() pre-scales
+            #    inputs (x -> a*x) outside the value_and_grad closure. Autodiff
+            #    yields dE/d(a*x); multiplying by a restores dE/dx.
+            # 2. Jacobian compensation (jacobian_gain): the per-hop Jacobian
+            #    diag(act'(z)) @ (a*W) has RMS singular value ~ gain*rms(act'(z)),
+            #    which is < 1 for saturating activations. Multiplying by
+            #    jacobian_gain = 1/(gain*rms(act'(z))) normalizes the expected
+            #    per-hop gradient propagation factor to ~1.0.
+            topdown_grad_scale[edge_key] = a * jac_gain
 
-                # Forward scaling formula with activation gain and depth:
-                #   Hidden: a = gain/sqrt(fan_in * K_slot * L)
-                #       — K_slot handles multi-input variance amplification per slot
-                #       — L bounds total variance growth to (1+1/L)^L ~ e
-                #   Output: a = gain/(fan_in * sqrt(K_slot * L))
-                #       — matches muPC O(1/N) convention
-                if is_output:
-                    a = gain / (fan_in * math.sqrt(K_slot * L))
-                else:
-                    a = gain / math.sqrt(fan_in * K_slot * L)
-
-                forward_scale[edge_key] = a
-
-                # Top-down gradient scaling: c_td = a * jacobian_gain.
-                #
-                # Two components:
-                # 1. Chain rule correction (a): scale_inputs() pre-scales
-                #    inputs (x -> a*x) outside the value_and_grad closure. Autodiff
-                #    yields dE/d(a*x); multiplying by a restores dE/dx.
-                # 2. Jacobian compensation (jacobian_gain): the per-hop Jacobian
-                #    diag(act'(z)) @ (a*W) has RMS singular value ~ gain*rms(act'(z)),
-                #    which is < 1 for saturating activations. Multiplying by
-                #    jacobian_gain = 1/(gain*rms(act'(z))) normalizes the expected
-                #    per-hop gradient propagation factor to ~1.0.
-                topdown_grad_scale[edge_key] = a * jac_gain
-
-                # Weight gradient scaling: 1.0 (optimizer handles magnitude).
-                weight_grad_scale[edge_key] = 1.0
+            # Weight gradient scaling: 1.0 (optimizer handles magnitude).
+            weight_grad_scale[edge_key] = 1.0
 
         # Self-gradient scaling: 1.0
         # The self-gradient (dE/dz from energy_functional) is already O(1)

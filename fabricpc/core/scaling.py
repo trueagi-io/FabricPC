@@ -41,14 +41,17 @@ def scale_inputs(
     this is mathematically equivalent to scaling the node output, but
     keeps all scaling logic outside the node's forward() method.
 
+    Edges arriving at non-variance-scalable slots are absent from
+    forward_scale and pass through unscaled — multiplying by 1.0 would
+    silently promote integer inputs (e.g. token indices feeding an
+    EmbeddingNode) to float.
+
     When scaling_config is None, returns inputs unchanged.
     """
     if scaling_config is None:
         return inputs
-    return {
-        edge_key: x * scaling_config.forward_scale[edge_key]
-        for edge_key, x in inputs.items()
-    }
+    fs = scaling_config.forward_scale
+    return {k: x * fs[k] if k in fs else x for k, x in inputs.items()}
 
 
 def scale_input_grads(
@@ -61,13 +64,14 @@ def scale_input_grads(
     - Chain rule correction (a): restores dE/dx from dE/d(a*x)
     - Jacobian compensation (jacobian_gain): normalizes per-hop gradient
       propagation to ~1.0 for saturating activations
+
+    Edges arriving at non-variance-scalable slots are absent from
+    topdown_grad_scale and pass through unscaled, mirroring scale_inputs.
     """
     if scaling_config is None:
         return input_grads
-    return {
-        edge_key: grad * scaling_config.topdown_grad_scale[edge_key]
-        for edge_key, grad in input_grads.items()
-    }
+    td = scaling_config.topdown_grad_scale
+    return {k: g * td[k] if k in td else g for k, g in input_grads.items()}
 
 
 def scale_self_grad(

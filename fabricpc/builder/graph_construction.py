@@ -63,10 +63,25 @@ def _build_slots(node: NodeBase, in_edges: Dict[str, EdgeInfo]) -> Dict[str, Slo
 
 
 def _topological_sort(
-    nodes: Dict[str, NodeBase], edge_infos: Dict[str, EdgeInfo]
+    nodes: Dict[str, NodeBase], edges: Dict[str, EdgeInfo]
 ) -> Tuple[str, ...]:
-    """BFS-based topological sort."""
+    """
+    BFS-based topological sort. Feedforward traversal for initialization uses this topological ordering of nodes.
+
+    Args:
+        nodes: Dictionary of NodeBase instances (access in_degree/out_edges via node.node_info)
+        edges: Dictionary of EdgeInfo instances
+
+    Returns:
+        Tuple of node names in topological order
+
+    Note:
+        If the graph contains cycles, some nodes may be omitted from the order.
+    """
+    # Count in-degrees from node.node_info
     in_degree = {name: node.node_info.in_degree for name, node in nodes.items()}
+
+    # Queue of nodes, begin with nodes having no incoming edges
     queue = [name for name, deg in in_degree.items() if deg == 0]
     result = []
 
@@ -74,11 +89,14 @@ def _topological_sort(
         node_name = queue.pop(0)
         result.append(node_name)
 
+        # Reduce in-degree of neighbors
         for out_edge_key in nodes[node_name].node_info.out_edges:
-            edge_info = edge_infos[out_edge_key]
+            edge_info = edges[out_edge_key]
             target_name = edge_info.target
             in_degree[target_name] -= 1
+
             if in_degree[target_name] == 0:
+                # Dependencies have been processed, now add next node to the queue
                 queue.append(target_name)
 
     if len(result) != len(nodes):
