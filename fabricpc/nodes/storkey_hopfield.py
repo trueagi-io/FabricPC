@@ -82,6 +82,7 @@ from fabricpc.core.initializers import (
     ZerosInitializer,
     NormalInitializer,
     XavierInitializer,
+    initialize,
 )
 
 if TYPE_CHECKING:
@@ -184,7 +185,6 @@ class StorkeyHopfield(NodeBase):
         """
         if config is None:
             config = {}
-        from fabricpc.core.initializers import initialize
 
         if weight_init is None:
             weight_init = ZerosInitializer()

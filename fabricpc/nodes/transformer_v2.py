@@ -100,8 +100,10 @@ class EmbeddingNode(NodeBase):
         if indices.ndim == 3 and indices.shape[-1] == 1:
             indices = jnp.squeeze(indices, axis=-1)
 
-        indices_int = indices.astype(jnp.int32)
-        z_mu = params.weights["embeddings"][indices_int]
+        # Token indices must reach this node as an integer dtype.
+        # Source-node clamps now propagate dtype through state init, so callers
+        # should clamp with int (e.g. jnp.int32), not float.
+        z_mu = params.weights["embeddings"][indices]
 
         error = state.z_latent - z_mu
         state = state._replace(z_mu=z_mu, error=error)

@@ -114,7 +114,7 @@ def generate(
 
     print(f"--- Generating ---")
     for _ in range(length):
-        input_batch = jnp.array([current_indices], dtype=jnp.float32)
+        input_batch = jnp.array([current_indices], dtype=jnp.int32)
         inputs = {"input_ids": input_batch}
         batch_size = input_batch.shape[0]
 

@@ -134,19 +134,24 @@ class GlobalStateInit(StateInitBase):
             shape = (batch_size, *node_info.shape)
 
             z_latent = initialize(rng_key_map[node_name], shape, global_init_config)
-            dtype = (
+            # Only z_latent tracks the clamp's dtype, so callers can pass integer
+            # indices through to a consuming node (e.g. EmbeddingNode). The
+            # remaining NodeState fields stay float — they are computed in float
+            # by node forward/energy paths regardless of the clamp dtype, and a
+            # mixed-dtype carry would break lax.fori_loop type checks.
+            z_latent_dtype = (
                 jnp.asarray(clamps[node_name]).dtype
                 if node_name in clamps
                 else z_latent.dtype
             )
 
             node_state_dict[node_name] = NodeState(
-                z_latent=z_latent.astype(dtype),
-                z_mu=jnp.zeros(shape, dtype=dtype),
-                error=jnp.zeros(shape, dtype=dtype),
-                energy=jnp.zeros((batch_size,), dtype=dtype),
-                pre_activation=jnp.zeros(shape, dtype=dtype),
-                latent_grad=jnp.zeros(shape, dtype=dtype),
+                z_latent=z_latent.astype(z_latent_dtype),
+                z_mu=jnp.zeros(shape),
+                error=jnp.zeros(shape),
+                energy=jnp.zeros((batch_size,)),
+                pre_activation=jnp.zeros(shape),
+                latent_grad=jnp.zeros(shape),
             )
 
         state = GraphState(nodes=node_state_dict, batch_size=batch_size)
@@ -185,19 +190,19 @@ class NodeDistributionStateInit(StateInitBase):
 
             latent_init = node_info.latent_init
             z_latent = initialize(rng_key_map[node_name], shape, latent_init)
-            dtype = (
+            z_latent_dtype = (
                 jnp.asarray(clamps[node_name]).dtype
                 if node_name in clamps
                 else z_latent.dtype
             )
 
             node_state_dict[node_name] = NodeState(
-                z_latent=z_latent.astype(dtype),
-                z_mu=jnp.zeros(shape, dtype=dtype),
-                error=jnp.zeros(shape, dtype=dtype),
-                energy=jnp.zeros((batch_size,), dtype=dtype),
-                pre_activation=jnp.zeros(shape, dtype=dtype),
-                latent_grad=jnp.zeros(shape, dtype=dtype),
+                z_latent=z_latent.astype(z_latent_dtype),
+                z_mu=jnp.zeros(shape),
+                error=jnp.zeros(shape),
+                energy=jnp.zeros((batch_size,)),
+                pre_activation=jnp.zeros(shape),
+                latent_grad=jnp.zeros(shape),
             )
 
         state = GraphState(nodes=node_state_dict, batch_size=batch_size)
@@ -245,19 +250,19 @@ class FeedforwardStateInit(StateInitBase):
 
             latent_init = node_info.latent_init
             z_latent = initialize(rng_key_map[node_name], shape, latent_init)
-            dtype = (
+            z_latent_dtype = (
                 jnp.asarray(clamps[node_name]).dtype
                 if node_name in clamps
                 else z_latent.dtype
             )
 
             node_state_dict[node_name] = NodeState(
-                z_latent=z_latent.astype(dtype),
-                z_mu=jnp.zeros(shape, dtype=dtype),
-                error=jnp.zeros(shape, dtype=dtype),
-                energy=jnp.zeros((batch_size,), dtype=dtype),
-                pre_activation=jnp.zeros(shape, dtype=dtype),
-                latent_grad=jnp.zeros(shape, dtype=dtype),
+                z_latent=z_latent.astype(z_latent_dtype),
+                z_mu=jnp.zeros(shape),
+                error=jnp.zeros(shape),
+                energy=jnp.zeros((batch_size,)),
+                pre_activation=jnp.zeros(shape),
+                latent_grad=jnp.zeros(shape),
             )
 
         state = GraphState(nodes=node_state_dict, batch_size=batch_size)
@@ -309,6 +314,41 @@ class FeedforwardStateInit(StateInitBase):
 # =============================================================================
 
 
+def _validate_clamp_dtypes(
+    structure: GraphStructure, clamps: Dict[str, jnp.ndarray]
+) -> None:
+    """
+    Reject non-float clamps on internal (in_degree>0) nodes with a clear error.
+
+    Predictive-coding inference differentiates the energy w.r.t. each
+    internal node's z_latent (NodeBase.forward autodiff path). A non-float
+    clamp would propagate through state init and trip a cryptic
+    ``grad requires real- or complex-valued inputs`` deep inside JAX.
+    Catching it here names the offending node and dtype.
+
+    Integer clamps are valid only on terminal source nodes (in_degree=0),
+    e.g. token indices feeding an EmbeddingNode.
+    """
+    for node_name, clamp_value in clamps.items():
+        if node_name not in structure.nodes:
+            continue
+        dtype = jnp.asarray(clamp_value).dtype
+        if jnp.issubdtype(dtype, jnp.floating):
+            continue
+        in_degree = structure.nodes[node_name].node_info.in_degree
+        if in_degree > 0:
+            raise TypeError(
+                f"clamp on node '{node_name}' has dtype {dtype}, but this is "
+                f"an internal node (in_degree={in_degree}) and predictive-"
+                f"coding inference requires float-typed latents (autodiff in "
+                f"NodeBase.forward needs real-valued inputs). Non-float "
+                f"clamps are only valid on terminal source nodes "
+                f"(in_degree=0), e.g. token indices feeding an EmbeddingNode. "
+                f"Cast this clamp to float (jnp.asarray(value, "
+                f"dtype=jnp.float32)) or move the data to a source node."
+            )
+
+
 def initialize_graph_state(
     structure: GraphStructure,
     batch_size: int,
@@ -339,6 +379,7 @@ def initialize_graph_state(
         )
     """
     clamps = clamps or {}
+    _validate_clamp_dtypes(structure, clamps)
 
     if state_init is None:
         state_init = structure.config["graph_state_initializer"]

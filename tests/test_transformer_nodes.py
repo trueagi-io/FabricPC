@@ -93,15 +93,13 @@ class TestEmbeddingNode:
         input_indices = jax.random.randint(rng_key, (batch_size, seq_len), 0, 100)
         dummy_y = jnp.zeros((batch_size, seq_len, 10))
 
-        clamps = {"indices": input_indices.astype(jnp.float32), "output": dummy_y}
+        clamps = {"indices": input_indices, "output": dummy_y}
         state = initialize_graph_state(
             structure, batch_size, rng_key, clamps=clamps, params=params
         )
         W = params.nodes["embed"].weights["embeddings"]
 
-        # Need to cast input back to int because clamps are float arrays
-        indices_int = input_indices.astype(jnp.int32)
-        expected_vectors = W[indices_int]  # (batch, seq, embed_dim)
+        expected_vectors = W[input_indices]  # (batch, seq, embed_dim)
 
         embed_state = state.nodes["embed"]
 
@@ -119,7 +117,7 @@ class TestEmbeddingNode:
         params, structure = embedding_graph
         batch_size = 2
 
-        input_indices = jnp.ones((batch_size, 5))
+        input_indices = jnp.ones((batch_size, 5), dtype=jnp.int32)
         clamps = {"indices": input_indices}
 
         state = initialize_graph_state(
@@ -161,9 +159,9 @@ class TestEmbeddingNode:
         batch_size = 1
         idx = 5
 
-        # The 'indices' source node will propagate this float type to z_mu/error,
-        # keeping the JAX loop types consistent.
-        input_indices = jnp.full((batch_size, 5), idx, dtype=jnp.float32)
+        # Token indices flow through as int32; state init propagates the dtype
+        # to z_mu/error/etc. on the source node so the loop is type-consistent.
+        input_indices = jnp.full((batch_size, 5), idx, dtype=jnp.int32)
 
         batch = {"x": input_indices, "y": jnp.zeros((batch_size, 5, 10))}
 
@@ -202,13 +200,15 @@ class TestEmbeddingNode:
         params, structure = embedding_graph
 
         # Create input with extra dimension (batch, seq, 1)
-        input_expanded = jnp.zeros((2, 5, 1))
+        input_expanded = jnp.zeros((2, 5, 1), dtype=jnp.int32)
         inputs = {"mock_edge": input_expanded}
 
-        # State and Params
-        state = initialize_graph_state(structure, 2, rng_key, params=params).nodes[
-            "embed"
-        ]
+        # Clamp the source with int indices so FeedforwardStateInit's forward
+        # pass through EmbeddingNode receives integer upstream z_latent.
+        clamps = {"indices": jnp.zeros((2, 5), dtype=jnp.int32)}
+        state = initialize_graph_state(
+            structure, 2, rng_key, clamps=clamps, params=params
+        ).nodes["embed"]
         node_params = params.nodes["embed"]
         node_info = structure.nodes["embed"].node_info
 
@@ -402,9 +402,7 @@ class TestTransformerBlock:
         params = initialize_params(structure, rng_key)
 
         batch_size = 2
-        x_indices = jax.random.randint(
-            rng_key, (batch_size, seq_len), 0, vocab_size
-        ).astype(jnp.float32)
+        x_indices = jax.random.randint(rng_key, (batch_size, seq_len), 0, vocab_size)
         y_dummy = jnp.zeros((batch_size, seq_len, vocab_size))
         clamps = {"input_ids": x_indices, "logits": y_dummy}
 
@@ -442,9 +440,7 @@ class TestEvaluateTransformer:
         params = initialize_params(structure, rng_key)
 
         batch_size = 4
-        x_data = jax.random.randint(
-            rng_key, (batch_size, seq_len), 0, vocab_size
-        ).astype(jnp.float32)
+        x_data = jax.random.randint(rng_key, (batch_size, seq_len), 0, vocab_size)
         y_data = jax.random.randint(rng_key, (batch_size, seq_len), 0, vocab_size)
 
         test_loader = [{"x": x_data, "y": y_data}]

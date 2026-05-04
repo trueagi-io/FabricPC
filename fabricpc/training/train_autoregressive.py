@@ -331,11 +331,11 @@ def _generation_step(
     rng_key, sample_key, init_key = jax.random.split(rng_key, 3)
 
     # Format context window for the input node.
-    # If input node shape is 1D (seq_len,), pass float indices (EmbeddingNode).
+    # If input node shape is 1D (seq_len,), pass int token indices (EmbeddingNode).
     # If input node shape is 2D (seq_len, vocab_size), convert to one-hot (Linear).
     input_shape = structure.nodes[input_node].node_info.shape
     if len(input_shape) == 1:
-        input_data = context_window.astype(jnp.float32)
+        input_data = context_window
     else:
         input_data = jax.nn.one_hot(context_window, vocab_size)
 

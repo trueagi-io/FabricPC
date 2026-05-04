@@ -44,7 +44,7 @@ from fabricpc.nodes.base import (
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.activations import IdentityActivation
 from fabricpc.core.energy import GaussianEnergy
-from fabricpc.core.initializers import NormalInitializer, KaimingInitializer
+from fabricpc.core.initializers import NormalInitializer, KaimingInitializer, initialize
 
 if TYPE_CHECKING:
     from fabricpc.core.activations import ActivationBase
@@ -109,7 +109,6 @@ class LinearResidual(FlattenInputMixin, NodeBase):
         """
         if config is None:
             config = {}
-        from fabricpc.core.initializers import NormalInitializer, initialize
 
         flatten_input = config.get("flatten_input", False)
 

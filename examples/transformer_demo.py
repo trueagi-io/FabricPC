@@ -340,7 +340,7 @@ def main(args=None):
         "test", seq_len=args.seq_len, batch_size=args.batch_size, shuffle=False
     )
 
-    # EmbeddingNode takes integer indices directly (cast to float for JAX).
+    # EmbeddingNode takes integer token indices directly.
     vocab_size = train_loader.vocab_size
 
     class _IndexLoader:
@@ -354,7 +354,7 @@ def main(args=None):
 
         def __iter__(self):
             for x_idx, y_oh in self.base:
-                yield {"x": x_idx.astype(np.float32), "y": y_oh}
+                yield {"x": x_idx, "y": y_oh}
 
     train_loader_oh = _IndexLoader(train_loader)
     test_loader_oh = _IndexLoader(test_loader)

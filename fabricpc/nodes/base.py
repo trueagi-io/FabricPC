@@ -39,6 +39,7 @@ import copy
 import types
 import jax
 import jax.numpy as jnp
+import numpy as np
 from dataclasses import dataclass
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo, SlotInfo, EdgeInfo
 
@@ -133,8 +134,6 @@ class FlattenInputMixin:
         Returns:
             Pre-activation tensor of shape (batch, *out_shape)
         """
-        import numpy as np
-
         out_numel = int(np.prod(out_shape))
         pre_activation_flat = jnp.zeros((batch_size, out_numel))
 
@@ -339,8 +338,6 @@ class NodeBase(ABC):
         Returns:
             Integer fan_in for the weight matrix connecting source to this node.
         """
-        import numpy as np
-
         if config.get("flatten_input", False):
             return int(np.prod(source_shape))
         # Typically nodes operate on the last (feature dimension)
@@ -400,9 +397,11 @@ class NodeBase(ABC):
             # No inputs!
             # This is a terminal input node of the graph. It might be clamped to data, or it might be a source of top-down predictions. Either way, the gradients are zero.
 
-            # Update z_mu <-- z_latent, so error is zero.
+            # Update z_mu <-- z_latent, so error is zero. Cast to z_mu's dtype:
+            # source-node z_latent may be an integer clamp (e.g. token indices),
+            # but the rest of the NodeState stays float for the inference carry.
             new_state = state._replace(
-                z_mu=state.z_latent,
+                z_mu=state.z_latent.astype(state.z_mu.dtype),
                 error=jnp.zeros_like(state.error),
                 pre_activation=jnp.zeros_like(state.pre_activation),
             )
@@ -412,7 +411,7 @@ class NodeBase(ABC):
             input_grads = {
                 edge_key: jnp.zeros_like(inputs[edge_key]) for edge_key in inputs
             }
-            self_grad = jnp.zeros_like(state.z_latent)
+            self_grad = jnp.zeros_like(state.latent_grad)
 
         elif node_info.out_degree == 0 and not is_clamped:
             # No post-synaptic targets and no clamped data!

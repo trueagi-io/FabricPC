@@ -122,9 +122,11 @@ class InferenceBase(ABC):
         Phase 1: Zero the latent gradients
         """
         # Phase 1: Zero latent gradients
+        # Use latent_grad (not z_latent) as the dtype/shape source: z_latent may
+        # carry an integer clamp dtype on source nodes, but gradients are float.
         for node_name in structure.nodes:
             node_state = state.nodes[node_name]
-            zero_grad = jnp.zeros_like(node_state.z_latent)
+            zero_grad = jnp.zeros_like(node_state.latent_grad)
             state = update_node_in_state(state, node_name, latent_grad=zero_grad)
 
         return state
@@ -291,7 +293,12 @@ class InferenceSGD(InferenceBase):
 
     @staticmethod
     def compute_new_latent(node_name, node_state, config):
-
+        # Precondition: node_state.z_latent is float here.
+        # update_latents() gates calls with `node_name not in clamps`, so this
+        # only runs on non-clamped nodes — and non-clamped z_latent is always
+        # float (state initializers only propagate the clamp dtype to nodes
+        # that are clamped). A clamped node's int z_latent (e.g. token
+        # indices) never reaches this update path.
         eta_infer = config["eta_infer"]
         latent_decay = config["latent_decay"]
 

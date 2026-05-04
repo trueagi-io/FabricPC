@@ -22,7 +22,10 @@ import jax.numpy as jnp
 import optax
 
 from fabricpc.core.types import GraphParams, GraphStructure, GraphState
-from fabricpc.graph_initialization.state_initializer import initialize_graph_state
+from fabricpc.graph_initialization.state_initializer import (
+    initialize_graph_state,
+    FeedforwardStateInit,
+)
 from fabricpc.training.train_autoregressive import create_causal_mask, compute_loss
 
 
@@ -33,8 +36,6 @@ def validate_feedforward_init(structure: GraphStructure):
     Raises:
         ValueError if incompatible.
     """
-    from fabricpc.graph_initialization.state_initializer import FeedforwardStateInit
-
     init = structure.config["graph_state_initializer"]
     if not isinstance(init, FeedforwardStateInit):
         raise ValueError(
