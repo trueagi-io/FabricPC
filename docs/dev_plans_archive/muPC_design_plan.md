@@ -7,6 +7,7 @@
 **Title:** muPC: Scaling Predictive Coding to 100+ Layer Networks
 **Authors:** Francesco Innocenti, El Mehdi Achour, Christopher L. Buckley
 **Reference code:** https://github.com/thebuckleylab/jpc
+**arXiv:** https://arxiv.org/abs/2505.13124
 
 ### The Problem
 
