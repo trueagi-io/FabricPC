@@ -28,7 +28,7 @@ Results:
 python examples/storkey_hopfield_demo.py --k_values 500 --noise_levels 2.0 --strength 2.0 --n_trials 5 --num_epochs 5
      K    Noise    Hopfield Accuracy %         MLP Accuracy %     Delta%    p-value   Sig        d
 ---------------------------------------------------------------------------------------------------
-   500      2.0          65.17+/-0.42            61.36+/-0.32      +3.80     0.0001     *    6.885
+   500      2.0          64.94+/-0.33            60.33+/-0.34      +4.61      0.0000     *    11.115
 ---------------------------------------------------------------------------------------------------
 
 python examples/storkey_hopfield_demo.py --k_values 5,10,20,50,100,500 --noise_levels 0.0,0.5,1.0,1.5,2.0 --strength 1.0 --n_trials 10 --num_epochs 5
@@ -39,12 +39,12 @@ Delta Accuracy Heatmap (Hopfield - MLP, percentage points):
 
      K  n=0.0  n=0.5  n=1.0  n=1.5  n=2.0
 -----------------------------------------
-     5  -1.2   -0.9   -0.7   -0.5   -0.5
-    10  -1.5   -1.1   -0.8   -0.3   -0.1
-    20  -0.1   -0.0   +0.7   +1.7*  +2.4*
-    50  -0.8*  -0.4   +0.7*  +1.7*  +2.6*
-   100  -0.4*  +0.0   +1.0*  +1.9*  +3.0*
-   500  +0.2   +0.7*  +1.9*  +2.9*  +3.8*
+     5  -1.2   -1.0   -0.7   -0.5   -0.4
+    10  -2.3   -1.9   -0.8   +0.1   +0.2
+    20  -0.5   -0.4   +0.5*  +1.3*  +2.1*
+    50  -0.4   -0.2   +0.7*  +1.8*  +2.5*
+   100  -0.4*  -0.2   +0.8*  +2.0*  +2.8*
+   500  +0.3   +0.7*  +1.7*  +3.1*  +4.3*
 
   * = significant at p<0.05
 """
@@ -59,8 +59,9 @@ import jax
 import optax
 
 from fabricpc.nodes import Linear, IdentityNode, StorkeyHopfield
-from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
+from fabricpc.graph_initialization import initialize_params
 from fabricpc.core import TanhActivation
 from fabricpc.core.activations import SoftmaxActivation
 from fabricpc.core.energy import CrossEntropyEnergy
@@ -219,10 +220,24 @@ def make_data_factory(k_per_class, noise_std, batch_size):
     """Return a data_loader_factory(seed) for ABExperiment.
 
     Both arms receive identical training data (same K-shot subsample)
-    and identical test noise (same seed).
+    and identical test noise within a trial.
+
+    Seeds are domain-separated: the K-shot subsample is a function of
+    the trial seed only (so the same training data is reused across
+    noise_levels for a clean isolation of the noise effect), while the
+    test-noise seed mixes (trial, noise_std) so different noise levels
+    draw independent realizations rather than rescaled copies of one
+    shared noise stream.
     """
+    # Stable integer fingerprint of noise_std used as RNG entropy.
+    noise_level_id = int(round(noise_std * 1_000_000))
 
     def factory(seed):
+        train_seed = int(np.random.SeedSequence([seed, 0]).generate_state(1)[0])
+        noise_seed = int(
+            np.random.SeedSequence([seed, 1, noise_level_id]).generate_state(1)[0]
+        )
+
         train_loader = FewShotLoader(
             dataset_name="fashion_mnist",
             split="train",
@@ -230,7 +245,7 @@ def make_data_factory(k_per_class, noise_std, batch_size):
             batch_size=batch_size,
             num_classes=10,
             shuffle=True,
-            seed=seed,
+            seed=train_seed,
             tensor_format="flat",
             normalize_mean=0.2860,
             normalize_std=0.3530,
@@ -246,7 +261,7 @@ def make_data_factory(k_per_class, noise_std, batch_size):
         test_loader = NoisyTestLoader(
             base_loader=base_test_loader,
             noise_std=noise_std,
-            seed=seed,
+            seed=noise_seed,
         )
 
         return train_loader, test_loader

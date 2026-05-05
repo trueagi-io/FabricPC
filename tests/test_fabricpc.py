@@ -12,15 +12,16 @@ import jax
 import jax.numpy as jnp
 
 from fabricpc.core.types import NodeState, NodeParams, GraphState
-from fabricpc.graph.graph_net import compute_local_weight_gradients
-from fabricpc.graph import initialize_params
-from fabricpc.graph.state_initializer import initialize_graph_state
+from fabricpc.core.learning import compute_local_weight_gradients
+from fabricpc.graph_initialization import initialize_params
+from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 from fabricpc.core.inference import InferenceSGD
 import optax
 from fabricpc.training import train_step
 from fabricpc.nodes import Linear
 from fabricpc.nodes.identity import IdentityNode
-from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
 from fabricpc.core.activations import (
     IdentityActivation,
     ReLUActivation,
@@ -294,14 +295,14 @@ class TestForwardMethods:
         batch_size = 4
 
         node_names = list(structure.nodes.keys())
-        node_keys = jax.random.split(rng_key, len(node_names))
+        rng_keys = jax.random.split(rng_key, len(node_names))
 
         nodes = {}
         for i, (node_name, node) in enumerate(structure.nodes.items()):
             node_info = node.node_info
             full_shape = (batch_size, *node_info.shape)
             nodes[node_name] = NodeState(
-                z_latent=jax.random.normal(node_keys[i], full_shape),
+                z_latent=jax.random.normal(rng_keys[i], full_shape),
                 latent_grad=jnp.zeros(full_shape),
                 z_mu=jnp.zeros(full_shape),
                 error=jnp.zeros(full_shape),
@@ -312,8 +313,8 @@ class TestForwardMethods:
         state = GraphState(nodes=nodes, batch_size=batch_size)
         return params, structure, state
 
-    def test_forward_inference_shapes(self, forward_setup):
-        """Test that forward_inference returns correct shapes."""
+    def test_forward_and_latent_grads_shapes(self, forward_setup):
+        """Test that forward_and_latent_grads returns correct shapes."""
         params, structure, state = forward_setup
 
         for node_name, node in structure.nodes.items():
@@ -327,7 +328,7 @@ class TestForwardMethods:
                     in_edge_info = structure.edges[edge_key]
                     edge_inputs[edge_key] = state.nodes[in_edge_info.source].z_latent
 
-                new_state, input_grads = node_class.forward_inference(
+                new_state, input_grads, self_grad = node_class.forward_and_latent_grads(
                     params.nodes[node_name],
                     edge_inputs,
                     node_state,
@@ -338,14 +339,22 @@ class TestForwardMethods:
                 assert new_state.z_mu.shape == node_state.z_latent.shape
                 assert new_state.error.shape == node_state.z_latent.shape
 
+                # self_grad must match z_latent shape and carry finite values.
+                # forward_and_latent_grads must NOT mutate state.latent_grad — that's
+                # the callsite's responsibility — so the returned NodeState's
+                # latent_grad must equal the input's exactly.
+                assert self_grad.shape == node_state.z_latent.shape
+                assert jnp.all(jnp.isfinite(self_grad))
+                assert jnp.array_equal(new_state.latent_grad, node_state.latent_grad)
+
                 for edge_key in node_info.in_edges:
                     edge_info = structure.edges[edge_key]
                     source_shape = structure.nodes[edge_info.source].node_info.shape
                     expected_shape = (state.batch_size, *source_shape)
                     assert input_grads[edge_key].shape == expected_shape
 
-    def test_forward_learning_shapes(self, forward_setup):
-        """Test that forward_learning returns correct shapes."""
+    def test_forward_and_weight_grads_shapes(self, forward_setup):
+        """Test that forward_and_weight_grads returns correct shapes."""
         params, structure, state = forward_setup
 
         for node_name, node in structure.nodes.items():
@@ -360,7 +369,7 @@ class TestForwardMethods:
                     in_edge_info = structure.edges[edge_key]
                     edge_inputs[edge_key] = state.nodes[in_edge_info.source].z_latent
 
-                new_state, param_grads = node_class.forward_learning(
+                new_state, param_grads = node_class.forward_and_weight_grads(
                     node_params, edge_inputs, node_state, node_info
                 )
 

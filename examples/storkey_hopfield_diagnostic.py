@@ -34,16 +34,17 @@ import jax.numpy as jnp
 import optax
 
 from fabricpc.nodes import Linear, IdentityNode, StorkeyHopfield
-from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
+from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.activations import SoftmaxActivation, TanhActivation
 from fabricpc.core.energy import CrossEntropyEnergy, GaussianEnergy
 from fabricpc.core.inference import InferenceSGD, gather_inputs, run_inference
 from fabricpc.core.initializers import XavierInitializer
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.training.train import train_step
-from fabricpc.graph.state_initializer import initialize_graph_state
-from fabricpc.utils.helpers import update_node_in_state
+from fabricpc.graph_initialization.state_initializer import initialize_graph_state
+from fabricpc.core.state_ops import update_node_in_state
 from fabricpc.utils.data.dataloader import (
     FashionMnistLoader,
     FewShotLoader,
@@ -453,7 +454,7 @@ def instrumented_forward_value_and_grad(params, state, clamps, structure):
     """Replicate forward_value_and_grad with gradient decomposition snapshots.
 
     Captures hopfield.latent_grad at two key moments:
-      1. After hopfield's own forward_inference (contains PC_self + Hop_self)
+      1. After hopfield's own forward_and_latent_grads (contains PC_self + Hop_self)
       2. After class node accumulates its backward grad (adds Top_down)
     """
     snapshots = {}
@@ -468,13 +469,14 @@ def instrumented_forward_value_and_grad(params, state, clamps, structure):
 
         in_edges_data = gather_inputs(node_info, structure, state)
 
-        node_state, inedge_grads = node_class.forward_inference(
+        node_state, inedge_grads, self_grad = node_class.forward_and_latent_grads(
             node_params,
             in_edges_data,
             node_state,
             node_info,
             is_clamped=(node_name in clamps),
         )
+        node_state = node_state._replace(latent_grad=node_state.latent_grad + self_grad)
 
         state = state._replace(nodes={**state.nodes, node_name: node_state})
 

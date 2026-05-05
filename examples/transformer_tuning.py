@@ -15,7 +15,7 @@ set_jax_flags_before_importing_jax()
 import jax
 import optax
 import optuna
-from fabricpc.graph import initialize_params
+from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.inference import InferenceSGD
 from fabricpc.nodes.transformer_v2 import create_deep_transformer
 from fabricpc.training import train_pcn, evaluate_transformer

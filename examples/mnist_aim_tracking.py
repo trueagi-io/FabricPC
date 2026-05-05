@@ -25,8 +25,9 @@ import jax.numpy as jnp
 from fabricpc.utils.data.dataloader import MnistLoader
 
 from fabricpc.nodes import Linear, IdentityNode
-from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params, FeedforwardStateInit
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
+from fabricpc.graph_initialization import initialize_params, FeedforwardStateInit
 from fabricpc.core.activations import (
     IdentityActivation,
     SigmoidActivation,

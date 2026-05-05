@@ -15,8 +15,9 @@ from fabricpc.nodes import (
     Linear,
     LinearExplicitGrad,
 )
-from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
+from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.activations import (
     IdentityActivation,
     ReLUActivation,
@@ -25,7 +26,7 @@ from fabricpc.core.activations import (
 )
 from fabricpc.core.energy import GaussianEnergy
 from fabricpc.core.initializers import NormalInitializer
-from fabricpc.graph.state_initializer import initialize_graph_state
+from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 
 
 @pytest.fixture
@@ -62,8 +63,10 @@ class TestLinearAutoGradNode:
     """Test that LinearExplicitGrad produces identical gradients to Linear."""
 
     @pytest.mark.parametrize("activation", ["identity", "relu", "tanh", "sigmoid"])
-    def test_forward_inference_equivalence(self, rng_key, activation, grad_tolerance):
-        """Test that forward_inference produces equivalent input gradients for different activations."""
+    def test_forward_and_latent_grads_equivalence(
+        self, rng_key, activation, grad_tolerance
+    ):
+        """Test that forward_and_latent_grads produces equivalent input gradients for different activations."""
         batch_size = 4
         input_dim = 6
         output_dim = 8
@@ -136,12 +139,14 @@ class TestLinearAutoGradNode:
             pre_activation=jnp.zeros((batch_size, output_dim)),
         )
 
-        # Compare forward_inference results
-        state_linear, grads_linear = Linear.forward_inference(
+        # Compare forward_and_latent_grads results
+        state_linear, grads_linear, self_grad_linear = Linear.forward_and_latent_grads(
             params, inputs, node_state, node_info, is_clamped=True
         )
-        state_autograd, grads_autograd = LinearExplicitGrad.forward_inference(
-            params, inputs, node_state, node_info_explicit, is_clamped=True
+        state_autograd, grads_autograd, self_grad_autograd = (
+            LinearExplicitGrad.forward_and_latent_grads(
+                params, inputs, node_state, node_info_explicit, is_clamped=True
+            )
         )
 
         # Compare input gradients
@@ -160,10 +165,15 @@ class TestLinearAutoGradNode:
         assert jnp.allclose(
             state_linear.error, state_autograd.error, atol=grad_tolerance
         ), f"error mismatch for activation={activation}"
+        assert jnp.allclose(
+            self_grad_linear, self_grad_autograd, atol=grad_tolerance
+        ), f"self-grad mismatch for activation={activation}"
 
     @pytest.mark.parametrize("activation", ["identity", "relu", "tanh", "sigmoid"])
-    def test_forward_learning_equivalence(self, rng_key, activation, grad_tolerance):
-        """Test that forward_learning produces equivalent param gradients for different activations."""
+    def test_forward_and_weight_grads_equivalence(
+        self, rng_key, activation, grad_tolerance
+    ):
+        """Test that forward_and_weight_grads produces equivalent param gradients for different activations."""
         batch_size = 4
         input_dim = 6
         output_dim = 8
@@ -236,11 +246,11 @@ class TestLinearAutoGradNode:
             pre_activation=jnp.zeros((batch_size, output_dim)),
         )
 
-        # Compare forward_learning results
-        state_linear, grads_linear = Linear.forward_learning(
+        # Compare forward_and_weight_grads results
+        state_linear, grads_linear = Linear.forward_and_weight_grads(
             params, inputs, node_state, node_info
         )
-        state_autograd, grads_autograd = LinearExplicitGrad.forward_learning(
+        state_autograd, grads_autograd = LinearExplicitGrad.forward_and_weight_grads(
             params, inputs, node_state, node_info_explicit
         )
 
@@ -311,7 +321,7 @@ class TestLinearAutoGradNode:
             params_autograd, state_autograd, clamps, structure_autograd
         )
 
-        # Compare gradients for each non-input node using forward_inference
+        # Compare gradients for each non-input node using forward_and_latent_grads
         for node_name in ["hidden", "output"]:
             node = structure_linear.nodes[node_name]
             node_info = node.node_info
@@ -337,15 +347,15 @@ class TestLinearAutoGradNode:
             # Gather inputs for gradient computation
             inputs = gather_inputs(node_info, structure_linear, state_linear)
 
-            # Compute input gradients using forward_inference
-            _, grads_linear = Linear.forward_inference(
+            # Compute input gradients using forward_and_latent_grads
+            _, grads_linear, _ = Linear.forward_and_latent_grads(
                 params_linear.nodes[node_name],
                 inputs,
                 state_linear.nodes[node_name],
                 node_info,
                 is_clamped=(node_name == "output"),  # Clamp output node
             )
-            _, grads_autograd = LinearExplicitGrad.forward_inference(
+            _, grads_autograd, _ = LinearExplicitGrad.forward_and_latent_grads(
                 params_autograd.nodes[node_name],
                 inputs,
                 state_autograd.nodes[node_name],

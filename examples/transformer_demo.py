@@ -23,7 +23,7 @@ Final train energy: 221.06
 Final test loss: 2.5351, Perplexity: 12.62
 Prompt: 'ROMEO: '
 ----------------------------------------
-ROMEO: asharshar'dsheameara
+ROMEO: heacfeeearecayayoule
 ----------------------------------------
 
 Backprop Training
@@ -55,8 +55,9 @@ from fabricpc.nodes import (
     SkipConnection,
     EmbeddingNode,
 )
-from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params, FeedforwardStateInit
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
+from fabricpc.graph_initialization import initialize_params, FeedforwardStateInit
 from fabricpc.core.mupc import MuPCConfig
 from fabricpc.core.activations import (
     SoftmaxActivation,
@@ -75,7 +76,7 @@ from fabricpc.training.train_autoregressive import (
     evaluate_autoregressive,
     create_causal_mask,
 )
-from fabricpc.graph import initialize_graph_state
+from fabricpc.graph_initialization import initialize_graph_state
 from fabricpc.utils.dashboarding.inference_tracking import (
     run_inference_with_full_history,
 )
@@ -340,7 +341,7 @@ def main(args=None):
         "test", seq_len=args.seq_len, batch_size=args.batch_size, shuffle=False
     )
 
-    # EmbeddingNode takes integer indices directly (cast to float for JAX).
+    # EmbeddingNode takes integer token indices directly.
     vocab_size = train_loader.vocab_size
 
     class _IndexLoader:
@@ -354,7 +355,7 @@ def main(args=None):
 
         def __iter__(self):
             for x_idx, y_oh in self.base:
-                yield {"x": x_idx.astype(np.float32), "y": y_oh}
+                yield {"x": x_idx, "y": y_oh}
 
     train_loader_oh = _IndexLoader(train_loader)
     test_loader_oh = _IndexLoader(test_loader)

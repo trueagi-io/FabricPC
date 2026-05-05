@@ -1,12 +1,17 @@
 """Graph builder that assembles nodes and edges into a GraphStructure."""
 
 import types
-from typing import List, Dict, Any, Optional, Tuple, Union
+from dataclasses import replace
+from typing import List, Dict, Optional, Tuple
 from fabricpc.core.types import GraphStructure, NodeInfo, EdgeInfo, SlotInfo
 from fabricpc.core.inference import InferenceBase
-from fabricpc.builder.edge import Edge, SlotRef
+from fabricpc.core.mupc import MuPCConfig, compute_mupc_scalings
+from fabricpc.core.topology import Edge, SlotRef
 from fabricpc.nodes.base import NodeBase
-from fabricpc.graph.state_initializer import StateInitBase
+from fabricpc.graph_initialization.state_initializer import (
+    StateInitBase,
+    FeedforwardStateInit,
+)
 
 
 class TaskMap:
@@ -58,10 +63,25 @@ def _build_slots(node: NodeBase, in_edges: Dict[str, EdgeInfo]) -> Dict[str, Slo
 
 
 def _topological_sort(
-    nodes: Dict[str, NodeBase], edge_infos: Dict[str, EdgeInfo]
+    nodes: Dict[str, NodeBase], edges: Dict[str, EdgeInfo]
 ) -> Tuple[str, ...]:
-    """BFS-based topological sort."""
+    """
+    BFS-based topological sort. Feedforward traversal for initialization uses this topological ordering of nodes.
+
+    Args:
+        nodes: Dictionary of NodeBase instances (access in_degree/out_edges via node.node_info)
+        edges: Dictionary of EdgeInfo instances
+
+    Returns:
+        Tuple of node names in topological order
+
+    Note:
+        If the graph contains cycles, some nodes may be omitted from the order.
+    """
+    # Count in-degrees from node.node_info
     in_degree = {name: node.node_info.in_degree for name, node in nodes.items()}
+
+    # Queue of nodes, begin with nodes having no incoming edges
     queue = [name for name, deg in in_degree.items() if deg == 0]
     result = []
 
@@ -69,11 +89,14 @@ def _topological_sort(
         node_name = queue.pop(0)
         result.append(node_name)
 
+        # Reduce in-degree of neighbors
         for out_edge_key in nodes[node_name].node_info.out_edges:
-            edge_info = edge_infos[out_edge_key]
+            edge_info = edges[out_edge_key]
             target_name = edge_info.target
             in_degree[target_name] -= 1
+
             if in_degree[target_name] == 0:
+                # Dependencies have been processed, now add next node to the queue
                 queue.append(target_name)
 
     if len(result) != len(nodes):
@@ -180,9 +203,6 @@ def graph(
 
     # 5b. Compute and attach muPC scalings if requested
     if scaling is not None:
-        from fabricpc.core.mupc import MuPCConfig, compute_mupc_scalings
-        from dataclasses import replace
-
         if not isinstance(scaling, MuPCConfig):
             raise TypeError(
                 f"scaling must be a MuPCConfig instance, got {type(scaling)}"
@@ -212,8 +232,6 @@ def graph(
         raise TypeError(f"task_map must be TaskMap or dict, got {type(task_map)}")
 
     # 7. Build GraphStructure
-    from fabricpc.graph.state_initializer import FeedforwardStateInit
-
     gs_config = {
         "graph_state_initializer": graph_state_initializer or FeedforwardStateInit(),
         "inference": inference,

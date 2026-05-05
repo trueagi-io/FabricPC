@@ -154,7 +154,7 @@ After running inference, you can inspect the converged states:
 
 ```python
 from fabricpc.core.inference import run_inference
-from fabricpc.graph.state_initializer import initialize_graph_state
+from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 
 # Initialize states
 state = initialize_graph_state(structure, batch_size=32, rng_key=key, clamps=clamps, params=params)

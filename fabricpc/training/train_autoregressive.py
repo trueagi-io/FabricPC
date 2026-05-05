@@ -20,9 +20,10 @@ import jax
 import jax.numpy as jnp
 import optax
 
-from fabricpc.core.types import GraphParams, GraphState, GraphStructure, NodeParams
-from fabricpc.core.inference import gather_inputs, run_inference
-from fabricpc.graph.state_initializer import initialize_graph_state
+from fabricpc.core.types import GraphParams, GraphState, GraphStructure
+from fabricpc.core.inference import run_inference
+from fabricpc.core.learning import compute_local_weight_gradients
+from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 
 
 def create_causal_mask(seq_len: int) -> jnp.ndarray:
@@ -70,49 +71,6 @@ def compute_loss(
         raise ValueError(f"Unknown loss_type: {loss_type}")
 
     return loss
-
-
-def compute_local_weight_gradients_ar(
-    params: GraphParams,
-    final_state: GraphState,
-    structure: GraphStructure,
-) -> GraphParams:
-    """
-    Compute local weight gradients for autoregressive training.
-
-    This is similar to the standard local gradient computation but
-    can be extended for sequence-specific optimizations.
-
-    Args:
-        params: Current model parameters
-        final_state: Converged state after inference
-        structure: Graph structure
-
-    Returns:
-        GraphParams containing gradients
-    """
-    gradients = {}
-
-    for node_name, node in structure.nodes.items():
-        node_info = node.node_info
-        if node_info.in_degree == 0:
-            gradients[node_name] = NodeParams(weights={}, biases={})
-            continue
-
-        in_edges_data = gather_inputs(node_info, structure, final_state)
-        node_class = node_info.node_class
-
-        # Compute local gradients
-        node_state, grad_params = node_class.forward_learning(
-            params.nodes[node_name],
-            in_edges_data,
-            final_state.nodes[node_name],
-            node_info,
-        )
-
-        gradients[node_name] = grad_params
-
-    return GraphParams(nodes=gradients)
 
 
 def train_step_autoregressive(
@@ -194,7 +152,7 @@ def train_step_autoregressive(
     avg_energy = energy / batch_size
 
     # Compute local gradients
-    grads = compute_local_weight_gradients_ar(params, final_state, structure)
+    grads = compute_local_weight_gradients(params, final_state, structure)
 
     # Update parameters
     updates, opt_state = optimizer.update(grads, opt_state, params)
@@ -373,11 +331,11 @@ def _generation_step(
     rng_key, sample_key, init_key = jax.random.split(rng_key, 3)
 
     # Format context window for the input node.
-    # If input node shape is 1D (seq_len,), pass float indices (EmbeddingNode).
+    # If input node shape is 1D (seq_len,), pass int token indices (EmbeddingNode).
     # If input node shape is 2D (seq_len, vocab_size), convert to one-hot (Linear).
     input_shape = structure.nodes[input_node].node_info.shape
     if len(input_shape) == 1:
-        input_data = context_window.astype(jnp.float32)
+        input_data = context_window
     else:
         input_data = jax.nn.one_hot(context_window, vocab_size)
 

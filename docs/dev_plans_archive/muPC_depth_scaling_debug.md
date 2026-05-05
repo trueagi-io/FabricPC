@@ -117,7 +117,7 @@ Update the docstring results table and comments to reflect the new mode and find
 |------|------|
 | `examples/jpc_fc_resnet_compare.py` | Comparison script — add probes + new mode (lines 120-164 for scaling, 428-519 for graph builder) |
 | `fabricpc/core/mupc.py` | Core muPC framework (lines 213-231 for the formula) — **read-only for now** |
-| `fabricpc/nodes/base.py` | forward_inference / forward_learning (lines 432-464 for gradient scaling) — **read-only** |
+| `fabricpc/nodes/base.py` | forward_and_latent_grads / forward_and_weight_grads (lines 432-464 for gradient scaling) — **read-only** |
 | `fabricpc/core/inference.py` | InferenceSGDNormClip (lines 279-323) — **read-only** |
 
 ## Out of Scope (follow-up work)

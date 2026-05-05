@@ -191,7 +191,7 @@ def _forward_phase(params, state, clamps, structure):
         node_params = params.nodes[node_name]
 
         in_edges_data = gather_inputs(node_info, structure, state)
-        node_state, inedge_grads = node_class.forward_inference(
+        node_state, inedge_grads = node_class.forward_and_latent_grads(
             node_params, in_edges_data, node_state, node_info,
             is_clamped=(node_name in clamps),
         )
@@ -209,7 +209,7 @@ def _forward_phase(params, state, clamps, structure):
 
 ## Integration: `graph()` builder
 
-### `fabricpc/builder/graph_builder.py`
+### `fabricpc/builder/graph_construction.py`
 
 Add `inference` parameter to `graph()`, store in `GraphStructure.config`:
 
@@ -283,7 +283,7 @@ This means **all 31 existing call sites continue to work without changes** durin
 
 ### Phase 2: Builder integration (1 file)
 
-3. **`fabricpc/builder/graph_builder.py`** — Add `inference=None` parameter to `graph()`, default to `InferenceSGD()`, store in config.
+3. **`fabricpc/builder/graph_construction.py`** — Add `inference=None` parameter to `graph()`, default to `InferenceSGD()`, store in config.
 
 ### Phase 3: Remove `eta_infer` and `infer_steps` from training callers (4 files)
 
@@ -327,12 +327,12 @@ Move `eta_infer` and `infer_steps` from `train_config` to `graph(..., inference=
 ## Order of Operations
 
 1. Remove `substructure` from `NodeState` in `types.py`
-2. Refactor `linear.py`: `compute_gain_mod_error()` returns value; `forward_inference()`/`forward_learning()` use return value directly
+2. Refactor `linear.py`: `compute_gain_mod_error()` returns value; `forward_and_latent_grads()`/`forward_and_weight_grads()` use return value directly
 3. Refactor `transformer.py`: `_mha()` drops substructure return
 4. Remove `substructure={}` from state initializers and all `NodeState(...)` constructors in tests
 5. Add `InferenceBase`, `InferenceSGD`, `_forward_phase()` to `fabricpc/core/inference.py` — keep existing functions as backward-compatible wrappers, remove substructure reset loop
 6. Export new classes from `fabricpc/core/__init__.py`
-7. Add `inference` param to `graph()` in `fabricpc/builder/graph_builder.py`
+7. Add `inference` param to `graph()` in `fabricpc/builder/graph_construction.py`
 8. Update training callers (4 files) to drop `eta_infer` and `infer_steps` passthrough
 9. Update `inference_tracking.py` to use inference object
 10. Update examples (8 files) to set `eta_infer` and `infer_steps` on inference object
@@ -372,8 +372,8 @@ Remove `substructure: Dict[str, jnp.ndarray]` field from `NodeState` NamedTuple.
 
 ### `fabricpc/nodes/linear.py`
 - **`compute_gain_mod_error()`**: Instead of storing in `state.substructure`, return `gain_mod_error` directly.
-- **`forward_inference()`**: Call `compute_gain_mod_error()` to get the value directly (or compute `error * f_prime(pre_activation)` inline), use it for gradient computation without touching `substructure`.
-- **`forward_learning()`**: Same pattern.
+- **`forward_and_latent_grads()`**: Call `compute_gain_mod_error()` to get the value directly (or compute `error * f_prime(pre_activation)` inline), use it for gradient computation without touching `substructure`.
+- **`forward_and_weight_grads()`**: Same pattern.
 
 ### `fabricpc/nodes/transformer.py`
 - **`_mha()`**: Remove the substructure dict return. Return only the projection (or keep as tuple with `_` at call site).
@@ -407,7 +407,7 @@ Remove `substructure: Dict[str, jnp.ndarray]` field from `NodeState` NamedTuple.
   - _forward_phase() extracts shared Phase 1-2 logic                                                                                                
   - Backward-compatible run_inference() / inference_step() wrapper functions preserved                                                              
                                                                                                                                                     
-  3. Integrated with graph() builder (graph_builder.py)                                                                                             
+  3. Integrated with graph() builder (graph_construction.py)                                                                                             
   - New inference= parameter, defaults to InferenceSGD()                                                                                            
   - Stored in GraphStructure.config["inference"]                                                                                                    
                                                                                                                                                     

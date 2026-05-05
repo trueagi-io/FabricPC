@@ -228,9 +228,10 @@ if should_track_state:
 ### 5d: Imports
 
 Add at top of file:
+
 ```python
 from fabricpc.utils.dashboarding.inference_tracking import run_inference_with_full_history
-from fabricpc.graph import initialize_graph_state  # if not already imported
+from fabricpc.graph_initialization import initialize_graph_state  # if not already imported
 ```
 
 `create_causal_mask` is already imported via `train_autoregressive`.

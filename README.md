@@ -67,10 +67,12 @@ This project is licensed under the [MIT License](LICENSE).
 
 ## Building a model
 A model consists of structure and parameters.
+
 ```python
 from fabricpc.nodes import Linear
-from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
+from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.inference import InferenceSGD
 
 layer1 = Linear(shape=(784,), name="input")
@@ -78,12 +80,12 @@ layer2 = Linear(shape=(256,), name="hidden")
 layer3 = Linear(shape=(10,), name="output")
 
 structure = graph(
-  nodes=[layer1, layer2, layer3],
-  edges=[Edge(layer1, layer2.slot("in")),
-         Edge(layer2, layer3.slot("in"))
-  ],
-  task_map=TaskMap(x=layer1, y=layer3),
-  inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
+    nodes=[layer1, layer2, layer3],
+    edges=[Edge(layer1, layer2.slot("in")),
+           Edge(layer2, layer3.slot("in"))
+           ],
+    task_map=TaskMap(x=layer1, y=layer3),
+    inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
 )
 params = initialize_params(structure, rng_key)
 ```

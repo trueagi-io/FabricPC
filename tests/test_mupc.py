@@ -17,17 +17,16 @@ import jax.numpy as jnp
 
 from fabricpc.nodes import Linear
 from fabricpc.nodes.identity import IdentityNode
-from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
 from fabricpc.core.inference import InferenceSGD, run_inference
 from fabricpc.core.initializers import MuPCInitializer
 from fabricpc.core.activations import IdentityActivation, ReLUActivation, TanhActivation
 from fabricpc.core.mupc import MuPCConfig, MuPCScalingFactors
-from fabricpc.graph import initialize_params
-from fabricpc.graph.state_initializer import initialize_graph_state
-from fabricpc.graph.graph_net import (
-    compute_local_weight_gradients,
-    set_latents_to_clamps,
-)
+from fabricpc.graph_initialization import initialize_params
+from fabricpc.graph_initialization.state_initializer import initialize_graph_state
+from fabricpc.core.state_ops import set_latents_to_clamps
+from fabricpc.core.learning import compute_local_weight_gradients
 
 # ============================================================================
 # Fixtures
@@ -587,14 +586,15 @@ class TestSkipConnectionScaling:
         expected_a = 1.0 / math.sqrt(10)
         assert abs(a_mn - expected_a) < 1e-10
 
-        # Meta edge should be unscaled (1.0)
+        # Meta edge passes through unscaled — non-scalable slots are absent
+        # from the per-edge dicts (callsites treat missing keys as no-op).
         mn_meta_edge = next(
             e for e in structure.nodes["mn"].node_info.in_edges if ":meta" in e
         )
-        a_meta = structure.nodes["mn"].node_info.scaling_config.forward_scale[
-            mn_meta_edge
-        ]
-        assert a_meta == 1.0
+        scaling = structure.nodes["mn"].node_info.scaling_config
+        assert mn_meta_edge not in scaling.forward_scale
+        assert mn_meta_edge not in scaling.topdown_grad_scale
+        assert mn_meta_edge not in scaling.weight_grad_scale
 
 
 # ============================================================================

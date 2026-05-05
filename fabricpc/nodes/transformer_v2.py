@@ -26,7 +26,8 @@ from fabricpc.utils.helpers import layernorm
 
 # Builder Imports
 from fabricpc.nodes.linear import Linear
-from fabricpc.builder import Edge, TaskMap, graph
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
 from fabricpc.core.activations import (
     GeluActivation,
     IdentityActivation,
@@ -68,7 +69,10 @@ class EmbeddingNode(NodeBase):
 
     @staticmethod
     def get_slots() -> Dict[str, SlotSpec]:
-        return {"in": SlotSpec(name="in", is_multi_input=False)}
+        # Discrete token indices, not a continuous signal — keep muPC scaling off.
+        return {
+            "in": SlotSpec(name="in", is_multi_input=False, is_variance_scalable=False)
+        }
 
     @staticmethod
     def initialize_params(
@@ -97,8 +101,10 @@ class EmbeddingNode(NodeBase):
         if indices.ndim == 3 and indices.shape[-1] == 1:
             indices = jnp.squeeze(indices, axis=-1)
 
-        indices_int = indices.astype(jnp.int32)
-        z_mu = params.weights["embeddings"][indices_int]
+        # Token indices must reach this node as an integer dtype.
+        # Source-node clamps now propagate dtype through state init, so callers
+        # should clamp with int (e.g. jnp.int32), not float.
+        z_mu = params.weights["embeddings"][indices]
 
         error = state.z_latent - z_mu
         state = state._replace(z_mu=z_mu, error=error)
@@ -107,17 +113,19 @@ class EmbeddingNode(NodeBase):
         return jnp.sum(state.energy), state
 
     @staticmethod
-    def _apply_forward_scaling(inputs, node_info):
-        """No-op: indices are discrete tokens, not continuous signals."""
-        return inputs
-
-    @staticmethod
-    def forward_inference(params, inputs, state, node_info, is_clamped=False):
+    def forward_and_latent_grads(params, inputs, state, node_info, is_clamped=False):
         _, new_state = node_info.node_class.forward(params, inputs, state, node_info)
+        # Discrete indices: no gradient flows back through the input edge.
         input_grads = {
             edge_key: jnp.zeros_like(inp) for edge_key, inp in inputs.items()
         }
-        return new_state, input_grads
+        # Self-grad anchors z_latent to the lookup z_mu. Computed explicitly
+        # because this override skips the base autodiff path.
+        energy_obj = node_info.energy
+        self_grad = type(energy_obj).grad_latent(
+            new_state.z_latent, new_state.z_mu, energy_obj.config
+        )
+        return new_state, input_grads, self_grad
 
 
 # ==============================================================================
@@ -297,7 +305,6 @@ class LnMlp1Node(NodeBase):
 
         act_obj = node_info.activation
         z_mu = type(act_obj).forward(h, act_obj.config)
-        f_prime = type(act_obj).derivative(h, act_obj.config)
 
         error = state.z_latent - z_mu
         state = state._replace(z_mu=z_mu, error=error)

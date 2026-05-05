@@ -16,7 +16,8 @@ from tqdm.auto import tqdm as _tqdm_cls
 
 from fabricpc.core.types import GraphParams, GraphState, GraphStructure
 from fabricpc.core.inference import run_inference
-from fabricpc.graph.graph_net import compute_local_weight_gradients
+from fabricpc.core.learning import compute_local_weight_gradients
+from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 
 # ── pmap utilities ──────────────────────────────────────────────────
 
@@ -129,8 +130,6 @@ def get_graph_param_gradient(
     Returns:
         Tuple of (grads, energy_per_sample, final_state)
     """
-    from fabricpc.graph.state_initializer import initialize_graph_state
-
     batch_size = next(iter(batch.values())).shape[0]
 
     # Map task names to node names
@@ -496,8 +495,6 @@ def eval_step(
     Returns:
         Tuple of (avg_energy, correct, batch_size)
     """
-    from fabricpc.graph.state_initializer import initialize_graph_state
-
     batch_size = batch["x"].shape[0]
 
     # Map batch to clamps (only clamp input during eval)
@@ -564,8 +561,6 @@ def evaluate_pcn(
     Returns:
         Dictionary of evaluation metrics {"energy": avg_energy, "accuracy": accuracy}
     """
-    from fabricpc.graph.state_initializer import initialize_graph_state
-
     n_devices = jax.device_count()
     use_pmap = (n_devices > 1) or pmap_single_device
 
@@ -712,8 +707,6 @@ def evaluate_transformer(
     Returns:
         Dictionary with keys: "accuracy", "cross_entropy", "perplexity", "energy"
     """
-    from fabricpc.graph.state_initializer import initialize_graph_state
-
     n_devices = jax.device_count()
 
     # Split keys for devices

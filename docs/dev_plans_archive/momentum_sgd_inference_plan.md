@@ -1,6 +1,6 @@
 # Plan: Momentum Inference for Deep PC Networks
 
-TODO merge this plan with spiking precision inference strategy, since they both address the same root cause of local signal propagation in deep chains.
+Merge this plan with spiking precision inference strategy, since they both address the same root cause of local signal propagation in deep chains.
 
 
 ## Status of Previous Work (Complete)

@@ -18,8 +18,9 @@ from fabricpc.core.energy import (
     KLDivergenceEnergy,
 )
 from fabricpc.nodes import Linear
-from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
+from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.inference import InferenceSGD
 
 

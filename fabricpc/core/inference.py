@@ -25,6 +25,11 @@ import types
 import jax
 import jax.numpy as jnp
 
+from fabricpc.core.scaling import (
+    scale_input_grads,
+    scale_inputs,
+    scale_self_grad,
+)
 from fabricpc.core.types import (
     GraphParams,
     GraphState,
@@ -32,7 +37,7 @@ from fabricpc.core.types import (
     NodeInfo,
     NodeState,
 )
-from fabricpc.utils.helpers import update_node_in_state
+from fabricpc.core.state_ops import update_node_in_state
 
 # =============================================================================
 # Utility Functions
@@ -117,9 +122,11 @@ class InferenceBase(ABC):
         Phase 1: Zero the latent gradients
         """
         # Phase 1: Zero latent gradients
+        # Use latent_grad (not z_latent) as the dtype/shape source: z_latent may
+        # carry an integer clamp dtype on source nodes, but gradients are float.
         for node_name in structure.nodes:
             node_state = state.nodes[node_name]
-            zero_grad = jnp.zeros_like(node_state.z_latent)
+            zero_grad = jnp.zeros_like(node_state.latent_grad)
             state = update_node_in_state(state, node_name, latent_grad=zero_grad)
 
         return state
@@ -136,6 +143,13 @@ class InferenceBase(ABC):
 
         This is the universal predictive coding mechanics shared by all inference algorithms.
         Phase 3 (latent update) is handled by the inference algorithm's latent_update() method.
+
+        muPC scaling is applied here (pre-scale inputs, post-scale gradients),
+        keeping node methods (forward_and_latent_grads) scaling-unaware. The
+        self-grad contribution is scaled and *added* to ``latent_grad``
+        without re-scaling pre-existing accumulations from previously
+        iterated downstream successors — those were already scaled by
+        their own ``topdown_grad_scale``.
         """
         for node_name in structure.nodes:
             # Get node and its info
@@ -148,13 +162,27 @@ class InferenceBase(ABC):
             # Gather inputs for each slot
             in_edges_data = gather_inputs(node_info, structure, state)
 
-            # Compute predictions, error, and latent gradient contributions
-            node_state, inedge_grads = node_class.forward_inference(
+            # Pre-scale inputs by muPC forward scaling factors
+            sc = node_info.scaling_config
+            scaled_inputs = scale_inputs(in_edges_data, sc)
+
+            # Compute predictions, error, input gradients, and the self-latent
+            # gradient contribution (dE/dz_latent for this node only).
+            node_state, inedge_grads, self_grad = node_class.forward_and_latent_grads(
                 node_params,
-                in_edges_data,
+                scaled_inputs,
                 node_state,
                 node_info,
                 is_clamped=(node_name in clamps),
+            )
+
+            # Scale the new self-grad and add it to the accumulator. Any
+            # contributions added earlier in this iteration by downstream
+            # successors are preserved unchanged.
+            inedge_grads = scale_input_grads(inedge_grads, sc)
+            self_grad = scale_self_grad(self_grad, sc)
+            node_state = node_state._replace(
+                latent_grad=node_state.latent_grad + self_grad
             )
 
             # Update the graph state with node state containing errors and energy
@@ -265,7 +293,12 @@ class InferenceSGD(InferenceBase):
 
     @staticmethod
     def compute_new_latent(node_name, node_state, config):
-
+        # Precondition: node_state.z_latent is float here.
+        # update_latents() gates calls with `node_name not in clamps`, so this
+        # only runs on non-clamped nodes — and non-clamped z_latent is always
+        # float (state initializers only propagate the clamp dtype to nodes
+        # that are clamped). A clamped node's int z_latent (e.g. token
+        # indices) never reaches this update path.
         eta_infer = config["eta_infer"]
         latent_decay = config["latent_decay"]
 

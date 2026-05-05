@@ -40,7 +40,7 @@ params = initialize_params(structure, rng_key)
 - **No wrapper classes**: No `Activation("relu")`. Users write `ReLU()` directly.
 - **Slot access**: `node.slot("in")` explicit method call (avoids `in` keyword collision).
 - **Same classes, dual role**: `Linear` is both the construction-time descriptor and the runtime computation class.
-- **Static methods preserved**: Computation methods keep `@staticmethod` + `node_info` parameter. Call pattern: `node.forward_inference(params, inputs, state, node.node_info, is_clamped)`.
+- **Static methods preserved**: Computation methods keep `@staticmethod` + `node_info` parameter. Call pattern: `node.forward_and_latent_grads(params, inputs, state, node.node_info, is_clamped)`.
 - **Copy-on-finalize**: `graph()` creates finalized copies with edge/slot info. Original user objects stay unchanged.
 - **Activation/Energy instances hold config**: `LeakyReLU(alpha=0.02)` stores `.config = {"alpha": 0.02}`. Static methods still take `config` param for JAX compat.
 - **`graph()` returns GraphStructure directly**: No dict intermediate.
@@ -165,11 +165,11 @@ class NodeBase(ABC):
 
 **Remove**: `from_config()`, `_resolve_energy_config()`, `_resolve_activation_config()`, `_resolve_state_init_config()`, `get_energy_functional()`, `BASE_CONFIG_SCHEMA`, `CONFIG_SCHEMA` validation logic.
 
-**Keep**: `_build_slots()` (moved to graph builder), `get_slots()` (abstract), `forward()`, `forward_inference()`, `forward_learning()`, `energy_functional()`, `compute_gain_mod_error()`.
+**Keep**: `_build_slots()` (moved to graph builder), `get_slots()` (abstract), `forward()`, `forward_and_latent_grads()`, `forward_and_weight_grads()`, `energy_functional()`, `compute_gain_mod_error()`.
 
 **Update `energy_functional()`** (base.py:395): Instead of `get_energy_and_gradient(state.z_latent, state.z_mu, energy_config_dict)`, accept the energy instance. The energy instance is stored on the node, so `node_info` needs to carry it. See Phase 4 (NodeInfo changes).
 
-**Update `forward_inference()`** (base.py:213-295): Remove internal `get_node_class()` calls. These call `node_class.forward()` and `node_class.energy_functional()` — but since `forward_inference` is a static method on the same class, these can become `cls.forward()` calls or the node class is passed in/known from context.
+**Update `forward_and_latent_grads()`** (base.py:213-295): Remove internal `get_node_class()` calls. These call `node_class.forward()` and `node_class.energy_functional()` — but since `forward_and_latent_grads` is a static method on the same class, these can become `cls.forward()` calls or the node class is passed in/known from context.
 
 ### `fabricpc/nodes/linear.py`
 
@@ -186,7 +186,7 @@ class Linear(FlattenInputMixin, NodeBase):
 
 **Update `forward()`** (linear.py:~170-219): Replace `get_activation(node_info.node_config["activation"])` with accessing the activation instance from node_info. See Phase 4.
 
-**Update `forward_learning()`** (linear.py:~330-403): Same pattern — replace `get_activation()` call.
+**Update `forward_and_weight_grads()`** (linear.py:~330-403): Same pattern — replace `get_activation()` call.
 
 ### `fabricpc/nodes/transformer.py`
 
@@ -270,7 +270,7 @@ class Edge:
 ### `fabricpc/builder/namespace.py`
 Thread-local stack-based `GraphNamespace` context manager.
 
-### `fabricpc/builder/graph_builder.py`
+### `fabricpc/builder/graph_construction.py`
 
 **`TaskMap`**: Accepts node objects or strings. Auto-resolves `.name`.
 
@@ -321,10 +321,11 @@ def graph(nodes, edges, task_map, graph_state_initializer=None) -> GraphStructur
 ```
 
 ### `fabricpc/builder/__init__.py`
+
 ```python
 from fabricpc.builder.edge import Edge, SlotRef
 from fabricpc.builder.namespace import GraphNamespace
-from fabricpc.builder.graph_builder import graph, TaskMap
+from fabricpc.builder.graph_construction import graph, TaskMap
 ```
 
 ---
@@ -336,16 +337,18 @@ All callsites change from registry lookup to direct use of node instances.
 ### Pattern: `get_node_class()` elimination
 
 **Before**:
+
 ```python
 node_info = structure.nodes[node_name]  # NodeInfo
 node_class = get_node_class(node_info.node_type)  # registry lookup
-node_class.forward_inference(params, inputs, state, node_info, is_clamped)
+node_class.forward_and_latent_grads(params, inputs, state, node_info, is_clamped)
 ```
 
 **After**:
+
 ```python
 node = structure.nodes[node_name]  # NodeBase instance
-node.forward_inference(params, inputs, state, node.node_info, is_clamped)
+node.forward_and_latent_grads(params, inputs, state, node.node_info, is_clamped)
 ```
 
 ### Pattern: `get_activation()` elimination
@@ -387,8 +390,8 @@ grad = type(energy_obj).grad_latent(z_latent, z_mu, energy_obj.config)
 | `fabricpc/training/train.py` | `get_graph_param_gradient`, `eval_step`: access `node.node_info.in_degree`. |
 | `fabricpc/training/multi_gpu.py` | Same pattern. |
 | `fabricpc/training/train_autoregressive.py` | Same pattern. |
-| `fabricpc/nodes/base.py` | `forward_inference()`, `energy_functional()`: use `node_info.activation`/`node_info.energy` instances. |
-| `fabricpc/nodes/linear.py` | `forward()`, `forward_learning()`: use `node_info.activation` instance. |
+| `fabricpc/nodes/base.py` | `forward_and_latent_grads()`, `energy_functional()`: use `node_info.activation`/`node_info.energy` instances. |
+| `fabricpc/nodes/linear.py` | `forward()`, `forward_and_weight_grads()`: use `node_info.activation` instance. |
 | `fabricpc/nodes/transformer.py` | Use activation instance for internal activation. |
 
 ---
@@ -425,13 +428,13 @@ grad = type(energy_obj).grad_latent(z_latent, z_mu, energy_obj.config)
 | `fabricpc/builder/__init__.py` | **NEW** | Edge, SlotRef, GraphNamespace, graph, TaskMap |
 | `fabricpc/builder/edge.py` | **NEW** | Edge, SlotRef |
 | `fabricpc/builder/namespace.py` | **NEW** | GraphNamespace context manager |
-| `fabricpc/builder/graph_builder.py` | **NEW** | graph(), TaskMap, _build_slots, _topological_sort |
+| `fabricpc/builder/graph_construction.py` | **NEW** | graph(), TaskMap, _build_slots, _topological_sort |
 | `fabricpc/core/activations.py` | **MODIFY** | Remove registry; add __init__ to each class; rewrite get_activation() |
 | `fabricpc/core/energy.py` | **MODIFY** | Remove registry; add __init__; rewrite compute functions |
 | `fabricpc/core/initializers.py` | **MODIFY** | Remove registry; add __init__ |
 | `fabricpc/core/types.py` | **MODIFY** | NodeInfo gets activation/energy fields; GraphStructure stores NodeBase; remove from_config() |
-| `fabricpc/nodes/base.py` | **MODIFY** | Add __init__, slot(), _with_graph_info; remove from_config and resolve methods; update energy_functional/forward_inference |
-| `fabricpc/nodes/linear.py` | **MODIFY** | Add __init__; update forward/forward_learning to use activation instance |
+| `fabricpc/nodes/base.py` | **MODIFY** | Add __init__, slot(), _with_graph_info; remove from_config and resolve methods; update energy_functional/forward_and_latent_grads |
+| `fabricpc/nodes/linear.py` | **MODIFY** | Add __init__; update forward/forward_and_weight_grads to use activation instance |
 | `fabricpc/nodes/transformer.py` | **MODIFY** | Add __init__; update activation usage |
 | `fabricpc/nodes/identity.py` | **MODIFY** | Add __init__ |
 | `fabricpc/nodes/__init__.py` | **MODIFY** | Direct class imports instead of registry exports |
@@ -511,7 +514,7 @@ The state initializer refactor is complete. Here's a summary of all changes:
   Core changes:                                                                                                                                                                                                                            
   - fabricpc/graph/state_initializer.py — Added __init__(**config) to StateInitBase and typed constructors to all 3 concrete classes. Removed the entire registry (_state_init_registry, register_state_init, get_state_init_class, list_state_init_types). Updated initialize_graph_state() parameter from state_init_config: Dict to state_init: StateInitBase.
   - fabricpc/graph/__init__.py — Removed registry exports, added GlobalStateInit, NodeDistributionStateInit, FeedforwardStateInit.                                                                                                         
-  - fabricpc/builder/graph_builder.py — Default changed from {"type": "feedforward"} to FeedforwardStateInit(). Updated docstring.                                                                                                         
+  - fabricpc/builder/graph_construction.py — Default changed from {"type": "feedforward"} to FeedforwardStateInit(). Updated docstring.                                                                                                         
                                                                                                                                                                                                                                            
   Caller updates (removed state_init_config= kwarg, now uses default from structure config):                                                                                                                                               
   - fabricpc/training/train.py — 2 call sites                                                                                                                                                                                              

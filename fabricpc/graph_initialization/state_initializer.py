@@ -10,7 +10,7 @@ State initializers determine how latent states are initialized across
 the entire graph before inference begins.
 
 Usage:
-    from fabricpc.graph.state_initializer import FeedforwardStateInit
+    from fabricpc.graph_initialization.state_initializer import FeedforwardStateInit
 
     structure = graph(
         nodes=[...], edges=[...], task_map=...,
@@ -24,12 +24,16 @@ from typing import Dict, Any
 import jax
 import jax.numpy as jnp
 
+from fabricpc.core.inference import gather_inputs
+from fabricpc.core.initializers import initialize, NormalInitializer
+from fabricpc.core.scaling import scale_inputs
 from fabricpc.core.types import (
     GraphState,
     GraphStructure,
     GraphParams,
     NodeState,
 )
+from fabricpc.core.state_ops import set_latents_to_clamps
 
 # =============================================================================
 # State Initializer Base Class
@@ -115,15 +119,13 @@ class GlobalStateInit(StateInitBase):
         params: GraphParams = None,
     ) -> GraphState:
         """Initialize states from a distribution."""
-        from fabricpc.core.initializers import initialize, NormalInitializer
-
         global_init_config = config.get("initializer", None)
         if global_init_config is None:
             global_init_config = NormalInitializer(mean=0.0, std=0.05)
 
         node_names = list(structure.nodes.keys())
-        node_keys = jax.random.split(rng_key, len(node_names))
-        node_key_map = dict(zip(node_names, node_keys))
+        rng_keys = jax.random.split(rng_key, len(node_names))
+        rng_key_map = dict(zip(node_names, rng_keys))
 
         node_state_dict = {}
 
@@ -131,15 +133,20 @@ class GlobalStateInit(StateInitBase):
             node_info = node.node_info
             shape = (batch_size, *node_info.shape)
 
-            if node_name in clamps:
-                z_latent = jnp.asarray(clamps[node_name], dtype=jnp.float32)
-            else:
-                z_latent = initialize(
-                    node_key_map[node_name], shape, global_init_config
-                )
+            z_latent = initialize(rng_key_map[node_name], shape, global_init_config)
+            # Only z_latent tracks the clamp's dtype, so callers can pass integer
+            # indices through to a consuming node (e.g. EmbeddingNode). The
+            # remaining NodeState fields stay float — they are computed in float
+            # by node forward/energy paths regardless of the clamp dtype, and a
+            # mixed-dtype carry would break lax.fori_loop type checks.
+            z_latent_dtype = (
+                jnp.asarray(clamps[node_name]).dtype
+                if node_name in clamps
+                else z_latent.dtype
+            )
 
             node_state_dict[node_name] = NodeState(
-                z_latent=z_latent,
+                z_latent=z_latent.astype(z_latent_dtype),
                 z_mu=jnp.zeros(shape),
                 error=jnp.zeros(shape),
                 energy=jnp.zeros((batch_size,)),
@@ -147,7 +154,8 @@ class GlobalStateInit(StateInitBase):
                 latent_grad=jnp.zeros(shape),
             )
 
-        return GraphState(nodes=node_state_dict, batch_size=batch_size)
+        state = GraphState(nodes=node_state_dict, batch_size=batch_size)
+        return set_latents_to_clamps(state, clamps)
 
 
 class NodeDistributionStateInit(StateInitBase):
@@ -170,11 +178,9 @@ class NodeDistributionStateInit(StateInitBase):
         params: GraphParams = None,
     ) -> GraphState:
         """Initialize states from a distribution."""
-        from fabricpc.core.initializers import initialize
-
         node_names = list(structure.nodes.keys())
-        node_keys = jax.random.split(rng_key, len(node_names))
-        node_key_map = dict(zip(node_names, node_keys))
+        rng_keys = jax.random.split(rng_key, len(node_names))
+        rng_key_map = dict(zip(node_names, rng_keys))
 
         node_state_dict = {}
 
@@ -182,14 +188,16 @@ class NodeDistributionStateInit(StateInitBase):
             node_info = node.node_info
             shape = (batch_size, *node_info.shape)
 
-            if node_name in clamps:
-                z_latent = jnp.asarray(clamps[node_name], dtype=jnp.float32)
-            else:
-                latent_init = node_info.latent_init
-                z_latent = initialize(node_key_map[node_name], shape, latent_init)
+            latent_init = node_info.latent_init
+            z_latent = initialize(rng_key_map[node_name], shape, latent_init)
+            z_latent_dtype = (
+                jnp.asarray(clamps[node_name]).dtype
+                if node_name in clamps
+                else z_latent.dtype
+            )
 
             node_state_dict[node_name] = NodeState(
-                z_latent=z_latent,
+                z_latent=z_latent.astype(z_latent_dtype),
                 z_mu=jnp.zeros(shape),
                 error=jnp.zeros(shape),
                 energy=jnp.zeros((batch_size,)),
@@ -197,7 +205,8 @@ class NodeDistributionStateInit(StateInitBase):
                 latent_grad=jnp.zeros(shape),
             )
 
-        return GraphState(nodes=node_state_dict, batch_size=batch_size)
+        state = GraphState(nodes=node_state_dict, batch_size=batch_size)
+        return set_latents_to_clamps(state, clamps)
 
 
 class FeedforwardStateInit(StateInitBase):
@@ -225,30 +234,30 @@ class FeedforwardStateInit(StateInitBase):
         params: GraphParams = None,
     ) -> GraphState:
         """Initialize states via feedforward propagation."""
-        from fabricpc.core.initializers import initialize
-        from fabricpc.core.inference import gather_inputs
-
         if params is None:
             raise ValueError("FeedforwardStateInit requires params to be provided")
 
         node_names = list(structure.nodes.keys())
-        node_keys = jax.random.split(rng_key, len(node_names))
-        node_key_map = dict(zip(node_names, node_keys))
+        rng_keys = jax.random.split(rng_key, len(node_names))
+        rng_key_map = dict(zip(node_names, rng_keys))
 
-        # First pass: initialize all nodes with clamps or fallback in case of graph cycles
+        # First pass: initialize all nodes with their default initializer (used as
+        # fallback for graph cycles). Clamps are overlaid afterwards.
         node_state_dict = {}
         for node_name, node in structure.nodes.items():
             node_info = node.node_info
             shape = (batch_size, *node_info.shape)
 
-            if node_name in clamps:
-                z_latent = jnp.asarray(clamps[node_name], dtype=jnp.float32)
-            else:
-                latent_init = node_info.latent_init
-                z_latent = initialize(node_key_map[node_name], shape, latent_init)
+            latent_init = node_info.latent_init
+            z_latent = initialize(rng_key_map[node_name], shape, latent_init)
+            z_latent_dtype = (
+                jnp.asarray(clamps[node_name]).dtype
+                if node_name in clamps
+                else z_latent.dtype
+            )
 
             node_state_dict[node_name] = NodeState(
-                z_latent=z_latent,
+                z_latent=z_latent.astype(z_latent_dtype),
                 z_mu=jnp.zeros(shape),
                 error=jnp.zeros(shape),
                 energy=jnp.zeros((batch_size,)),
@@ -257,6 +266,7 @@ class FeedforwardStateInit(StateInitBase):
             )
 
         state = GraphState(nodes=node_state_dict, batch_size=batch_size)
+        state = set_latents_to_clamps(state, clamps)
 
         # Second pass: feedforward propagation in topological order
         for node_name in structure.node_order:
@@ -270,10 +280,8 @@ class FeedforwardStateInit(StateInitBase):
                 edge_inputs = gather_inputs(node_info, structure, state)
 
                 # Apply muPC forward scaling (if any) before forward pass,
-                # matching what forward_inference() does during training.
-                scaled_inputs = node_class._apply_forward_scaling(
-                    edge_inputs, node_info
-                )
+                # matching what the inference loop does during training.
+                scaled_inputs = scale_inputs(edge_inputs, node_info.scaling_config)
                 _, projected = node_class.forward(
                     node_params, scaled_inputs, node_state, node_info
                 )
@@ -287,13 +295,13 @@ class FeedforwardStateInit(StateInitBase):
                     )  # leave energy and error already initialized to zeros
 
                 else:
-                    # Respect clamped values, retain newly computed error
+                    # z_latent already set to clamp by first pass + set_latents_to_clamps;
+                    # retain newly computed z_mu/error/energy
                     node_state = node_state._replace(
-                        z_latent=jnp.asarray(clamps[node_name], dtype=jnp.float32),
                         z_mu=projected.z_mu,
                         error=projected.error,
                         energy=projected.energy,
-                    )  # error and energy are valid for clamped nodes
+                    )
 
                 # Update state
                 state = state._replace(nodes={**state.nodes, node_name: node_state})
@@ -304,6 +312,41 @@ class FeedforwardStateInit(StateInitBase):
 # =============================================================================
 # Convenience Functions
 # =============================================================================
+
+
+def _validate_clamp_dtypes(
+    structure: GraphStructure, clamps: Dict[str, jnp.ndarray]
+) -> None:
+    """
+    Reject non-float clamps on internal (in_degree>0) nodes with a clear error.
+
+    Predictive-coding inference differentiates the energy w.r.t. each
+    internal node's z_latent (NodeBase.forward autodiff path). A non-float
+    clamp would propagate through state init and trip a cryptic
+    ``grad requires real- or complex-valued inputs`` deep inside JAX.
+    Catching it here names the offending node and dtype.
+
+    Integer clamps are valid only on terminal source nodes (in_degree=0),
+    e.g. token indices feeding an EmbeddingNode.
+    """
+    for node_name, clamp_value in clamps.items():
+        if node_name not in structure.nodes:
+            continue
+        dtype = jnp.asarray(clamp_value).dtype
+        if jnp.issubdtype(dtype, jnp.floating):
+            continue
+        in_degree = structure.nodes[node_name].node_info.in_degree
+        if in_degree > 0:
+            raise TypeError(
+                f"clamp on node '{node_name}' has dtype {dtype}, but this is "
+                f"an internal node (in_degree={in_degree}) and predictive-"
+                f"coding inference requires float-typed latents (autodiff in "
+                f"NodeBase.forward needs real-valued inputs). Non-float "
+                f"clamps are only valid on terminal source nodes "
+                f"(in_degree=0), e.g. token indices feeding an EmbeddingNode. "
+                f"Cast this clamp to float (jnp.asarray(value, "
+                f"dtype=jnp.float32)) or move the data to a source node."
+            )
 
 
 def initialize_graph_state(
@@ -336,6 +379,7 @@ def initialize_graph_state(
         )
     """
     clamps = clamps or {}
+    _validate_clamp_dtypes(structure, clamps)
 
     if state_init is None:
         state_init = structure.config["graph_state_initializer"]

@@ -586,13 +586,14 @@ This can improve:
 Reference: Salvatori et al. "Incremental Predictive Coding" (2022)
 """
 
+
 def ipc_inference_step(
-    params: GraphParams,
-    state: GraphState,
-    clamps: Dict[str, jnp.ndarray],
-    structure: GraphStructure,
-    eta_infer: float,
-    update_order: str = "forward"  # "forward", "backward", "random"
+        params: GraphParams,
+        state: GraphState,
+        clamps: Dict[str, jnp.ndarray],
+        structure: GraphStructure,
+        eta_infer: float,
+        update_order: str = "forward"  # "forward", "backward", "random"
 ) -> GraphState:
     """
     Single iPC inference step with sequential node updates.
@@ -626,7 +627,7 @@ def ipc_inference_step(
         in_edges_data = gather_inputs(node_info, structure, state)
 
         # Compute forward pass and input gradients for this node
-        node_state, inedge_grads = node_class.forward_inference(
+        node_state, inedge_grads = node_class.forward_and_latent_grads(
             params.nodes[node_name], in_edges_data,
             state.nodes[node_name], node_info
         )
@@ -648,13 +649,13 @@ def ipc_inference_step(
 
 
 def run_ipc_inference(
-    params: GraphParams,
-    initial_state: GraphState,
-    clamps: Dict[str, jnp.ndarray],
-    structure: GraphStructure,
-    infer_steps: int,
-    eta_infer: float = 0.1,
-    update_order: str = "forward",
+        params: GraphParams,
+        initial_state: GraphState,
+        clamps: Dict[str, jnp.ndarray],
+        structure: GraphStructure,
+        infer_steps: int,
+        eta_infer: float = 0.1,
+        update_order: str = "forward",
 ) -> GraphState:
     """
     Run iPC inference for multiple steps.
@@ -662,6 +663,7 @@ def run_ipc_inference(
     The inner loop is not easily vectorizable due to sequential
     dependencies, but can be JIT compiled.
     """
+
     def body_fn(t, state):
         return ipc_inference_step(
             params, state, clamps, structure, eta_infer, update_order
@@ -693,18 +695,20 @@ This enables:
 from typing import NamedTuple
 import jax.numpy as jnp
 
+
 class SchedulerState(NamedTuple):
     """State tracked by the dynamic scheduler."""
     node_etas: Dict[str, float]  # Per-node learning rates
     energy_history: Dict[str, jnp.ndarray]  # Rolling energy window
     step: int
 
+
 def create_scheduler(
-    structure: GraphStructure,
-    base_eta: float = 0.1,
-    window_size: int = 5,
-    min_eta: float = 0.001,
-    max_eta: float = 1.0,
+        structure: GraphStructure,
+        base_eta: float = 0.1,
+        window_size: int = 5,
+        min_eta: float = 0.001,
+        max_eta: float = 1.0,
 ) -> SchedulerState:
     """Initialize scheduler with uniform learning rates."""
     node_etas = {name: base_eta for name in structure.nodes}
@@ -716,9 +720,9 @@ def create_scheduler(
 
 
 def update_scheduler(
-    scheduler: SchedulerState,
-    state: GraphState,
-    config: Dict[str, Any],
+        scheduler: SchedulerState,
+        state: GraphState,
+        config: Dict[str, Any],
 ) -> SchedulerState:
     """
     Update learning rates based on current energy landscape.
@@ -769,15 +773,15 @@ def update_scheduler(
 
 
 def scheduled_inference_step(
-    params: GraphParams,
-    state: GraphState,
-    clamps: Dict[str, jnp.ndarray],
-    structure: GraphStructure,
-    scheduler: SchedulerState,
+        params: GraphParams,
+        state: GraphState,
+        clamps: Dict[str, jnp.ndarray],
+        structure: GraphStructure,
+        scheduler: SchedulerState,
 ) -> Tuple[GraphState, SchedulerState]:
     """
     Inference step with per-node adaptive learning rates.
-    Uses forward_inference to compute predictions, errors, and gradients.
+    Uses forward_and_latent_grads to compute predictions, errors, and gradients.
     """
     # Zero latent gradients
     for node_name in structure.nodes:
@@ -794,7 +798,7 @@ def scheduled_inference_step(
         node_class = get_node_class(node_info.node_type)
         in_edges_data = gather_inputs(node_info, structure, state)
 
-        node_state, inedge_grads = node_class.forward_inference(
+        node_state, inedge_grads = node_class.forward_and_latent_grads(
             params.nodes[node_name], in_edges_data,
             state.nodes[node_name], node_info
         )
@@ -920,196 +924,197 @@ This enables:
 """
 
 from fabricpc.core.types import (
-    GraphParams, GraphState, GraphStructure,
-    NodeParams, NodeState, NodeInfo
+ GraphParams, GraphState, GraphStructure,
+ NodeParams, NodeState, NodeInfo
 )
 from fabricpc.nodes.base import NodeBase, SlotSpec
 
+
 @register_node("hypernode")
 class HyperNode(NodeBase):
-    """
-    A node that contains a complete subgraph.
+ """
+ A node that contains a complete subgraph.
 
-    The subgraph runs its own PC inference during each step of the
-    parent graph's inference. Input/output boundaries connect the
-    subgraph to the parent graph.
+ The subgraph runs its own PC inference during each step of the
+ parent graph's inference. Input/output boundaries connect the
+ subgraph to the parent graph.
 
-    Configuration:
-    - subgraph_config: Configuration dict for internal graph
-    - input_mapping: Maps parent edges to subgraph input nodes
-    - output_mapping: Maps subgraph output nodes to this node's output
-    - internal_infer_steps: Number of inference steps per parent step
-    """
+ Configuration:
+ - subgraph_config: Configuration dict for internal graph
+ - input_mapping: Maps parent edges to subgraph input nodes
+ - output_mapping: Maps subgraph output nodes to this node's output
+ - internal_infer_steps: Number of inference steps per parent step
+ """
 
-    @staticmethod
-    def get_slots():
-        # Slots are dynamically defined based on subgraph inputs
-        # Default: single input that feeds subgraph input layer
-        return {
-            "in": SlotSpec(name="in", is_multi_input=True),
-        }
+ @staticmethod
+ def get_slots():
+  # Slots are dynamically defined based on subgraph inputs
+  # Default: single input that feeds subgraph input layer
+  return {
+   "in": SlotSpec(name="in", is_multi_input=True),
+  }
 
-    @staticmethod
-    def initialize_params(key, node_shape, input_shapes, config):
-        """
-        Initialize both the hypernode's own parameters and its subgraph.
-        """
-        import numpy as np
-        from fabricpc.graph.graph_net import create_pc_graph
+ @staticmethod
+ def initialize_params(key, node_shape, input_shapes, config):
+  """
+  Initialize both the hypernode's own parameters and its subgraph.
+  """
+  import numpy as np
+  from fabricpc.graph_initialization.graph_net import create_pc_graph
 
-        subgraph_config = config["subgraph_config"]
-        key_sub, key_boundary = jax.random.split(key)
+  subgraph_config = config["subgraph_config"]
+  key_sub, key_boundary = jax.random.split(key)
 
-        # Create internal subgraph
-        subgraph_params, subgraph_structure = create_pc_graph(
-            subgraph_config, key_sub
-        )
+  # Create internal subgraph
+  subgraph_params, subgraph_structure = create_pc_graph(
+   subgraph_config, key_sub
+  )
 
-        # Boundary transformation weights (optional)
-        # Maps from external input shape to subgraph input shape
-        boundary_weights = {}
-        for slot_name, ext_shape in input_shapes.items():
-            internal_input = config["input_mapping"].get(slot_name)
-            if internal_input:
-                ext_dim = int(np.prod(ext_shape))
-                int_shape = subgraph_structure.nodes[internal_input].shape
-                int_dim = int(np.prod(int_shape))
-                key_boundary, subkey = jax.random.split(key_boundary)
-                boundary_weights[f"boundary_{slot_name}"] = (
-                    jax.random.normal(subkey, (ext_dim, int_dim)) * 0.01
-                )
+  # Boundary transformation weights (optional)
+  # Maps from external input shape to subgraph input shape
+  boundary_weights = {}
+  for slot_name, ext_shape in input_shapes.items():
+   internal_input = config["input_mapping"].get(slot_name)
+   if internal_input:
+    ext_dim = int(np.prod(ext_shape))
+    int_shape = subgraph_structure.nodes[internal_input].shape
+    int_dim = int(np.prod(int_shape))
+    key_boundary, subkey = jax.random.split(key_boundary)
+    boundary_weights[f"boundary_{slot_name}"] = (
+            jax.random.normal(subkey, (ext_dim, int_dim)) * 0.01
+    )
 
-        return NodeParams(
-            weights={
-                **boundary_weights,
-                "_subgraph_weights": subgraph_params,  # Nested params
-            },
-            biases={}
-        )
+  return NodeParams(
+   weights={
+    **boundary_weights,
+    "_subgraph_weights": subgraph_params,  # Nested params
+   },
+   biases={}
+  )
 
-    @staticmethod
-    def forward(params, inputs, state, node_info):
-        """
-        Forward pass runs internal subgraph inference.
-        Returns (total_energy, updated_state).
-        """
-        config = node_info.node_config
-        subgraph_params = params.weights["_subgraph_weights"]
-        subgraph_structure = config["_subgraph_structure"]
-        internal_steps = config.get("internal_infer_steps", 5)
-        eta_internal = config.get("internal_eta", 0.1)
+ @staticmethod
+ def forward(params, inputs, state, node_info):
+  """
+  Forward pass runs internal subgraph inference.
+  Returns (total_energy, updated_state).
+  """
+  config = node_info.node_config
+  subgraph_params = params.weights["_subgraph_weights"]
+  subgraph_structure = config["_subgraph_structure"]
+  internal_steps = config.get("internal_infer_steps", 5)
+  eta_internal = config.get("internal_eta", 0.1)
 
-        # Initialize subgraph state
-        batch_size = list(inputs.values())[0].shape[0]
-        subgraph_state = initialize_graph_state(
-            subgraph_structure, batch_size
-        )
+  # Initialize subgraph state
+  batch_size = list(inputs.values())[0].shape[0]
+  subgraph_state = initialize_graph_state(
+   subgraph_structure, batch_size
+  )
 
-        # Apply boundary transformations and clamp subgraph inputs
-        clamps = {}
-        for edge_key, ext_input in inputs.items():
-            slot = edge_key.split(":")[-1]
-            internal_input = config["input_mapping"].get(slot)
-            if internal_input:
-                boundary_key = f"boundary_{slot}"
-                if boundary_key in params.weights:
-                    transformed = jnp.matmul(ext_input, params.weights[boundary_key])
-                else:
-                    transformed = ext_input
-                clamps[internal_input] = transformed
+  # Apply boundary transformations and clamp subgraph inputs
+  clamps = {}
+  for edge_key, ext_input in inputs.items():
+   slot = edge_key.split(":")[-1]
+   internal_input = config["input_mapping"].get(slot)
+   if internal_input:
+    boundary_key = f"boundary_{slot}"
+    if boundary_key in params.weights:
+     transformed = jnp.matmul(ext_input, params.weights[boundary_key])
+    else:
+     transformed = ext_input
+    clamps[internal_input] = transformed
 
-        # Run internal inference
-        subgraph_state = run_inference(
-            subgraph_params, subgraph_state, clamps,
-            subgraph_structure, internal_steps, eta_internal
-        )
+  # Run internal inference
+  subgraph_state = run_inference(
+   subgraph_params, subgraph_state, clamps,
+   subgraph_structure, internal_steps, eta_internal
+  )
 
-        # Extract output from subgraph
-        output_node = config["output_mapping"]["out"]
-        z_mu = subgraph_state.nodes[output_node].z_latent
+  # Extract output from subgraph
+  output_node = config["output_mapping"]["out"]
+  z_mu = subgraph_state.nodes[output_node].z_latent
 
-        # Compute error and energy
-        error = state.z_latent - z_mu
-        energy = 0.5 * jnp.sum(error ** 2, axis=-1)
+  # Compute error and energy
+  error = state.z_latent - z_mu
+  energy = 0.5 * jnp.sum(error ** 2, axis=-1)
 
-        # Update state
-        state = state._replace(
-            z_mu=z_mu,
-            pre_activation=z_mu,
-            error=error,
-            energy=energy,
-            substructure={"_subgraph_state": subgraph_state}
-        )
+  # Update state
+  state = state._replace(
+   z_mu=z_mu,
+   pre_activation=z_mu,
+   error=error,
+   energy=energy,
+   substructure={"_subgraph_state": subgraph_state}
+  )
 
-        return jnp.sum(energy), state
+  return jnp.sum(energy), state
 
-    @staticmethod
-    def forward_inference(params, inputs, state, node_info):
-        """
-        Forward pass with gradient computation for inputs.
+ @staticmethod
+ def forward_and_latent_grads(params, inputs, state, node_info):
+  """
+  Forward pass with gradient computation for inputs.
 
-        Propagates gradients backward through the subgraph to get
-        input gradients for the parent graph.
-        """
-        from fabricpc.nodes import get_node_class
-        node_class = get_node_class(node_info.node_type)
+  Propagates gradients backward through the subgraph to get
+  input gradients for the parent graph.
+  """
+  from fabricpc.nodes import get_node_class
+  node_class = get_node_class(node_info.node_type)
 
-        # Run forward to get updated state
-        _, state = node_class.forward(params, inputs, state, node_info)
+  # Run forward to get updated state
+  _, state = node_class.forward(params, inputs, state, node_info)
 
-        config = node_info.node_config
-        subgraph_state = state.substructure["_subgraph_state"]
-        subgraph_structure = config["_subgraph_structure"]
-        subgraph_params = params.weights["_subgraph_weights"]
+  config = node_info.node_config
+  subgraph_state = state.substructure["_subgraph_state"]
+  subgraph_structure = config["_subgraph_structure"]
+  subgraph_params = params.weights["_subgraph_weights"]
 
-        # Set the output node's error to match this node's error
-        output_node = config["output_mapping"]["out"]
-        subgraph_state = update_node_in_state(
-            subgraph_state, output_node,
-            error=state.error,
-            latent_grad=state.error  # Start gradient propagation
-        )
+  # Set the output node's error to match this node's error
+  output_node = config["output_mapping"]["out"]
+  subgraph_state = update_node_in_state(
+   subgraph_state, output_node,
+   error=state.error,
+   latent_grad=state.error  # Start gradient propagation
+  )
 
-        # Run one inference step backward through subgraph to propagate gradients
-        for node_name in reversed(subgraph_structure.node_order):
-            sub_node_info = subgraph_structure.nodes[node_name]
-            if sub_node_info.in_degree == 0:
-                continue
+  # Run one inference step backward through subgraph to propagate gradients
+  for node_name in reversed(subgraph_structure.node_order):
+   sub_node_info = subgraph_structure.nodes[node_name]
+   if sub_node_info.in_degree == 0:
+    continue
 
-            sub_node_class = get_node_class(sub_node_info.node_type)
-            in_edges_data = gather_inputs(sub_node_info, subgraph_structure, subgraph_state)
+   sub_node_class = get_node_class(sub_node_info.node_type)
+   in_edges_data = gather_inputs(sub_node_info, subgraph_structure, subgraph_state)
 
-            _, inedge_grads = sub_node_class.forward_inference(
-                subgraph_params.nodes[node_name], in_edges_data,
-                subgraph_state.nodes[node_name], sub_node_info
-            )
+   _, inedge_grads = sub_node_class.forward_and_latent_grads(
+    subgraph_params.nodes[node_name], in_edges_data,
+    subgraph_state.nodes[node_name], sub_node_info
+   )
 
-            # Accumulate gradients to source nodes
-            for edge_key, grad in inedge_grads.items():
-                source_name = subgraph_structure.edges[edge_key].source
-                latent_grad = subgraph_state.nodes[source_name].latent_grad + grad
-                subgraph_state = update_node_in_state(subgraph_state, source_name, latent_grad=latent_grad)
+   # Accumulate gradients to source nodes
+   for edge_key, grad in inedge_grads.items():
+    source_name = subgraph_structure.edges[edge_key].source
+    latent_grad = subgraph_state.nodes[source_name].latent_grad + grad
+    subgraph_state = update_node_in_state(subgraph_state, source_name, latent_grad=latent_grad)
 
-        # Extract gradients for parent graph's source nodes
-        input_grads = {}
-        for edge_key, ext_input in inputs.items():
-            slot = edge_key.split(":")[-1]
-            internal_input = config["input_mapping"].get(slot)
+  # Extract gradients for parent graph's source nodes
+  input_grads = {}
+  for edge_key, ext_input in inputs.items():
+   slot = edge_key.split(":")[-1]
+   internal_input = config["input_mapping"].get(slot)
 
-            if internal_input:
-                # Get gradient from subgraph input node
-                internal_grad = subgraph_state.nodes[internal_input].latent_grad
+   if internal_input:
+    # Get gradient from subgraph input node
+    internal_grad = subgraph_state.nodes[internal_input].latent_grad
 
-                # Apply boundary transformation (if any)
-                boundary_key = f"boundary_{slot}"
-                if boundary_key in params.weights:
-                    grad = jnp.matmul(internal_grad, params.weights[boundary_key].T)
-                else:
-                    grad = internal_grad
+    # Apply boundary transformation (if any)
+    boundary_key = f"boundary_{slot}"
+    if boundary_key in params.weights:
+     grad = jnp.matmul(internal_grad, params.weights[boundary_key].T)
+    else:
+     grad = internal_grad
 
-                input_grads[edge_key] = -grad
+    input_grads[edge_key] = -grad
 
-        return state, input_grads
+  return state, input_grads
 ```
 
 ### 4.2 Subgraph Sharing

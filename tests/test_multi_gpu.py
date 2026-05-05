@@ -14,8 +14,9 @@ import numpy as np
 import optax
 
 from fabricpc.nodes import Linear
-from fabricpc.builder import Edge, TaskMap, graph
-from fabricpc.graph import initialize_params
+from fabricpc.core.topology import Edge
+from fabricpc.graph_assembly import TaskMap, graph
+from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.activations import IdentityActivation, ReLUActivation
 from fabricpc.core.initializers import XavierInitializer
 from fabricpc.core.inference import InferenceSGD

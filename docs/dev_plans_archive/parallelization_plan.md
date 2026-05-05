@@ -340,11 +340,11 @@ def unstack_states_to_dict(
 
 ```python
 def inference_step_parallel(
-    params: GraphParams,
-    state: GraphState,
-    clamps: Dict[str, jnp.ndarray],
-    structure: GraphStructure,
-    eta_infer: float,
+        params: GraphParams,
+        state: GraphState,
+        clamps: Dict[str, jnp.ndarray],
+        structure: GraphStructure,
+        eta_infer: float,
 ) -> GraphState:
     """Single inference step with group-based parallelization."""
 
@@ -372,11 +372,12 @@ def inference_step_parallel(
 
     return state
 
+
 def process_group_vmap(
-    group: NodeGroup,
-    params: GraphParams,
-    state: GraphState,
-    structure: GraphStructure
+        group: NodeGroup,
+        params: GraphParams,
+        state: GraphState,
+        structure: GraphStructure
 ) -> Tuple[GraphState, Dict]:
     """Process multiple nodes of same type in parallel using vmap."""
 
@@ -389,7 +390,7 @@ def process_group_vmap(
     node_class = get_node_class(group.node_type)
 
     # vmap over the node dimension
-    vmapped_forward = jax.vmap(node_class.forward_inference, in_axes=(0, 0, 0, None))
+    vmapped_forward = jax.vmap(node_class.forward_and_latent_grads, in_axes=(0, 0, 0, None))
     new_stacked_states, stacked_grads = vmapped_forward(
         stacked_params, stacked_inputs, stacked_states, node_info_template
     )
@@ -402,13 +403,14 @@ def process_group_vmap(
 
     return state, inedge_grads
 
+
 def run_inference_parallel(
-    params: GraphParams,
-    initial_state: GraphState,
-    clamps: Dict[str, jnp.ndarray],
-    structure: GraphStructure,
-    infer_steps: int,
-    eta_infer: float,
+        params: GraphParams,
+        initial_state: GraphState,
+        clamps: Dict[str, jnp.ndarray],
+        structure: GraphStructure,
+        infer_steps: int,
+        eta_infer: float,
 ) -> GraphState:
     """Run inference for T steps (Decision 2: vmap single step, loop outside)."""
 

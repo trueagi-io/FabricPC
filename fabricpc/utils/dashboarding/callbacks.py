@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 import jax
 
-from fabricpc.core.types import GraphParams, GraphStructure
+from fabricpc.core.types import GraphParams, GraphState, GraphStructure
 from fabricpc.utils.dashboarding.trackers import AimExperimentTracker, TrackingConfig
 
 
@@ -157,7 +157,6 @@ def create_detailed_iter_callback(
     Returns:
         Callback function: (epoch_idx, batch_idx, energy, final_state) -> normalized_energy
     """
-    from fabricpc.core.types import GraphState
 
     def detailed_iter_callback(
         epoch_idx: int,

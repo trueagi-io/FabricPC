@@ -7,6 +7,7 @@
 **Title:** muPC: Scaling Predictive Coding to 100+ Layer Networks
 **Authors:** Francesco Innocenti, El Mehdi Achour, Christopher L. Buckley
 **Reference code:** https://github.com/thebuckleylab/jpc
+**arXiv:** https://arxiv.org/abs/2505.13124
 
 ### The Problem
 
@@ -312,8 +313,8 @@ NEW FILES:
 MODIFIED FILES:
   fabricpc/core/initializers.py      - Add MuPCInitializer class
   fabricpc/core/types.py             - Add scaling_config field to NodeInfo
-  fabricpc/builder/graph_builder.py  - Compute and attach scaling factors at build time
-  fabricpc/nodes/base.py             - Apply scaling in forward_inference, forward_learning, energy_functional
+  fabricpc/builder/graph_construction.py  - Compute and attach scaling factors at build time
+  fabricpc/nodes/base.py             - Apply scaling in forward_and_latent_grads, forward_and_weight_grads, energy_functional
                                        (NO changes to any node's forward() method!)
 ```
 
@@ -425,7 +426,7 @@ class NodeInfo:
 
 This is part of the static graph structure (not a pytree leaf), so it doesn't affect JAX tracing.
 
-### Step 5: Compute and Attach Scalings at Graph Build Time — in `fabricpc/builder/graph_builder.py`
+### Step 5: Compute and Attach Scalings at Graph Build Time — in `fabricpc/builder/graph_construction.py`
 
 Modify the `graph()` function to optionally accept a `scaling` parameter:
 
@@ -444,8 +445,8 @@ After building `NodeInfo` for all nodes (step 4 in current code), if `scaling` i
 
 ### Step 6: Apply Scaling Without Modifying Any Node's `forward()` — in `fabricpc/nodes/base.py`
 
-**Key design**: All four scalings are applied in `NodeBase`'s `forward_inference()`,
-`forward_learning()`, and `energy_functional()` methods. No changes to `Linear.forward()`
+**Key design**: All four scalings are applied in `NodeBase`'s `forward_and_latent_grads()`,
+`forward_and_weight_grads()`, and `energy_functional()` methods. No changes to `Linear.forward()`
 or any other node subclass's `forward()`.
 
 The trick: **pre-scale the inputs before passing them to `forward()`**. Since
@@ -454,13 +455,13 @@ equivalent to scaling the output. Because the scaling happens _inside_ the funct
 being differentiated by JAX, it automatically flows into both input gradients and
 weight gradients through the chain rule.
 
-#### 6a. Forward scaling via input pre-scaling in `forward_inference()`
+#### 6a. Forward scaling via input pre-scaling in `forward_and_latent_grads()`
 
 In `base.py`, before the `jax.value_and_grad` call at line 381, scale each
 input tensor by its per-edge forward scale:
 
 ```python
-# In forward_inference(), in the else branch (line 378+):
+# In forward_and_latent_grads(), in the else branch (line 378+):
 
 # Apply muPC forward scaling by pre-scaling inputs
 scaled_inputs = inputs
@@ -481,7 +482,7 @@ includes `a_l` in the chain rule. The result: `dE/dx = a_l * W^T * f'(z) * ε`,
 which is exactly the muPC top-down gradient before the `c_td` correction.
 
 The same pattern applies to the unclamped leaf branch (line 364) and the
-`forward_learning()` method (line 423).
+`forward_and_weight_grads()` method (line 423).
 
 #### 6b. Self-gradient scaling in `energy_functional()`
 
@@ -506,7 +507,7 @@ def energy_functional(state, node_info):
     return state
 ```
 
-#### 6c. Top-down gradient scaling in `forward_inference()`
+#### 6c. Top-down gradient scaling in `forward_and_latent_grads()`
 
 After the `value_and_grad` call, apply the additional `c_td` correction:
 
@@ -524,12 +525,12 @@ The `c_td` here is the **additional** correction factor. So the total top-down
 gradient is: `c_td * a_l * W^T * f'(z) * ε`. For unit variance we need
 `c_td = 1 / sqrt(fan_out)` (since `a_l` already handles `1/sqrt(fan_in * L)`).
 
-#### 6d. Weight gradient scaling in `forward_learning()`
+#### 6d. Weight gradient scaling in `forward_and_weight_grads()`
 
 Same input pre-scaling pattern, then additional `c_w` correction:
 
 ```python
-# In forward_learning():
+# In forward_and_weight_grads():
 
 # Pre-scale inputs (same as inference)
 scaled_inputs = inputs
@@ -558,10 +559,10 @@ if node_info.scaling_config is not None:
 
 | Scaling | What it controls | Where applied | Mechanism |
 |---------|-----------------|---------------|-----------|
-| `forward_scale[edge]` | O(1) forward activations | `NodeBase.forward_inference()` and `forward_learning()` | Pre-scale inputs before calling `node_class.forward()` |
+| `forward_scale[edge]` | O(1) forward activations | `NodeBase.forward_and_latent_grads()` and `forward_and_weight_grads()` | Pre-scale inputs before calling `node_class.forward()` |
 | `self_grad_scale` | Self-gradient magnitude | `NodeBase.energy_functional()` | Multiply `grad_latent` output |
-| `topdown_grad_scale[edge]` | Top-down gradient to presynaptic node | `NodeBase.forward_inference()` after autodiff | Multiply `input_grads` per edge |
-| `weight_grad_scale[edge]` | Weight update magnitude | `NodeBase.forward_learning()` after autodiff | Multiply `params_grad.weights` per edge |
+| `topdown_grad_scale[edge]` | Top-down gradient to presynaptic node | `NodeBase.forward_and_latent_grads()` after autodiff | Multiply `input_grads` per edge |
+| `weight_grad_scale[edge]` | Weight update magnitude | `NodeBase.forward_and_weight_grads()` after autodiff | Multiply `params_grad.weights` per edge |
 
 **Why input pre-scaling works for any node type:**
 - For linear nodes: `W @ (a*x) = a * (W @ x)` — exact equivalence
@@ -598,7 +599,7 @@ structure = graph(
 2. `fabricpc/core/initializers.py` — add `MuPCInitializer` class
 3. `fabricpc/core/mupc.py` — new file, depends on depth_metric
 4. `fabricpc/core/types.py` — add `scaling_config` to `NodeInfo`
-5. `fabricpc/builder/graph_builder.py` — compute and attach scalings
+5. `fabricpc/builder/graph_construction.py` — compute and attach scalings
 6. `fabricpc/nodes/base.py` — apply all four scalings via input pre-scaling + post-hoc gradient corrections
 7. Tests and example script
 
@@ -623,11 +624,11 @@ Implementation Summary
                                                                                                                                                                                                                              
   - fabricpc/core/initializers.py — Added MuPCInitializer (W ~ N(0, gain^2), unit-variance weights with scaling decoupled to forward pass)                                                                                   
   - fabricpc/core/types.py — Added scaling_config: Any = None field to NodeInfo                                                                                                                                              
-  - fabricpc/builder/graph_builder.py — Added optional scaling parameter to graph(). When a MuPCConfig is provided, computes per-node scalings and attaches them to NodeInfo.scaling_config                                  
+  - fabricpc/builder/graph_construction.py — Added optional scaling parameter to graph(). When a MuPCConfig is provided, computes per-node scalings and attaches them to NodeInfo.scaling_config                                  
   - fabricpc/nodes/base.py — Applied all four scalings without modifying any node's forward():                                                                                                                               
     - _apply_forward_scaling(): pre-scales inputs by per-edge forward_scale (since W@(ax) = a(W@x))                                                                                                                          
-    - forward_inference(): pre-scales inputs + applies topdown_grad_scale to input_grads after autodiff                                                                                                                      
-    - forward_learning(): pre-scales inputs + applies weight_grad_scale to weight grads after autodiff                                                                                                                       
+    - forward_and_latent_grads(): pre-scales inputs + applies topdown_grad_scale to input_grads after autodiff                                                                                                                      
+    - forward_and_weight_grads(): pre-scales inputs + applies weight_grad_scale to weight grads after autodiff                                                                                                                       
     - energy_functional(): applies self_grad_scale to the self-latent gradient                                                                                                                                               
                                                                                                                                                                                                                              
   Test File (1)                                                                                                                                                                                                              

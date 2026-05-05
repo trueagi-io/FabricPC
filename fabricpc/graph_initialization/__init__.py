@@ -1,12 +1,10 @@
 """JAX graph for predictive coding networks."""
 
-from fabricpc.graph.graph_net import (
+from fabricpc.graph_initialization.params_initializer import (
     initialize_params,
-    set_latents_to_clamps,
-    compute_local_weight_gradients,
 )
 
-from fabricpc.graph.state_initializer import (
+from fabricpc.graph_initialization.state_initializer import (
     StateInitBase,
     GlobalStateInit,
     NodeDistributionStateInit,
@@ -15,10 +13,8 @@ from fabricpc.graph.state_initializer import (
 )
 
 __all__ = [
-    # Graph construction
+    # Params initialization
     "initialize_params",
-    "set_latents_to_clamps",
-    "compute_local_weight_gradients",
     # State initializers
     "StateInitBase",
     "GlobalStateInit",

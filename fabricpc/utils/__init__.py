@@ -2,10 +2,7 @@
 
 import importlib
 
-from fabricpc.utils.helpers import (
-    update_node_in_state,
-    layernorm,
-)
+from fabricpc.utils.helpers import layernorm
 
 # Submodules
 from fabricpc.utils import data
@@ -20,7 +17,6 @@ def __getattr__(name: str):
 
 __all__ = [
     # Helpers
-    "update_node_in_state",
     "layernorm",
     # Submodules
     "data",

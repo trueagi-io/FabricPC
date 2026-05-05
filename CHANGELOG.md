@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.3.1] - 2026-05-04
+Internal infrastructure release: unified autodiff gradient path, muPC scaling lifted to callsites, and a package restructure that resolves circular import.
+
+### Breaking changes — downstream migration guide
+**Import path migrations.** The `builder` package is gone; topology primitives live in `core`, the assembly entry point lives in `graph_assembly`, and `graph` is renamed to `graph_initialization`. Mechanical replacements:
+- `from fabricpc.builder import Edge` → `from fabricpc.core.topology import Edge`
+- `from fabricpc.builder import SlotRef, GraphNamespace` → `from fabricpc.core.topology import SlotRef, GraphNamespace`
+- `from fabricpc.builder import graph, TaskMap` → `from fabricpc.graph_assembly import graph, TaskMap`
+- `from fabricpc.graph import initialize_params` → `from fabricpc.graph_initialization import initialize_params` (also re-exported from `fabricpc`)
+- `from fabricpc.graph.state_initializer import ...` → `from fabricpc.graph_initialization.state_initializer import ...`
+- `from fabricpc.graph.graph_net import compute_local_weight_gradients` → `from fabricpc.core.learning import compute_local_weight_gradients`
+- `from fabricpc.utils.helpers import update_node_in_state, set_latents_to_clamps` → `from fabricpc.core.state_ops import ...` (`layernorm` stays in `utils.helpers`)
+
+**Node API renames.** Methods on `NodeBase` (and any subclass that overrides them):
+- `forward_inference(...)` → `forward_and_latent_grads(...)`. **Return signature changed** from `(NodeState, input_grads)` to `(NodeState, input_grads, self_grad)`. The third value is `dE/dz_latent` for this node only, unscaled; the inference loop scales it and accumulates into `state.latent_grad`. Subclasses that override this method must return the third value.
+- `forward_learning(...)` → `forward_and_weight_grads(...)`.
+
+**muPC scaling lifted out of nodes.** `NodeBase._apply_forward_scaling` is removed. Node forward/grad methods are now pure autodiff. Pre-scaling of inputs and post-scaling of input/self/weight grads are applied by the inference and learning loops via `fabricpc.core.scaling.{scale_inputs, scale_input_grads, scale_self_grad, scale_weight_grads}`. Custom nodes with a hand-written `forward_inference`/`forward_learning` override should drop any internal scaling and follow the new contract; see `nodes/linear_explicit_grad.py` (extracted from `linear.py`) for the reference pattern.
+**muPC contract for non-variance-scalable slots changed.** Edges arriving at slots with `is_variance_scalable=False` are now **omitted** from `MuPCScalingFactors.{forward_scale, topdown_grad_scale, weight_grad_scale}` rather than populated with 1.0. Callsites treat missing keys as no-op pass-through. This preserves input dtype across the boundary (an `x * 1.0` previously promoted integer token indices to float). Forks that read these dicts directly must use `dict.get(k, 1.0)` or membership checks.
+**Integer clamps now flow through to terminal source nodes.** State initializers propagate the clamp dtype onto `z_latent` for clamped nodes; other `NodeState` fields stay float. Callers feeding `EmbeddingNode` should clamp with integer dtype (e.g. `jnp.int32` token indices) — `EmbeddingNode.forward` no longer casts internally, and `train_autoregressive._generation_step` no longer casts indices to float. The `EmbeddingNode` "in" slot is now `is_variance_scalable=False`.
+**`StorkeyHopfield`.** `accumulate_hopfield_energy_and_grad(...)` → `accumulate_hopfield_energy(...)`. The Hopfield latent gradient is no longer accumulated manually — autodiff in `forward_and_latent_grads` handles it.
+**Removed duplicates / dead code.** `compute_local_weight_gradients_ar` (was a near-duplicate of `compute_local_weight_gradients`), `GraphStructure._topological_sort` (duplicate of the canonical implementation in `graph_assembly`), and the empty `fabricpc/graph_initialization/graph_net.py` shim are gone.
+**Other.** `LinearExplicitGrad` moved from `fabricpc/nodes/linear.py` to `fabricpc/nodes/linear_explicit_grad.py` (still re-exported from `fabricpc.nodes`). Forced `float32` dtype removed from state initialization. RNG variable renamed: `node_keys` → `rng_keys`. New `ActivationBase.jacobian()` hook with `SoftmaxActivation.jacobian()` implemented for explicit-gradient overrides.
+### Verification
+`pytest tests/ -x`: 127 passed. Demos (`mnist_demo.py`, `transformer_v2_demo.py`, `resnet18_cifar10_demo.py`) run clean.
+
 ## [0.3.0] - 2026-04-17
 - muPC scaling supports arbitrary DAG topologies with correct per-edge scaling, per-slot computation. Scaling formula is `a = gain / sqrt(fan_in * K_slot * L)` where K_slot is the per-slot in-degree and L is the residual depth (number of nodes with skip connection slots along the longest path).
 - Stable training demonstrated on networks with 100+ layers with muPC scaling. 
