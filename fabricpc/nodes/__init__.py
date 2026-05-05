@@ -28,10 +28,12 @@ from fabricpc.nodes.transformer_v2 import (
 from fabricpc.nodes.storkey_hopfield import StorkeyHopfield
 from fabricpc.nodes.skip_connection import SkipConnection
 from fabricpc.nodes.linear_residual import LinearResidual
+from fabricpc.nodes.convolutional import Conv1DNode, Conv2DNode, Conv3DNode
 
 # Convenience aliases matching the target API
 Linear = Linear
 TransformerBlock = TransformerBlock
+Identity = IdentityNode  # Standard alias for IdentityNode
 
 __all__ = [
     # Base classes and mixins
@@ -44,6 +46,7 @@ __all__ = [
     "LinearExplicitGrad",
     "TransformerBlock",
     "IdentityNode",
+    "Identity",
     "EmbeddingNode",
     "MhaResidualNode",
     "LnMlp1Node",
@@ -52,4 +55,7 @@ __all__ = [
     "StorkeyHopfield",
     "SkipConnection",
     "LinearResidual",
+    "Conv1DNode",
+    "Conv2DNode",
+    "Conv3DNode",
 ]
