@@ -19,6 +19,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Private :: Do Not Upload",
 ]
@@ -40,13 +42,15 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
     "hypothesis>=6.0.0",
-    "black[colorama]==26.1.0",
+    "black[colorama]>=26.1.0",
     "mypy>=1.0.0",
     "pre-commit>=3.0.0",
 ]
 tfds = [
-    "tensorflow-datasets>=4.9.0",
-    "tensorflow>=2.15.0",
+    # TensorFlow has no Python 3.14 wheels yet; markers let [tfds] no-op
+    # on 3.14 instead of failing to resolve.
+    "tensorflow-datasets>=4.9.0; python_version < '3.14'",
+    "tensorflow>=2.15.0; python_version < '3.14'",
 ]
 experiments = [
     "scipy>=1.10.0",
@@ -55,10 +59,18 @@ viz = [
     "plotly>=5.0.0",
     "kaleido>=0.2.1",
     "pandas>=2.0.0",
-    "aim>=3.0.0",  # aim requires Python <3.13
+    # Aim has no Python 3.13+ wheels; the marker keeps [viz] installable
+    # on newer Python without dropping Aim for users on Python <=3.12.
+    "aim>=3.0.0; python_version < '3.13'",
 ]
 cuda = [
-    "jax[cuda12]",
+    "jax[cuda12]>=0.10.0",
+]
+cuda12 = [
+    "jax[cuda12]>=0.10.0",
+]
+cuda13 = [
+    "jax[cuda13]>=0.10.0",
 ]
 all = [
     "fabricpc[dev,tfds,experiments,viz,cuda]",
@@ -73,7 +85,7 @@ include = ["fabricpc*"]
 
 [tool.black]
 line-length = 88
-target-version = ["py310", "py311", "py312"]
+target-version = ["py310", "py311", "py312", "py313", "py314"]
 include = '\.pyi?$'
 extend-exclude = '''
 /(

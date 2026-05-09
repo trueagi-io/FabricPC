@@ -27,20 +27,77 @@ There are various flavors of PC. FabricPC provides a graph-based implementation 
  
 ## Quick Start
 
-Create a virtual environement with python 3.12.x (higher versions may not work with Aim experiment tracking)
+For most users the easiest install is the auto-detect helper, which
+runs `nvidia-smi`, picks the matching `[cuda12]` / `[cuda13]` extra
+(or CPU-only when no NVIDIA driver is detected), and invokes pip:
+
 ```bash
+python -m venv .venv
+source .venv/bin/activate
+python scripts/install.py            # add --all to also pull [tfds]
+pre-commit install
+python examples/mnist_demo.py
+```
+
+The recipe below is the manual fallback — it works on Python
+3.10–3.12 with a CUDA 12 GPU and pulls every optional integration
+(Aim experiment tracking, TensorFlow Datasets, viz, dev tooling).
+
+```bash
+# Create a venv with Python 3.12.x (the version the full feature set targets)
+python3.12 -m venv .venv
+source .venv/bin/activate
+
 # Install in editable mode (recommended for development, and running examples)
 pip install -e ".[all]"
 
 # Install pre-commit hooks for code quality
-pre-commit install     
+pre-commit install
 
-# Start the Aim visualization server (optional)
+# Start the Aim visualization server (optional, Python <=3.12 only)
 aim up
 
 # Run an example
 python examples/mnist_demo.py
 ```
+
+### Modern platforms (Python 3.13+ or CUDA 13)
+
+FabricPC also installs cleanly on newer toolchains. The optional
+extras self-degrade via environment markers, so `pip install -e
+".[all]"` keeps working — it just skips the pieces upstream has not
+released wheels for yet:
+
+- **Python 3.13+**: Aim is skipped (no Python 3.13+ wheel upstream).
+  Use plotly/pandas/kaleido for visualization.
+- **Python 3.14**: TensorFlow has no wheels yet, so `[tfds]` is also a
+  no-op. Everything else (JAX, Optax, Flax, Orbax, etc.) is supported.
+
+For a CUDA 13 system (e.g. Fedora 43 with `cuda-toolkit-13-2` and a
+5xx-series NVIDIA driver), use the `[cuda13]` extra in place of the
+default `[cuda]`:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev,experiments,viz,cuda13]"
+```
+
+This installs JAX 0.10 with the matching `jax-cuda13-plugin` and
+`nvidia-cudnn-cu13` wheels. Roughly 2 GB of CUDA 13 wheels are
+downloaded on first install. To use the system-installed CUDA
+libraries instead of the PyPI wheels, swap `cuda13` for the upstream
+`jax[cuda13-local]` extra and ensure cuDNN matching your CUDA toolkit
+is installed (on Fedora 43, `dnf install cuda-cudnn-13-2`).
+
+The `[cuda]` and `[cuda12]` extras still target CUDA 12 GPUs — they
+have not changed.
+
+> **Don't swap CUDA stacks inside one venv.** NVIDIA's PyPI wheels
+> share the `nvidia/*` namespace package. Uninstalling
+> `nvidia-cudnn-cu12` from a venv that also has `nvidia-cudnn-cu13`
+> wipes the shared `nvidia/cudnn/lib/` directory and silently breaks
+> JAX. To switch CUDA majors, recreate the venv from scratch.
 
 ## Features
 - Modular node and wire abstractions for flexible model construction
