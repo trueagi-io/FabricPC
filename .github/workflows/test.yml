@@ -9,26 +9,35 @@ concurrency:
 jobs:
   cpu-smoke:
     # CPU-only smoke test that backs the "doesn't break older platforms"
-    # claim. Runs on Python 3.12 with the CPU-only extras subset; the
-    # GitHub runner has no NVIDIA driver, so `setup.py`'s CUDA detection
-    # returns None and `[all]` (if requested) would stay CPU-only. To
-    # broaden coverage, add a `python-version` matrix below.
-    name: CPU smoke (Python 3.12)
+    # claim. Matrix covers the floor (3.10) and ceiling (3.13) of the
+    # supported range so marker-driven behavior changes on either end
+    # are caught. The GitHub runner has no NVIDIA driver, so `setup.py`'s
+    # CUDA detection returns None and `[all]` resolves to CPU-only.
+    name: CPU smoke (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
           cache: pip
 
       - name: Upgrade pip
         run: python -m pip install --upgrade pip
 
-      - name: Install (CPU-only extras)
-        run: pip install -e ".[dev,experiments,viz]"
+      - name: Install (CPU-only via [all]; exercises dynamic-extras hook)
+        # Use `[all]` rather than the smaller `[dev,experiments,viz]`
+        # so `setup.py`'s `_build_all_extra()` is exercised end-to-end:
+        # the runner has no nvidia-smi, so detection returns None and
+        # `[all]` cleanly resolves to the non-CUDA bundle. This is the
+        # CPU-only happy path users land on for laptop installs.
+        run: pip install -e ".[all]"
 
       - name: Show resolved environment
         run: |

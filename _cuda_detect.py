@@ -8,6 +8,7 @@ tooling, not part of the runtime package.
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -22,9 +23,19 @@ def detect_driver_cuda_version() -> tuple[int, int] | None:
     """
     if shutil.which("nvidia-smi") is None:
         return None
+    # Force C locale so the "CUDA Version:" field label stays English
+    # regardless of the user's LANG / LC_ALL. Defensive — real drivers
+    # use English here today, but the regex can't match a translated
+    # label, and silent None on a localized system is a confusing
+    # failure mode.
+    env = {**os.environ, "LANG": "C", "LC_ALL": "C"}
     try:
         result = subprocess.run(
-            ["nvidia-smi"], capture_output=True, text=True, timeout=10
+            ["nvidia-smi"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=env,
         )
     except (subprocess.SubprocessError, OSError):
         return None

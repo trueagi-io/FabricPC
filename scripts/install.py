@@ -11,7 +11,12 @@ Usage:
     python scripts/install.py                    # dev + experiments + viz + auto-cuda
     python scripts/install.py --all              # also include [tfds]
     python scripts/install.py --extras a,b,c     # override the extras list
-    python scripts/install.py -- --no-cache-dir  # everything after `--` goes to pip
+    python scripts/install.py --no-cache-dir     # unknown args pass through to pip
+    python scripts/install.py -- --no-cache-dir  # explicit `--` separator also works
+
+Any flag this script does not recognize is forwarded verbatim to `pip
+install`. The optional `--` separator is supported for users who want
+to be explicit about where script args end and pip args begin.
 
 Selection rules:
     driver max CUDA >= 13.0  -> [cuda13]
@@ -22,6 +27,8 @@ Notes:
 - Only one CUDA stack should ever be installed per venv. The script
   refuses to add cuda12 to a venv that already has cuda13 (or vice
   versa).
+- `--all` and `--extras` compose: `--extras dev --all` installs the
+  user-provided extras list plus `[tfds]`.
 - On Python 3.13 the script prints an explicit warning that Aim
   experiment tracking is not installable in this environment (no
   upstream wheel). Use Python 3.12 or earlier if you need Aim.
@@ -103,12 +110,12 @@ def main() -> int:
         action="store_true",
         help="Print the resolved pip command without running it.",
     )
-    parser.add_argument(
-        "pip_args",
-        nargs=argparse.REMAINDER,
-        help="Trailing args passed through to pip (use `--` to separate).",
-    )
-    args = parser.parse_args()
+    # parse_known_args (not parse_args + REMAINDER) so option-shaped pip
+    # flags like `--no-cache-dir` pass through without requiring the user
+    # to remember the `--` separator. REMAINDER only collects args after
+    # the first positional, which silently rejects option-shaped trailing
+    # args — a long-documented argparse footgun.
+    args, pass_through = parser.parse_known_args()
 
     warn_python_compat()
 
@@ -116,8 +123,11 @@ def main() -> int:
         extras = [e.strip() for e in args.extras.split(",") if e.strip()]
     else:
         extras = ["dev", "experiments", "viz"]
-        if args.all:
-            extras.append("tfds")
+    # `--all` composes with both the default and a user-provided
+    # `--extras` list. Previously `--all` was silently dropped when
+    # `--extras` was given.
+    if args.all and "tfds" not in extras:
+        extras.append("tfds")
 
     if args.cuda == "auto":
         version = detect_driver_cuda_version()
@@ -150,10 +160,18 @@ def main() -> int:
         if conflicting:
             other = sorted(conflicting)[0]
             print(
-                f"ERROR: this venv already has the [{other}] JAX/CUDA "
-                f"stack installed; refusing to also install "
-                f"[{cuda_extra}]. Only one CUDA stack should be "
-                f"present per venv.",
+                f"ERROR: this venv already has the [{other}] JAX/CUDA stack "
+                f"installed; refusing to also install [{cuda_extra}]. Only "
+                f"one CUDA stack should be present per venv.\n"
+                f"Recovery (do NOT `pip uninstall` one stack — the nvidia/* "
+                f"namespace wheels share files and you'll corrupt the other):\n"
+                f"    deactivate\n"
+                f"    rm -rf .venv\n"
+                f"    python -m venv .venv\n"
+                f"    source .venv/bin/activate\n"
+                f"    python scripts/install.py\n"
+                f"See docs/dev_plans_archive/single_cuda_stack_check.md "
+                f"for background.",
                 file=sys.stderr,
             )
             return 1
@@ -163,7 +181,8 @@ def main() -> int:
     project_dir = Path(__file__).resolve().parent.parent
 
     cmd = [sys.executable, "-m", "pip", "install", "-e", f".[{extras_spec}]"]
-    pass_through = list(args.pip_args)
+    # Strip a leading `--` if the user supplied one explicitly to mark
+    # the start of pip args; otherwise pass through verbatim.
     if pass_through and pass_through[0] == "--":
         pass_through = pass_through[1:]
     cmd.extend(pass_through)

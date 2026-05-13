@@ -67,9 +67,12 @@ def _build_all_extra() -> list[str]:
     hosts whose CUDA driver differs from this build host.
     """
     base = ["fabricpc[dev,tfds,experiments,viz]"]
-    if os.environ.get("FABRICPC_SKIP_CUDA_DETECT"):
+    # Strict `== "1"` (not just truthy) so `=0` / `=false` / `=no` don't
+    # accidentally enable the skip. Matches the precedent set by
+    # FABRICPC_DISABLE_TRITON_GEMM in jax_setup.py.
+    if os.environ.get("FABRICPC_SKIP_CUDA_DETECT") == "1":
         print(
-            "setup.py: FABRICPC_SKIP_CUDA_DETECT set — [all] left CPU-only.",
+            "setup.py: FABRICPC_SKIP_CUDA_DETECT=1 — [all] left CPU-only.",
             file=sys.stderr,
         )
         return base

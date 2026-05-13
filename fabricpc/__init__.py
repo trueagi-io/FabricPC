@@ -53,7 +53,10 @@ def _check_single_cuda_stack() -> None:
     undefined and usually broken. Set `FABRICPC_ALLOW_MULTIPLE_CUDA=1` to
     bypass this check (debugging only).
     """
-    if os.environ.get("FABRICPC_ALLOW_MULTIPLE_CUDA"):
+    # Strict `== "1"` (not just truthy) so `=0` / `=false` / `=no` don't
+    # accidentally enable the bypass. Matches the precedent set by
+    # FABRICPC_DISABLE_TRITON_GEMM in jax_setup.py.
+    if os.environ.get("FABRICPC_ALLOW_MULTIPLE_CUDA") == "1":
         return
     found = []
     for pkg in ("jax-cuda12-plugin", "jax-cuda13-plugin"):
@@ -66,9 +69,17 @@ def _check_single_cuda_stack() -> None:
         raise ImportError(
             f"FabricPC: multiple JAX CUDA plugins installed in this "
             f"environment: {', '.join(found)}. JAX loads whichever plugin "
-            f"registers first, which is undefined. Recreate the venv with "
-            f"a single CUDA stack, or set FABRICPC_ALLOW_MULTIPLE_CUDA=1 "
-            f"to bypass."
+            f"registers first, which is undefined.\n"
+            f"Recovery (do NOT `pip uninstall` one stack — the nvidia/*\n"
+            f"namespace wheels share files and you'll corrupt the other):\n"
+            f"    deactivate\n"
+            f"    rm -rf .venv\n"
+            f"    python -m venv .venv\n"
+            f"    source .venv/bin/activate\n"
+            f"    python scripts/install.py\n"
+            f"See docs/dev_plans_archive/single_cuda_stack_check.md for "
+            f"background. Bypass for debugging only: "
+            f"FABRICPC_ALLOW_MULTIPLE_CUDA=1."
         )
 
 

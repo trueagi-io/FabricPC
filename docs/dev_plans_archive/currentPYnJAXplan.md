@@ -1,13 +1,19 @@
-# Modernize FabricPC Install for Python 3.13 + CUDA 13 + JAX 0.10 (Completed; 3.14 deferred)
+# Modernize FabricPC Install for Python 3.13 + CUDA 13 + JAX 0.10 (Implementation merged; review follow-ups open; 3.14 deferred)
 
-> **Status:** Completed. The implementation extended support to Python
-> 3.13 and CUDA 13. Python 3.14 was attempted during development (see
-> the empirical log in `virt-env/fpc3`, Python 3.14.4) and ultimately
-> **deferred** because TensorFlow has no `cp314` wheels, leaving
-> `[tfds]` unresolvable. See "Scope reduction: drop Python 3.14
-> support" further down for the deferral decision and what remains
-> blocking. `requires-python` in `pyproject.toml` is now capped at
-> `<3.14`; this doc retains the 3.14 exploration as historical record.
+> **Status:** Implementation merged on `feature/currentPYnJAX`.
+> Extended support to Python 3.13 and CUDA 13. Python 3.14 was
+> attempted during development (see the empirical log in
+> `virt-env/fpc3`, Python 3.14.4) and ultimately **deferred** because
+> TensorFlow has no `cp314` wheels, leaving `[tfds]` unresolvable. See
+> "Scope reduction: drop Python 3.14 support" further down for the
+> deferral decision. `requires-python` in `pyproject.toml` is now
+> capped at `<3.14`; this doc retains the 3.14 exploration as
+> historical record.
+>
+> **Open follow-ups from second-pass code review** (2026-05-13) are
+> tracked at the bottom of this file under "Code review follow-ups".
+> Items A1–A3 and B1 are recommended as merge blockers before this
+> branch lands on `main`.
 
 ## Summary
 
@@ -699,3 +705,298 @@ brief; the four-version matrix is roughly 4× the cost and the
 single-version job already catches the most common breakage modes
 (import errors, dynamic-extras parsing failures, dependency
 resolution conflicts).
+
+---
+
+## Code review follow-ups — 2026-05-13
+
+A second-pass review surfaced bugs and improvements not caught during
+the initial implementation. Items are listed by category. **Section A
+(concrete bugs) and B1 (lint scope) are recommended as merge blockers**
+before this branch lands on `main`. The rest is graded by priority at
+the end of this section.
+
+### A. Concrete bugs (reproducible)
+
+**A1. Env-var truthiness inconsistency. — RESOLVED 2026-05-13.**
+`FABRICPC_ALLOW_MULTIPLE_CUDA` (in `fabricpc/__init__.py:56`) and
+`FABRICPC_SKIP_CUDA_DETECT` (in `setup.py:70`) used
+`if os.environ.get(...):` — any non-empty string was truthy, so `=0`,
+`=false`, `=no` all enabled the bypass / skip. Fixed by tightening
+both call sites to `== "1"`, matching the precedent set by
+`FABRICPC_DISABLE_TRITON_GEMM` in `jax_setup.py:26`. Verified post-fix:
+
+```
+FABRICPC_ALLOW_MULTIPLE_CUDA=''       -> bypass: False
+FABRICPC_ALLOW_MULTIPLE_CUDA='0'      -> bypass: False
+FABRICPC_ALLOW_MULTIPLE_CUDA='false'  -> bypass: False
+FABRICPC_ALLOW_MULTIPLE_CUDA='no'     -> bypass: False
+FABRICPC_ALLOW_MULTIPLE_CUDA='1'      -> bypass: True
+FABRICPC_ALLOW_MULTIPLE_CUDA='true'   -> bypass: False
+```
+
+**A2. `scripts/install.py` rejects pip pass-through flags unless preceded by `--`. — RESOLVED 2026-05-13.**
+Fixed by switching from `parser.add_argument("pip_args",
+nargs=argparse.REMAINDER, ...)` to `parser.parse_known_args()`. Unknown
+flags now pass through to pip naturally, with no `--` separator
+required. The optional `--` separator is still supported for users who
+prefer to be explicit. Docstring updated. Verified post-fix:
+
+```
+$ python scripts/install.py --cuda none --no-cache-dir --dry-run
+Running: ... pip install -e .[dev,experiments,viz] --no-cache-dir
+
+$ python scripts/install.py --cuda none --dry-run -- --no-cache-dir
+Running: ... pip install -e .[dev,experiments,viz] --no-cache-dir
+```
+
+**A3. `--all` is silently ignored when `--extras` is given. — RESOLVED 2026-05-13.**
+Fixed by lifting the `--all`-appends-`tfds` block out of the `else`
+branch so it composes with both the default and a user-provided
+`--extras` list:
+
+```python
+if args.all and "tfds" not in extras:
+    extras.append("tfds")
+```
+
+Verified post-fix:
+
+```
+$ python scripts/install.py --extras dev --all --cuda 13 --dry-run
+Running: ... pip install -e .[dev,tfds,cuda13]      ← tfds now appended
+
+$ python scripts/install.py --all --cuda none --dry-run    # regression check
+Running: ... pip install -e .[dev,experiments,viz,tfds]
+```
+
+**A4. `assert version is not None` is stripped under `python -O`.**
+`scripts/install.py:136` uses an assertion for type narrowing after a
+defensive `cuda_extra is None` check. Disabling the assert is harmless
+in this case (the prior None-check is what enforces the invariant) but
+the pattern is borderline; a `cast(...)` or restructured if/else would
+be cleaner. Style note rather than real bug.
+
+### B. CI / test coverage gaps
+
+**B1. `.github/workflows/lint.yml` does not lint the new files. — RESOLVED 2026-05-13.**
+Fixed by extending the `src:` line to include the top-level build/install
+tooling:
+
+```yaml
+src: "./fabricpc ./tests ./examples ./scripts setup.py _cuda_detect.py"
+```
+
+Verified that `black --check` against the full new scope passes:
+
+```
+$ python -m black --check ./fabricpc ./tests ./examples ./scripts setup.py _cuda_detect.py
+All done! ✨ 🍰 ✨
+91 files would be left unchanged.
+```
+
+CI now matches pre-commit's default coverage; a contributor who skips
+`pre-commit install` can no longer land non-conformant changes to
+these files unnoticed.
+
+**B2. No unit tests for any of the new logic. — RESOLVED 2026-05-13.**
+Added two test files covering the helper, the runtime check, and the
+install.py guard:
+
+- `tests/test_cuda_detect.py` (16 tests): `pick_cuda_extra` across
+  None / too-old / 12.x / 13.x / future-major inputs;
+  `detect_driver_cuda_version` against nvidia-smi-missing,
+  successful 12.x / 13.x parses, `CUDA Version: N/A`, non-zero exit,
+  TimeoutExpired, OSError; and a regression test for D4 that asserts
+  `LANG=C` / `LC_ALL=C` are forced in the subprocess `env`.
+- `tests/test_single_cuda_stack.py` (13 tests):
+  `_check_single_cuda_stack` against zero / one / both plugins;
+  parametrized regression for A1 confirming `FABRICPC_ALLOW_MULTIPLE_CUDA`
+  only bypasses on literal `"1"`; and `detect_installed_cuda_extras`
+  against empty / cuda12-only / both-installed environments.
+
+Tests use `unittest.mock.patch` to fake `subprocess.run`,
+`shutil.which`, and `importlib.metadata.version`, so they run on any
+host (with or without nvidia-smi). Verified by running the full suite:
+
+```
+$ python -m pytest -q --no-header
+156 passed in 73.74s
+```
+
+(127 pre-existing + 29 new = 156.)
+
+**B3. CI runs only Python 3.12. — RESOLVED 2026-05-13.**
+Extended `.github/workflows/test.yml` to a `["3.10", "3.12", "3.13"]`
+matrix with `fail-fast: false`, so a marker drift on the floor or
+ceiling of the supported range is caught. Also switched the install
+step from `pip install -e ".[dev,experiments,viz]"` to
+`pip install -e ".[all]"` so `setup.py`'s `_build_all_extra()` is
+exercised end-to-end (closes B4 as well — the dynamic-extras hook now
+runs on every CI invocation; on a GPU-less runner it cleanly returns
+"CPU-only [all]").
+
+**B4. The dynamic-extras code path is never exercised by CI. — RESOLVED 2026-05-13 (folded into B3).**
+The CI install step now uses `pip install -e ".[all]"` instead of the
+smaller `[dev,experiments,viz]` subset, so `_build_all_extra()` runs
+end-to-end on every CI invocation. On the GPU-less runner, `[all]`
+cleanly resolves to the CPU-only bundle — the exact path most laptop
+users hit on first install.
+
+### C. Architecture concerns
+
+**C1. Build-host CUDA bakes into the wheel.** The dynamic
+`optional-dependencies` design only works because this project is
+`Private :: Do Not Upload`. If a wheel is ever shared informally (a
+colleague's copy, an internal index), the recipient gets the build
+host's CUDA choice, not their own. The `FABRICPC_SKIP_CUDA_DETECT=1`
+escape hatch is opt-in and easy to forget. Technical debt to revisit
+if the redistribution constraint changes — a safer alternative would
+be to make `[all]` a static no-CUDA combo and let users opt in to
+`[all,cuda12]` / `[all,cuda13]` explicitly, with `scripts/install.py`
+as the auto-detect convenience layer.
+
+**C2. `_cuda_detect.py` is installed into site-packages.** Adding it
+to `py-modules` means after `pip install .`, a top-level importable
+`_cuda_detect` ends up in the user's environment. Mild namespace
+pollution — `import _cuda_detect` from user code returns FabricPC's
+internal helper. Cleaner: drop from `py-modules`, add
+`include _cuda_detect.py` to a new `MANIFEST.in`. Verified that
+PEP 517 `build_meta` finds `_cuda_detect` in the build directory
+without it being in `py-modules`; the only reason to install it was
+sdist completeness, which `MANIFEST.in` handles without installation.
+
+**C3. Subprocess runs twice during `pip install`.** setuptools'
+PEP 517 backend invokes `setup.py` at both `prepare_metadata` and
+`build_wheel`, so `nvidia-smi` runs twice. ~200ms total on a healthy
+machine; up to 20s on a hung driver (the documented 10s timeout, x2).
+`functools.lru_cache` on `detect_driver_cuda_version` would halve it;
+probably not worth the complexity for a one-time install cost.
+
+### D. Error-message and UX
+
+**D1. Runtime ImportError doesn't include a recovery recipe. — RESOLVED 2026-05-13.**
+Expanded the ImportError in `fabricpc/__init__.py` to include:
+
+- An explicit warning **not** to `pip uninstall` one stack (the
+  `nvidia/*` namespace wheels share files and uninstalling one
+  corrupts the other).
+- The five-line venv-recreate recipe (`deactivate; rm -rf .venv;
+  python -m venv .venv; source .venv/bin/activate; python
+  scripts/install.py`).
+- A pointer to `docs/dev_plans_archive/single_cuda_stack_check.md`
+  for background.
+- The bypass env var (`FABRICPC_ALLOW_MULTIPLE_CUDA=1`) clearly
+  labeled "for debugging only".
+
+Covered by `tests/test_single_cuda_stack.py::test_check_raises_when_both_installed`,
+which asserts the recovery commands and design-note pointer are
+present in the error string.
+
+**D2. `scripts/install.py` conflict error is similarly terse. — RESOLVED 2026-05-13.**
+Expanded the conflict error to match D1's recovery recipe: explicit
+"do NOT `pip uninstall`" warning, venv-recreate commands, and
+design-note pointer.
+
+**D3. `print("Running:", " ".join(cmd))` is not copy-paste-safe.**
+`scripts/install.py:171`. Use `shlex.join(cmd)`. The
+`.[{extras_spec}]` argument needs single-quoting in zsh (brackets are
+glob metacharacters) — without `shlex.join`, the user's copy-paste of
+the printed command won't work in their shell.
+
+**D4. `nvidia-smi` is invoked without locale forcing. — RESOLVED 2026-05-13.**
+`_cuda_detect.detect_driver_cuda_version()` now passes
+`env={**os.environ, "LANG": "C", "LC_ALL": "C"}` to `subprocess.run`,
+so the "CUDA Version:" field label stays English regardless of the
+user's locale. Covered by
+`tests/test_cuda_detect.py::test_detect_forces_c_locale`, which
+captures the `env` kwarg from a mocked `subprocess.run` and asserts
+both vars are set to `"C"`.
+
+**D5. CUDA 14 will silently pick `cuda13`. — DROPPED 2026-05-13.**
+Decision: not worth planning for. JAX's CUDA-14 support arrives when
+upstream ships wheels, not before, and the `>=` cap in `pick_cuda_extra`
+will pick `cuda13` either way — the right behavior at that point is
+whatever JAX decides, which we'll adapt to in a follow-up PR when CUDA
+14 actually exists. Adding a speculative warning for a hypothetical
+future state added noise without buying real safety. The `>=` form
+stays.
+
+### E. Cosmetic inconsistencies between the two detector call sites
+
+After the dedup, both `setup.py` and `scripts/install.py` use the
+shared helper but print differently:
+
+| Scenario | `setup.py` | `scripts/install.py` |
+|---|---|---|
+| CUDA 13 detected | "setup.py: detected CUDA driver — [all] will include [cuda13]." | "NVIDIA driver supports up to CUDA 13.2 -> selecting [cuda13]." |
+| No driver | "setup.py: no usable NVIDIA driver detected — [all] will be CPU-only." | "No NVIDIA driver detected (nvidia-smi missing or failed)." |
+
+The `install.py` form includes the detected `X.Y` version; the
+`setup.py` form does not. A user who triggers both gets two voices.
+Worth aligning — the `install.py` phrasing is the more informative
+template.
+
+### F. Documentation
+
+**F1. README's "Editable installs re-detect on each run" is ambiguous.**
+"Each run" could read as "each Python invocation" (false) or
+"each `pip install -e .`" (true). Tighten to:
+
+> Editable installs re-run `setup.py` on each `pip install`
+> invocation, so re-running pip after a driver upgrade picks the new
+> stack. The check does **not** re-run at `import fabricpc` time.
+
+**F2. Plan doc consolidation (this file).** Now ~770 lines structured
+as a chronological log with many "Revert / Tighten / Rename" sections
+describing decisions that were later superseded. As a historical
+record this is fine; as documentation it's confusing — a reader has to
+read in order to know which decisions survived. A "What actually
+shipped" summary near the top (beyond the status banner) would help
+future readers. Low priority; this file is in `dev_plans_archive/` and
+the README is the canonical user-facing source of truth.
+
+**F3. The design note isn't surfaced from the README.**
+`single_cuda_stack_check.md` lives in `dev_plans_archive/`. Users who
+hit the dual-stack `ImportError` and search the README won't find the
+recovery recipe — they'd have to know to look in the archive
+directory. Either link from the ImportError text (D1 above) or from
+the README's "Only one CUDA stack per venv" block.
+
+**F4. `aim up                # optional, only available on Python <=3.12`**
+in the README has wide whitespace before `#` that aligns nothing.
+One space is enough.
+
+### G. Notes (no action recommended)
+
+- `from __future__ import annotations` in `_cuda_detect.py` is
+  unnecessary at the current Python floor (3.10) — `tuple[int, int] |
+  None` works natively in 3.10+ — but harmless.
+- `examples/mnist_demo.py`'s "Test Accuracy: 98.14%" claim was made on
+  GPU; auto-detect on a CPU host still reaches that accuracy, just
+  much more slowly. Not in scope to add a runtime caveat to the
+  example's docstring.
+- All other examples already use the no-arg
+  `set_jax_flags_before_importing_jax()` form for auto-detection;
+  `mnist_demo.py` was the outlier that this PR brought into line.
+  Consistency confirmed.
+
+### Recommended priority for follow-up
+
+| Priority | Items |
+|---|---|
+| Merge blocker | ~~A1 (env-var truthiness)~~ ✅, ~~A2 (install.py `--` requirement)~~ ✅, ~~A3 (`--all` silently dropped)~~ ✅, ~~B1 (lint.yml scope)~~ ✅ |
+| Soon | ~~B2 (unit tests)~~ ✅, ~~B3 (Python 3.13 in CI)~~ ✅, ~~B4 (`[all]` in CI)~~ ✅, ~~D1 (ImportError recipe)~~ ✅, ~~D2 (install.py recipe)~~ ✅, ~~D4 (locale forcing)~~ ✅, ~~D5 (CUDA 14)~~ ⊘ dropped |
+| Next time we touch the area | C1 (build-host fragility), C2 (`_cuda_detect` namespace pollution), C3 (lru_cache on detector), D3 (`shlex.join`), E (align detector output), F1 / F3 (README tweaks) |
+| Optional | A4 (assert under -O), F2 (plan-doc consolidation), F4 (README whitespace) |
+
+### Progress
+
+- **2026-05-13 (1):** Merge-blocker batch resolved — A1, A2, A3, B1.
+  Each verified with the failing reproducer from the review.
+- **2026-05-13 (2):** Soon batch resolved — B2 (29 new unit tests),
+  B3 (`["3.10","3.12","3.13"]` CI matrix), B4 (folded into B3; CI
+  now installs via `[all]`), D1 + D2 (recovery recipes inlined into
+  both error messages), D4 (locale forcing on `nvidia-smi`). D5
+  consciously dropped — see its entry. Full suite at 156 passing
+  (127 + 29).
