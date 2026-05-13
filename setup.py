@@ -62,6 +62,10 @@ _STATIC_EXTRAS = {
     "tfds": [
         "tensorflow-datasets>=4.9.0",
         "tensorflow>=2.15.0",
+        # `tensorflow_datasets.core.dataset_builder` imports `importlib_resources`
+        # unconditionally (not gated on Python<3.9), but tfds does not declare it
+        # as a dependency. Without this, `tfds.load(...)` raises ModuleNotFoundError.
+        "importlib_resources",
     ],
     "experiments": [
         "scipy>=1.10.0",
