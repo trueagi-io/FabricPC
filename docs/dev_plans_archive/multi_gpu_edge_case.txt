@@ -1,0 +1,97 @@
+This seemed dodgy. So I asked claude to explain and in case it's helpful to figure out whether this is really the best choice, I'm dropping it here.
+
+
+can you please explain in greater detail how FABRICPC_ALLOW_MULTIPLE_CUDA is used?                                                                                                                                
+                                                                                                                                                                                                                    
+● What FABRICPC_ALLOW_MULTIPLE_CUDA is for                                                                                                                                                                          
+                                                                                                                                                                                                                    
+  fabricpc/__init__.py includes a runtime check that runs on every import fabricpc:                                                                                                                                 
+   
+  def _check_single_cuda_stack() -> None:                                                                                                                                                                           
+      if os.environ.get("FABRICPC_ALLOW_MULTIPLE_CUDA"):    
+          return                                                                                                                                                                                                    
+      found = []
+      for pkg in ("jax-cuda12-plugin", "jax-cuda13-plugin"):                                                                                                                                                        
+          try:                                              
+              version(pkg)
+          except PackageNotFoundError:
+              continue                                                                                                                                                                                              
+          found.append(pkg)
+      if len(found) > 1:                                                                                                                                                                                            
+          raise ImportError(...)                            
+
+  The env var is the escape hatch for that check. If it's set (to any non-empty value — 1, true, yes, anything truthy), the function returns immediately and the import proceeds even when both jax-cuda12-plugin   
+  and jax-cuda13-plugin are installed in the venv.
+                                                                                                                                                                                                                    
+  When you'd actually use it                                
+
+  There are three realistic situations.                                                                                                                                                                             
+   
+  1. You're debugging this very check                                                                                                                                                                               
+                                                            
+  You're poking at the dual-stack logic itself — testing how the two plugins behave when both are present, comparing init order, etc. The check is what's getting in your way, so you switch it off:                
+   
+  FABRICPC_ALLOW_MULTIPLE_CUDA=1 python -c "import fabricpc; import jax; print(jax.devices())"                                                                                                                      
+                                                                                                                                                                                                                    
+  2. You're cleaning up a broken venv                                                                                                                                                                               
+                                                                                                                                                                                                                    
+  You ran pip install -e ".[all,cuda12]" on a CUDA-13 host and now both plugins exist. You can't import fabricpc to inspect what's there because the check fires. You set the bypass temporarily to look at state,  
+  decide what to remove, etc.:                              
+                                                                                                                                                                                                                    
+  FABRICPC_ALLOW_MULTIPLE_CUDA=1 python -c "                
+  import importlib.metadata as m
+  for p in ('jax-cuda12-plugin','jax-cuda13-plugin','nvidia-cudnn-cu12','nvidia-cudnn-cu13'):
+      try: print(p, m.version(p))                                                                                                                                                                                   
+      except m.PackageNotFoundError: print(p, 'absent')
+  "                                                                                                                                                                                                                 
+  Then you decide whether to fix it (typically: blow away the venv and reinstall, since pip uninstall of one stack risks wiping shared nvidia/* files of the other).
+                                                                                                                                                                                                                    
+  3. You know what you're doing and want JAX to pick one
+                                                                                                                                                                                                                    
+  You've manually set JAX_PLATFORMS or JAX_PLATFORM_NAME and you're confident JAX will load only the plugin you want. You accept the risk and need the import to succeed:                                           
+   
+  FABRICPC_ALLOW_MULTIPLE_CUDA=1 JAX_PLATFORMS=cuda python my_script.py                                                                                                                                             
+  This is rare and not recommended — but the escape hatch exists so a determined user isn't locked out.                                                                                                             
+                                                                                                                                                                                                                    
+  How to actually set it                                                                                                                                                                                            
+                                                                                                                                                                                                                    
+  The env var only matters for the child process that imports fabricpc. So:                                                                                                                                         
+   
+  ┌─────────────────────────────────────────────────────────────────────────────┬───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐   
+  │                                     Way                                     │                                                             Scope                                                             │
+  ├─────────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ FABRICPC_ALLOW_MULTIPLE_CUDA=1 python my_script.py                          │ One command only — cleanest.                                                                                                  │
+  ├─────────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+  │ export FABRICPC_ALLOW_MULTIPLE_CUDA=1 then run things                       │ Until your shell exits.                                                                                                       │   
+  ├─────────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤   
+  │ In a .env file picked up by your IDE / direnv / etc.                        │ Whatever scope that tool defines.                                                                                             │   
+  ├─────────────────────────────────────────────────────────────────────────────┼───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤   
+  │ os.environ["FABRICPC_ALLOW_MULTIPLE_CUDA"] = "1" before import fabricpc in  │ This process only. The check reads the env at import time, so setting it after the first import has no effect (already passed │
+  │ Python                                                                      │  or already raised).                                                                                                          │   
+  └─────────────────────────────────────────────────────────────────────────────┴───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+                                                                                                                                                                                                                    
+  Concretely in pytest, if you wanted some tests to run under the bypass:                                                                                                                                           
+   
+  @pytest.fixture                                                                                                                                                                                                   
+  def allow_multi_cuda(monkeypatch):                        
+      monkeypatch.setenv("FABRICPC_ALLOW_MULTIPLE_CUDA", "1")
+  …but that only helps for tests that re-import fabricpc, since the check runs at module load. If fabricpc is already imported in the test process, the check has already fired or passed.                          
+                                                                                                                                                                                                                    
+  What the bypass does not do                                                                                                                                                                                       
+                                                                                                                                                                                                                    
+  This is the important part. The env var only silences the FabricPC-level check. It does not:                                                                                                                      
+   
+  - Make JAX work correctly with both plugins installed. JAX still has undefined behavior — which plugin gets registered depends on entry-point iteration order, which is not stable across Python versions or      
+  installs.                                                 
+  - Stop the nvidia/* namespace package collision risk. If you later run pip uninstall on one stack's wheels, the other stack's shared files in nvidia/cudnn/lib/ etc. can still get wiped.                         
+  - Help scripts/install.py — the helper has its own separate pre-install guard with no bypass. The env var only affects the import fabricpc runtime check.                                                         
+                                                                                                                                                                                                                    
+  Why a bypass exists at all                                                                                                                                                                                        
+                                                                                                                                                                                                                    
+  The check is paternalistic: it stops the user before they hit a worse failure mode (silent miscomputation, wrong-cuDNN crashes, JAX picking the wrong device). For 99% of users the right move when it fires is   
+  "recreate the venv". But research codebases sometimes hit edge cases the maintainer didn't foresee, so an explicit, documented opt-out beats either (a) no check at all, or (b) an unconditional refusal that
+  drives users to fork the code. The env-var name is deliberately long and ugly so nobody sets it casually.                                                                                                         
+                                                            
+✻ Cogitated for 24s              
+
+───────────────────────────────
