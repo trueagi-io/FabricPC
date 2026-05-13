@@ -18,20 +18,29 @@ Selection rules:
     driver max CUDA >= 12.0  -> [cuda12]
     no NVIDIA driver         -> no CUDA extra (CPU-only install)
 
-Note: do not try to *swap* CUDA stacks inside one venv by uninstalling
-[cuda12] and installing [cuda13] (or vice versa). NVIDIA's PyPI wheels
-share the `nvidia/*` namespace package, so uninstalling one variant
-can wipe shared files of the other. Recreate the venv from scratch.
+Notes:
+- Only one CUDA stack should ever be installed per venv. The script
+  refuses to add cuda12 to a venv that already has cuda13 (or vice
+  versa).
+- On Python 3.13 the script prints an explicit warning that Aim
+  experiment tracking is not installable in this environment (no
+  upstream wheel). Use Python 3.12 or earlier if you need Aim.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+_CUDA_PLUGIN_DISTS = {
+    "cuda12": "jax-cuda12-plugin",
+    "cuda13": "jax-cuda13-plugin",
+}
 
 
 def detect_driver_cuda_version() -> tuple[int, int] | None:
@@ -66,6 +75,33 @@ def pick_cuda_extra(version: tuple[int, int] | None) -> str | None:
     return None
 
 
+def detect_installed_cuda_extras() -> set[str]:
+    """Return the labels ('cuda12'/'cuda13') of jax cuda plugins already
+    installed in the running interpreter's environment."""
+    installed: set[str] = set()
+    for label, dist in _CUDA_PLUGIN_DISTS.items():
+        try:
+            importlib.metadata.version(dist)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        installed.add(label)
+    return installed
+
+
+def warn_python_compat() -> None:
+    """Emit explicit warnings for Python versions with reduced functionality."""
+    if sys.version_info[:2] == (3, 13):
+        # Aim has no Python 3.13 wheels; the [viz] env marker silently
+        # drops it. Surface that here so the user is not surprised.
+        print(
+            "WARNING: Python 3.13 detected. Aim experiment tracking is "
+            "not installable in this environment (no upstream Python "
+            "3.13 wheel) and will be skipped by the [viz] extra. "
+            "Use Python 3.12 or earlier if you need Aim.",
+            file=sys.stderr,
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__,
@@ -74,7 +110,7 @@ def main() -> int:
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Also install the [tfds] extra (auto-skipped on Python 3.14).",
+        help="Also install the [tfds] extra (TensorFlow Datasets).",
     )
     parser.add_argument(
         "--extras",
@@ -100,6 +136,8 @@ def main() -> int:
         help="Trailing args passed through to pip (use `--` to separate).",
     )
     args = parser.parse_args()
+
+    warn_python_compat()
 
     if args.extras is not None:
         extras = [e.strip() for e in args.extras.split(",") if e.strip()]
@@ -127,12 +165,26 @@ def main() -> int:
                 f"NVIDIA driver supports up to CUDA {version[0]}.{version[1]} "
                 f"-> selecting [{cuda_extra}]."
             )
-            extras.append(cuda_extra)
     elif args.cuda == "12":
-        extras.append("cuda12")
+        cuda_extra = "cuda12"
     elif args.cuda == "13":
-        extras.append("cuda13")
-    # else: 'none' -> add nothing
+        cuda_extra = "cuda13"
+    else:  # "none"
+        cuda_extra = None
+
+    if cuda_extra is not None:
+        conflicting = detect_installed_cuda_extras() - {cuda_extra}
+        if conflicting:
+            other = sorted(conflicting)[0]
+            print(
+                f"ERROR: this venv already has the [{other}] JAX/CUDA "
+                f"stack installed; refusing to also install "
+                f"[{cuda_extra}]. Only one CUDA stack should be "
+                f"present per venv.",
+                file=sys.stderr,
+            )
+            return 1
+        extras.append(cuda_extra)
 
     extras_spec = ",".join(extras)
     project_dir = Path(__file__).resolve().parent.parent

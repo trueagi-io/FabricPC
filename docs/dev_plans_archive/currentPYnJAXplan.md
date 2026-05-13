@@ -402,3 +402,290 @@ Both the helper docstring and the README now warn:
   explains marker-driven self-degradation, the `[cuda13]` opt-in, the
   CUDA 13 wheel download size, and the `cuda13-local` /
   `cuda-cudnn-13-2` system-cuDNN alternative.
+
+## Scope reduction: drop Python 3.14 support (2026-05-13)
+
+Capping supported Python at 3.13 because TensorFlow still has no
+Python 3.14 wheels and we'd rather have `[tfds]` installable
+everywhere we claim support than juggle two-axis brokenness. (Aim is
+already gated below 3.13.)
+
+Changes:
+- `requires-python` tightened from `>=3.10` to `>=3.10,<3.14` so pip
+  refuses to install on 3.14 with a clear error rather than letting
+  users discover the `[tfds]` resolution failure after the fact.
+- Dropped `Programming Language :: Python :: 3.14` classifier.
+- Removed `python_version < '3.14'` markers from both `[tfds]`
+  entries (now unreachable thanks to the `requires-python` cap).
+- Dropped `py314` from `[tool.black] target-version`.
+- README "Modern platforms" subsection retitled `(Python 3.13 or
+  CUDA 13)` and the Python-3.14 bullet removed; added an explicit
+  3.10–3.13 support statement.
+
+Validation impact: the `virt-env/fpc3` venv (Python 3.14.4) is now
+out of scope. Re-validation will require a Python 3.10–3.13 venv;
+the empirical log above remains an accurate record of *what worked*
+on 3.14 before the scope reduction, even though that configuration
+is no longer supported.
+
+## Tighten: forbid simultaneous cuda12/cuda13 install (2026-05-13)
+
+Even with separate `[cuda12]` and `[cuda13]` extras, a user could
+land both stacks in one venv via `pip install -e ".[all]"` (which
+transitively pulled `[cuda]` = cuda12) followed later by an explicit
+`pip install -e ".[cuda13]"`. Both stacks share the `nvidia/*`
+namespace package, so co-existence is fragile and uninstalling one
+silently wipes the other (see the empirical pitfall above).
+
+Two-part fix:
+
+1. **`pyproject.toml`**: `[all]` no longer transitively pulls any CUDA
+   extra. Users now must combine `[all]` with one of
+   `[cuda]`/`[cuda12]`/`[cuda13]`, e.g. `pip install -e ".[all,cuda]"`.
+   A `pip install -e ".[all]"` alone yields a CPU-only install. This
+   removes the only single-command path that could have produced a
+   dual-stack venv.
+
+2. **`scripts/install.py`**: Added a guard that uses
+   `importlib.metadata` to detect whether `jax-cuda12-plugin` or
+   `jax-cuda13-plugin` is already installed in the running
+   interpreter's environment. If the selected extra would conflict
+   with an existing opposite stack, the script aborts with a clear
+   message telling the user to recreate the venv. Verified by:
+   - fpc3 (has cuda13) + `--cuda 12` → aborts.
+   - fpc3 (has cuda13) + `--cuda 13` → proceeds.
+   - fpc3 (has cuda13) + `--cuda none` → proceeds (CPU-only).
+   - fpc6 (Py3.13, clean) + auto → detects driver, picks cuda13.
+
+   The guard is defensive only — pip itself does not understand CUDA
+   versions, so it cannot enforce mutual exclusivity at resolve time.
+   A user determined to break this can still run two raw
+   `pip install` commands; the helper is the supported path.
+
+### Behavior matrix after this change
+
+| Command | Result |
+|---|---|
+| `python scripts/install.py [--all]` | Exactly one CUDA stack (auto) or CPU-only. Guard prevents conflicts. |
+| `pip install -e ".[all]"` | CPU-only. |
+| `pip install -e ".[all,cuda]"` or `[all,cuda12]"` | cuda12 stack. |
+| `pip install -e ".[all,cuda13]"` | cuda13 stack. |
+| `pip install -e ".[cuda12,cuda13]"` | **Both stacks** — pip cannot prevent this; the helper is the way to enforce single-stack. |
+
+## Rename: `[all]` → `[cpu]` (2026-05-13)
+
+The `[all]` extras name became misleading once it stopped including
+CUDA: a user would reasonably expect `[all]` to mean "everything",
+not "everything except the GPU stack". Renamed to `[cpu]` to make the
+no-GPU semantics explicit (consistent with how `jax[cpu]` is named).
+
+Updates:
+- `pyproject.toml`: `all = [...]` → `cpu = [...]`; comment updated.
+- `README.md`: all forward-looking `[all]`/`[all,cuda*]` references
+  rewritten to `[cpu]`/`[cpu,cuda*]`.
+- `scripts/install.py`: `--all` CLI flag unchanged — it just toggles
+  inclusion of `[tfds]` in the helper's hardcoded extras list and was
+  never tied to the `[all]` extras name.
+
+Behavior matrix (post-rename, supersedes the table just above):
+
+| Command | Result |
+|---|---|
+| `python scripts/install.py [--all]` | Exactly one CUDA stack (auto) or CPU-only. Guard prevents conflicts. |
+| `pip install -e ".[cpu]"` | CPU-only. |
+| `pip install -e ".[cpu,cuda]"` or `".[cpu,cuda12]"` | cuda12 stack. |
+| `pip install -e ".[cpu,cuda13]"` | cuda13 stack. |
+| `pip install -e ".[cuda12,cuda13]"` | **Both stacks** — pip cannot prevent this; the helper is the way to enforce single-stack. |
+
+This is a **breaking change** for anyone who has documentation or
+scripts referencing `pip install -e ".[all]"`. There is no
+backwards-compatibility alias — `[all]` simply does not exist after
+this rename.
+
+## Revert: `[cpu]` → `[all]` with build-time CUDA detection (2026-05-13, later)
+
+The `[cpu]` rename was reverted. The user's preference is that
+`pip install -e ".[all]"` should "just work" on any host — installing
+the GPU stack when the host has CUDA 12 or 13 available, and staying
+CPU-only otherwise. That is impossible declaratively (PEP 508 has no
+CUDA-version marker), so the implementation moved to a build-time
+hook.
+
+Implementation:
+
+- `pyproject.toml`:
+  - `[project.optional-dependencies]` block removed.
+  - `dynamic = ["optional-dependencies"]` added to `[project]`.
+  - `[build-system].requires` bumped from `setuptools>=61.0` to
+    `setuptools>=64.0` (dynamic optional-dependencies is well-supported
+    from 64+).
+- `setup.py` (new top-level file):
+  - Imports `setuptools.setup`.
+  - Defines all static extras (`dev`, `tfds`, `experiments`, `viz`,
+    `cuda`, `cuda12`, `cuda13`) — setuptools requires the complete
+    map when the field is dynamic.
+  - Runs `nvidia-smi` at build time, parses the `CUDA Version: X.Y`
+    line, and appends `fabricpc[cuda12]` or `fabricpc[cuda13]` to the
+    `all` extra accordingly. Falls back to CPU-only when no usable
+    driver is detected.
+  - Prints the detection result to stderr so users see what was
+    chosen during their `pip install`.
+- `README.md`:
+  - Quick Start rewritten around `pip install -e ".[all]"` as the
+    primary path.
+  - Explicit alternatives (force a CUDA major, CPU-only on a GPU
+    host, helper script) documented in a follow-up subsection.
+  - Note about editable vs built-wheel caveat: built wheels freeze
+    the detection result; editable installs re-detect on each run.
+
+### Validation (2026-05-13, host: Fedora 43, CUDA 13.2, RTX 5060)
+
+`python setup.py egg_info` produced a `requires.txt` whose `[all]`
+section contains `fabricpc[dev,experiments,tfds,viz]` and
+`fabricpc[cuda13]` — exactly the expected dynamic injection. All
+static extras are also present. The `viz` extra's aim entry is
+correctly split out as a marker-conditional sub-extra
+(`[viz:python_version < "3.13"]`).
+
+### Caveats
+
+- The detection runs at *build* time. For an editable install
+  (`pip install -e .`) the hook re-runs on each invocation, so
+  switching the host's driver and re-running picks the new stack.
+  For a built wheel the detection result is frozen at wheel-build
+  time — building on a CUDA-13 box and installing the wheel on a
+  CUDA-12 box would still claim `[cuda13]`. Editable installs are
+  the recommended path for development; users redistributing wheels
+  should not rely on `[all]` self-tuning.
+- `[all]` can still co-install with an explicit CUDA extra, e.g.
+  `pip install -e ".[all,cuda12]"` on a CUDA-13 host would pull
+  both cuda12 (explicit) and cuda13 (via `[all]` detection). The
+  helper script's importlib.metadata guard still catches this on
+  the next run; pip itself cannot.
+- `scripts/install.py` remains useful for users who want explicit
+  CUDA overrides, the dual-stack pre-flight guard, or a custom
+  extras list. Its detection mirrors `setup.py`'s.
+
+## Fixes for the two caveats above (2026-05-13)
+
+### Fix for caveat 1: built-wheel detection freeze
+
+Added `FABRICPC_SKIP_CUDA_DETECT` env-var opt-out to `setup.py`. When
+set (any non-empty value), the build hook short-circuits the
+`nvidia-smi` probe and leaves `[all]` CPU-only. Use case:
+`FABRICPC_SKIP_CUDA_DETECT=1 python -m build` to produce a
+CUDA-agnostic wheel for redistribution.
+
+Rationale for the env-var approach: PEP 517 doesn't give setup.py a
+clean signal to distinguish "transient local wheel for local install"
+from "redistribution wheel" — `bdist_wheel` is invoked for both. An
+explicit opt-in env var is more robust than `sys.argv` heuristics.
+
+Verified by:
+- `FABRICPC_SKIP_CUDA_DETECT=1 python setup.py egg_info` → `[all]`
+  contains only the non-CUDA bundle.
+- Default invocation (no env var) → `[all]` contains the detected
+  `[cuda13]` extra on this host.
+
+### Fix for caveat 2: explicit + auto-detected CUDA conflict
+
+Added a runtime check in `fabricpc/__init__.py`: on
+`import fabricpc`, the package calls `importlib.metadata.version()`
+for both `jax-cuda12-plugin` and `jax-cuda13-plugin`; if both are
+present, it raises `ImportError` with a message naming the conflict
+and pointing to the bypass env var. `FABRICPC_ALLOW_MULTIPLE_CUDA=1`
+disables the check.
+
+This catches the conflict regardless of how it was created:
+- `pip install -e ".[all,cuda12]"` on a CUDA-13 host (the original
+  caveat).
+- Two separate pip invocations adding opposite stacks.
+- Manual installs that miss the helper's pre-flight guard.
+
+Cost: two `importlib.metadata.version()` calls per process at first
+`import fabricpc` (~sub-millisecond, negligible).
+
+Verified by:
+- Normal import (single stack present) → succeeds.
+- Spoofed dual-stack via `importlib.metadata.version` monkey-patch →
+  raises `ImportError` with the expected message.
+- Spoofed dual-stack + `FABRICPC_ALLOW_MULTIPLE_CUDA=1` → import
+  succeeds.
+- Full `pytest -q` → 127 passed (no regressions from the new check
+  on the single-stack venv).
+
+### Env-var summary
+
+| Variable | Effect | Set by |
+|---|---|---|
+| `FABRICPC_SKIP_CUDA_DETECT=1` | `setup.py` build hook skips CUDA detection; `[all]` is CPU-only. | Wheel builder before `pip wheel` / `python -m build`. |
+| `FABRICPC_ALLOW_MULTIPLE_CUDA=1` | Bypass the `import fabricpc` runtime check that forbids both cuda12 and cuda13 plugins. | User debugging only. |
+
+## Reverse the black pin relaxation (2026-05-13, later)
+
+The earlier "Relax `black==26.1.0` → `black>=26.1.0`" change caused
+**lint CI drift**:
+
+- `.github/workflows/lint.yml` pins `version: "26.1.0"` exactly.
+- `.pre-commit-config.yaml` pins `rev: 26.1.0`.
+- The dev extra was floored at `>=26.1.0`, so a fresh `pip install
+  -e ".[dev]"` resolves to whatever's latest (26.3.1 today).
+
+A contributor who runs `black .` directly from their venv (instead
+of going through pre-commit, which uses its own isolated env at the
+pinned rev) gets 26.3.1 output. CI then rejects the diff because
+its 26.1.0 disagrees. Net effect: contributors pass formatting
+locally and fail CI.
+
+**Fix**: re-pin the dev extra to exactly `26.1.0` in `setup.py` so
+all three sources agree. When black is bumped in the future, bump
+all three (CI workflow, pre-commit-config, dev extra) in the same
+commit.
+
+## Back the backwards-compat claim with CI (2026-05-13, later)
+
+The plan's empirical log only covers one configuration (Fedora 43 /
+Python 3.14.4 / CUDA 13.2 — which is itself now out of supported
+scope after the 3.14 drop). The "doesn't break older platforms"
+claim has been asserted but never automated.
+
+**Fix**: added `.github/workflows/test.yml` with a `cpu-smoke` job:
+
+- Runs on `ubuntu-latest` with `actions/setup-python@v5` at
+  `python-version: "3.12"`.
+- Installs the project via `pip install -e ".[dev,experiments,viz]"`
+  (deliberately excludes `[all]` so the auto-CUDA hook is not even
+  exercised; the GitHub runner has no NVIDIA driver anyway, so the
+  hook would self-skip).
+- Runs `pytest -q --no-header`.
+- Triggers on every push and PR.
+- `concurrency:` group cancels in-progress runs on the same ref.
+- `timeout-minutes: 30` caps a hung job.
+
+This gives us a real cross-platform check: Ubuntu (vs. the local
+Fedora dev env) + Python 3.12 (vs. the local 3.14/3.13) + no GPU
+(vs. local Blackwell with CUDA 13). If any of the pyproject/setup.py
+changes break older Pythons or non-Fedora distros, CI will say so.
+
+### Extending coverage later
+
+The job is intentionally minimal. To broaden coverage, convert it
+to a matrix:
+
+```yaml
+strategy:
+  fail-fast: false
+  matrix:
+    python-version: ["3.10", "3.11", "3.12", "3.13"]
+steps:
+  - uses: actions/setup-python@v5
+    with:
+      python-version: ${{ matrix.python-version }}
+      cache: pip
+```
+
+I left this as a single 3.12 job for now per the "small CI job"
+brief; the four-version matrix is roughly 4× the cost and the
+single-version job already catches the most common breakage modes
+(import errors, dynamic-extras parsing failures, dependency
+resolution conflicts).

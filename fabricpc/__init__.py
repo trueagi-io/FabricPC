@@ -38,9 +38,41 @@ Example:
     >>> metrics = evaluate_pcn(trained_params, structure, test_loader, config)
 """
 
-from importlib.metadata import version
+import os
+from importlib.metadata import PackageNotFoundError, version
 
 __version__ = version("fabricpc")
+
+
+def _check_single_cuda_stack() -> None:
+    """Raise if both jax-cuda12-plugin and jax-cuda13-plugin are installed.
+
+    Pip cannot express CUDA mutual exclusivity in extras, so a user can land
+    both plugins in one venv via e.g. `pip install -e ".[all,cuda12]"` on a
+    CUDA-13 host. JAX then loads whichever plugin registers first, which is
+    undefined and usually broken. Set `FABRICPC_ALLOW_MULTIPLE_CUDA=1` to
+    bypass this check (debugging only).
+    """
+    if os.environ.get("FABRICPC_ALLOW_MULTIPLE_CUDA"):
+        return
+    found = []
+    for pkg in ("jax-cuda12-plugin", "jax-cuda13-plugin"):
+        try:
+            version(pkg)
+        except PackageNotFoundError:
+            continue
+        found.append(pkg)
+    if len(found) > 1:
+        raise ImportError(
+            f"FabricPC: multiple JAX CUDA plugins installed in this "
+            f"environment: {', '.join(found)}. JAX loads whichever plugin "
+            f"registers first, which is undefined. Recreate the venv with "
+            f"a single CUDA stack, or set FABRICPC_ALLOW_MULTIPLE_CUDA=1 "
+            f"to bypass."
+        )
+
+
+_check_single_cuda_stack()
 
 # Submodules (for advanced use)
 # nodes must precede graph_assembly: graph_assembly imports nodes.base,
