@@ -2,10 +2,21 @@
 
 ## Requirements
 
-- Python 3.10–3.12
-- CUDA 12 for GPU acceleration (CPU-only works but is significantly slower)
+- Python 3.10–3.13
+- CUDA 12 or 13 for GPU acceleration (CPU-only works but is significantly slower)
 
-> Python 3.13+ may not work with the Aim experiment tracking library.
+> Python 3.13 still works, but the Aim experiment tracking library has
+> no Python 3.13 wheels and is silently skipped by the `[viz]` extra.
+> Use Python 3.12 or earlier if you need Aim.
+
+> **macOS on Intel (x86_64):** use Python 3.10 or 3.11. TensorFlow
+> dropped macOS-x86_64 wheels after TF 2.16 and never shipped any for
+> Python 3.12+, so `[tfds]` (and therefore `[all]`) cannot be
+> resolved on Intel Macs running Python 3.12 or 3.13. Homebrew's
+> default `python3` formula is currently Python 3.13, so install an
+> older interpreter explicitly with `brew install python@3.11` and
+> create the venv from `/usr/local/opt/python@3.11/bin/python3.11`.
+> Apple Silicon Macs and Linux are unaffected.
 
 ## Install from Source
 
@@ -68,3 +79,18 @@ export FABRICPC_DISABLE_TRITON_GEMM=1
 ```
 
 **Aim not compatible with Python 3.13+**: Use Python 3.12 or earlier if you need experiment tracking.
+
+**`No matching distribution found for tensorflow` on macOS Intel**:
+TensorFlow has no `macosx_x86_64` wheels for Python 3.12 or 3.13, so
+the `[tfds]` and `[all]` extras cannot install on an Intel Mac with
+those interpreters. Install Python 3.11 via Homebrew and create your
+venv from it:
+
+```bash
+brew install python@3.11
+/usr/local/opt/python@3.11/bin/python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[all]"
+```
+
+(Apple Silicon Macs and Linux are unaffected.)
