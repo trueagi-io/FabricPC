@@ -45,7 +45,11 @@ dependencies = [
 dynamic = ["optional-dependencies"]
 
 [tool.setuptools]
-py-modules = ["jax_setup"]
+# `_cuda_detect` is build/install tooling imported by `setup.py` and
+# `scripts/install.py`. Listing it here ensures it's included in the
+# sdist so `pip install .` (non-editable) works — without this,
+# setup.py would fail to import the helper during a non-editable build.
+py-modules = ["jax_setup", "_cuda_detect"]
 
 [tool.setuptools.packages.find]
 where = ["."]

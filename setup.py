@@ -16,36 +16,11 @@ optional-dependencies map once the field is marked dynamic in
 from __future__ import annotations
 
 import os
-import re
-import shutil
-import subprocess
 import sys
 
 from setuptools import setup
 
-
-def _detect_cuda_major() -> int | None:
-    """Return 12 or 13 based on `nvidia-smi`'s max CUDA runtime, else None."""
-    if shutil.which("nvidia-smi") is None:
-        return None
-    try:
-        result = subprocess.run(
-            ["nvidia-smi"], capture_output=True, text=True, timeout=10
-        )
-    except (subprocess.SubprocessError, OSError):
-        return None
-    if result.returncode != 0:
-        return None
-    match = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", result.stdout)
-    if not match:
-        return None
-    major = int(match.group(1))
-    if major >= 13:
-        return 13
-    if major >= 12:
-        return 12
-    return None
-
+from _cuda_detect import detect_driver_cuda_version, pick_cuda_extra
 
 _STATIC_EXTRAS = {
     "dev": [
@@ -98,24 +73,18 @@ def _build_all_extra() -> list[str]:
             file=sys.stderr,
         )
         return base
-    cuda_major = _detect_cuda_major()
-    if cuda_major == 13:
+    cuda_extra = pick_cuda_extra(detect_driver_cuda_version())
+    if cuda_extra is None:
         print(
-            "setup.py: detected CUDA 13.x driver — [all] will include [cuda13].",
+            "setup.py: no usable NVIDIA driver detected — [all] will be CPU-only.",
             file=sys.stderr,
         )
-        return base + ["fabricpc[cuda13]"]
-    if cuda_major == 12:
-        print(
-            "setup.py: detected CUDA 12.x driver — [all] will include [cuda12].",
-            file=sys.stderr,
-        )
-        return base + ["fabricpc[cuda12]"]
+        return base
     print(
-        "setup.py: no usable NVIDIA driver detected — [all] will be CPU-only.",
+        f"setup.py: detected CUDA driver — [all] will include [{cuda_extra}].",
         file=sys.stderr,
     )
-    return base
+    return base + [f"fabricpc[{cuda_extra}]"]
 
 
 setup(

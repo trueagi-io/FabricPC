@@ -1,19 +1,29 @@
-# Modernize FabricPC Install for Python 3.14 + CUDA 13 + JAX 0.10 (In Progress)
+# Modernize FabricPC Install for Python 3.13 + CUDA 13 + JAX 0.10 (Completed; 3.14 deferred)
+
+> **Status:** Completed. The implementation extended support to Python
+> 3.13 and CUDA 13. Python 3.14 was attempted during development (see
+> the empirical log in `virt-env/fpc3`, Python 3.14.4) and ultimately
+> **deferred** because TensorFlow has no `cp314` wheels, leaving
+> `[tfds]` unresolvable. See "Scope reduction: drop Python 3.14
+> support" further down for the deferral decision and what remains
+> blocking. `requires-python` in `pyproject.toml` is now capped at
+> `<3.14`; this doc retains the 3.14 exploration as historical record.
 
 ## Summary
 
 Bring FabricPC's default install path up to date so it works on a current
-Fedora 43 / Python 3.14 / CUDA 13 / JAX 0.10 machine without requiring
-users to pin to older Python or older CUDA toolkits. The current README
-tells users to create a Python 3.12.x venv (because Aim does not support
-3.13+); the `cuda` extra installs `jax[cuda12]` even though JAX 0.10
-ships a first-class `cuda13` extra; and `pyproject.toml` only advertises
-3.10–3.12 in its classifiers and `black` `target-version`.
+Fedora 43 / CUDA 13 / JAX 0.10 machine (Python 3.13) without requiring
+users to pin to older Python or older CUDA toolkits. The pre-change
+README told users to create a Python 3.12.x venv (because Aim does not
+support 3.13+); the `cuda` extra installed `jax[cuda12]` even though JAX
+0.10 ships a first-class `cuda13` extra; and `pyproject.toml` only
+advertised 3.10–3.12 in its classifiers and `black` `target-version`.
 
 This plan tracks the changes needed to modernize the install
-instructions and `pyproject.toml`, the version pins we settle on after
-empirical testing in `virt-env/fpc3` (Python 3.14.4), and which extras
-must be deferred because their upstream wheels lag Python 3.14.
+instructions and `pyproject.toml`, the version pins we settled on
+after empirical testing, and which extras had to be deferred because
+their upstream wheels lag newer Python (`aim` on 3.13, `tensorflow` on
+3.14 — the latter is the reason 3.14 itself was deferred).
 
 ---
 

@@ -31,48 +31,21 @@ from __future__ import annotations
 
 import argparse
 import importlib.metadata
-import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+# `_cuda_detect` lives at the repo root next to `setup.py`. Add the repo
+# root to sys.path so this script can be run from any cwd via
+# `python scripts/install.py`.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from _cuda_detect import detect_driver_cuda_version, pick_cuda_extra  # noqa: E402
 
 _CUDA_PLUGIN_DISTS = {
     "cuda12": "jax-cuda12-plugin",
     "cuda13": "jax-cuda13-plugin",
 }
-
-
-def detect_driver_cuda_version() -> tuple[int, int] | None:
-    """Parse `nvidia-smi` for the max CUDA runtime the driver supports."""
-    if shutil.which("nvidia-smi") is None:
-        return None
-    try:
-        result = subprocess.run(
-            ["nvidia-smi"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (subprocess.SubprocessError, OSError):
-        return None
-    if result.returncode != 0:
-        return None
-    match = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", result.stdout)
-    if not match:
-        return None
-    return int(match.group(1)), int(match.group(2))
-
-
-def pick_cuda_extra(version: tuple[int, int] | None) -> str | None:
-    if version is None:
-        return None
-    major, _minor = version
-    if major >= 13:
-        return "cuda13"
-    if major >= 12:
-        return "cuda12"
-    return None
 
 
 def detect_installed_cuda_extras() -> set[str]:
