@@ -38,9 +38,52 @@ Example:
     >>> metrics = evaluate_pcn(trained_params, structure, test_loader, config)
 """
 
-from importlib.metadata import version
+import os
+from importlib.metadata import PackageNotFoundError, version
 
 __version__ = version("fabricpc")
+
+
+def _check_single_cuda_stack() -> None:
+    """Raise if both jax-cuda12-plugin and jax-cuda13-plugin are installed.
+
+    Pip cannot express CUDA mutual exclusivity in extras, so a user can land
+    both plugins in one venv via e.g. `pip install -e ".[all,cuda12]"` on a
+    CUDA-13 host. JAX then loads whichever plugin registers first, which is
+    undefined and usually broken. Set `FABRICPC_ALLOW_MULTIPLE_CUDA=1` to
+    bypass this check (debugging only).
+    """
+    # Strict `== "1"` (not just truthy) so `=0` / `=false` / `=no` don't
+    # accidentally enable the bypass. Matches the precedent set by
+    # FABRICPC_DISABLE_TRITON_GEMM in jax_setup.py.
+    if os.environ.get("FABRICPC_ALLOW_MULTIPLE_CUDA") == "1":
+        return
+    found = []
+    for pkg in ("jax-cuda12-plugin", "jax-cuda13-plugin"):
+        try:
+            version(pkg)
+        except PackageNotFoundError:
+            continue
+        found.append(pkg)
+    if len(found) > 1:
+        raise ImportError(
+            f"FabricPC: multiple JAX CUDA plugins installed in this "
+            f"environment: {', '.join(found)}. JAX loads whichever plugin "
+            f"registers first, which is undefined.\n"
+            f"Recovery (do NOT `pip uninstall` one stack — the nvidia/*\n"
+            f"namespace wheels share files and you'll corrupt the other):\n"
+            f"    deactivate\n"
+            f"    rm -rf .venv\n"
+            f"    python -m venv .venv\n"
+            f"    source .venv/bin/activate\n"
+            f"    python scripts/install.py\n"
+            f"See docs/dev_plans_archive/single_cuda_stack_check.md for "
+            f"background. Bypass for debugging only: "
+            f"FABRICPC_ALLOW_MULTIPLE_CUDA=1."
+        )
+
+
+_check_single_cuda_stack()
 
 # Submodules (for advanced use)
 # nodes must precede graph_assembly: graph_assembly imports nodes.base,

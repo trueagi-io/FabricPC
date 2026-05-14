@@ -2,10 +2,13 @@
 
 ## Requirements
 
-- Python 3.10–3.12
-- CUDA 12 for GPU acceleration (CPU-only works but is significantly slower)
+- Python 3.10–3.13
+- CUDA 12 or 13 for GPU acceleration (CPU-only works but is significantly slower)
+- Linux or Apple Silicon (arm64) macOS — older Intel-based Macs are not currently supported
 
-> Python 3.13+ may not work with the Aim experiment tracking library.
+> Python 3.13 still works, but the Aim experiment tracking library has
+> no Python 3.13 wheels and is silently skipped by the `[viz]` extra.
+> Use Python 3.12 or earlier if you need Aim.
 
 ## Install from Source
 

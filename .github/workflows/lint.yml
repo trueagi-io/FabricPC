@@ -10,4 +10,9 @@ jobs:
       - uses: psf/black@stable
         with:
           version: "26.1.0"
-          src: "./fabricpc ./tests ./examples"
+          # Include top-level build/install tooling (setup.py,
+          # _cuda_detect.py, scripts/) so CI matches pre-commit's
+          # default of formatting every *.py — otherwise a contributor
+          # who skips `pre-commit install` can land non-conformant
+          # changes to these files without CI catching it.
+          src: "./fabricpc ./tests ./examples ./scripts setup.py _cuda_detect.py"

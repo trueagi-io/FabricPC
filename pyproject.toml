@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=64.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,7 +7,7 @@ name = "fabricpc"
 version = "0.3.1"
 description = "A flexible, performant predictive coding library using JAX"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.10,<3.14"
 authors = [
     {name = "FabricPC Authors"}
 ]
@@ -19,6 +19,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Private :: Do Not Upload",
 ]
@@ -36,36 +37,19 @@ dependencies = [
     "optuna",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.0.0",
-    "hypothesis>=6.0.0",
-    "black[colorama]==26.1.0",
-    "mypy>=1.0.0",
-    "pre-commit>=3.0.0",
-]
-tfds = [
-    "tensorflow-datasets>=4.9.0",
-    "tensorflow>=2.15.0",
-]
-experiments = [
-    "scipy>=1.10.0",
-]
-viz = [
-    "plotly>=5.0.0",
-    "kaleido>=0.2.1",
-    "pandas>=2.0.0",
-    "aim>=3.0.0",  # aim requires Python <3.13
-]
-cuda = [
-    "jax[cuda12]",
-]
-all = [
-    "fabricpc[dev,tfds,experiments,viz,cuda]",
-]
+# `optional-dependencies` is computed at build time by `setup.py` because
+# the `[all]` extra needs to inject the right `[cuda12]` / `[cuda13]` based
+# on what `nvidia-smi` reports for the host — and PEP 508 environment
+# markers have no CUDA-version field. All other extras are also defined in
+# `setup.py` (setuptools requires the full set when this field is dynamic).
+dynamic = ["optional-dependencies"]
 
 [tool.setuptools]
-py-modules = ["jax_setup"]
+# `_cuda_detect` is build/install tooling imported by `setup.py` and
+# `scripts/install.py`. Listing it here ensures it's included in the
+# sdist so `pip install .` (non-editable) works — without this,
+# setup.py would fail to import the helper during a non-editable build.
+py-modules = ["jax_setup", "_cuda_detect"]
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -73,7 +57,7 @@ include = ["fabricpc*"]
 
 [tool.black]
 line-length = 88
-target-version = ["py310", "py311", "py312"]
+target-version = ["py310", "py311", "py312", "py313"]
 include = '\.pyi?$'
 extend-exclude = '''
 /(

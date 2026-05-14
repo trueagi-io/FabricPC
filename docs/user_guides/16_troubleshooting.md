@@ -18,7 +18,11 @@ export FABRICPC_DISABLE_TRITON_GEMM=1
 
 **Python version**
 
-FabricPC requires Python 3.10–3.12. Python 3.13+ may not work with the Aim experiment tracking library.
+FabricPC supports Python 3.10–3.13. The Aim experiment tracking library has no Python 3.13 wheels and is silently dropped by the `[viz]` extra on 3.13 — use Python ≤3.12 if you need Aim.
+
+**Platform**
+
+FabricPC is currently unsupported on older Macs with Intel (x86_64) chips. Supported platforms are Linux and Apple Silicon (arm64) macOS.
 
 ---
 
