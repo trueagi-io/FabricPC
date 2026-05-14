@@ -20,18 +20,9 @@ export FABRICPC_DISABLE_TRITON_GEMM=1
 
 FabricPC supports Python 3.10–3.13. The Aim experiment tracking library has no Python 3.13 wheels and is silently dropped by the `[viz]` extra on 3.13 — use Python ≤3.12 if you need Aim.
 
-**macOS Intel (`No matching distribution found for tensorflow`)**
+**Platform**
 
-TensorFlow stopped publishing `macosx_x86_64` wheels after TF 2.16 and never shipped any for Python 3.12+, so on an Intel Mac the `[tfds]` and `[all]` extras cannot install under Python 3.12 or 3.13. Homebrew's default `python3` formula is currently 3.13, so install an older interpreter explicitly:
-
-```bash
-brew install python@3.11
-/usr/local/opt/python@3.11/bin/python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[all]"
-```
-
-Apple Silicon Macs and Linux x86_64 are unaffected.
+FabricPC is currently unsupported on older Macs with Intel (x86_64) chips. Supported platforms are Linux and Apple Silicon (arm64) macOS.
 
 ---
 

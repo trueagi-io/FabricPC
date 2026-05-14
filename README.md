@@ -31,22 +31,9 @@ FabricPC supports Python 3.10–3.13. (Python 3.14 is not yet
 supported — TensorFlow has no 3.14 wheels, so `[tfds]` would be
 unresolvable.)
 
-> **macOS on Intel (x86_64):** use Python 3.10 or 3.11. TensorFlow
-> dropped macOS-x86_64 wheels after TF 2.16 and never shipped any
-> for Python 3.12+, so `[tfds]` (and therefore `[all]`) is
-> unresolvable on Intel Macs running Python 3.12 or 3.13. Homebrew's
-> default `python3` formula is Python 3.13, so install an older
-> interpreter explicitly:
->
-> ```bash
-> brew install python@3.11
-> /usr/local/opt/python@3.11/bin/python3.11 -m venv .venv
-> source .venv/bin/activate
-> pip install -e ".[all]"
-> ```
->
-> Apple Silicon Macs and Linux x86_64 are unaffected — TF still ships
-> wheels for those platforms on Python 3.12/3.13.
+> **Older Intel-based Macs are not currently supported.** FabricPC
+> targets Linux and Apple Silicon (arm64) macOS. Intel (x86_64)
+> Macs are not a supported platform at this time.
 
 `[all]` auto-detects CUDA at install time. The build hook in
 `setup.py` reads `nvidia-smi` and injects the matching
