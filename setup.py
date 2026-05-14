@@ -20,6 +20,11 @@ import sys
 
 from setuptools import setup
 
+# PEP 517 build isolation chdirs into the source tree but does not add it
+# to sys.path, so `_cuda_detect` (a sibling, not yet installed) is invisible
+# to `import` without this. Affects `pip install .` and `pip install -e .`.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from _cuda_detect import detect_driver_cuda_version, pick_cuda_extra
 
 _STATIC_EXTRAS = {
