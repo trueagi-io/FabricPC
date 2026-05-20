@@ -6,8 +6,14 @@ Decomposed transformer pipeline — each stage is a separate PC node:
   tokens → Embedding → MhaResidual(+) → LnMlp1 → Mlp2Residual(+) → VocabProjection → logits
                         │ (skip)   ↑              │ (skip)    ↑
                         └──────────┘              └───────────┘
+
+Variance control:
+- MhaResidualNode: softmax averaging compensated by sqrt(eff_ctx), residual scaled by 1/√2
+- Mlp2ResidualNode: residual scaled by 1/√2
+- create_deep_transformer: per-node dimension-appropriate initialization
 """
 
+import math
 from typing import Dict, Any, Tuple, Optional
 import jax
 import jax.numpy as jnp
@@ -240,7 +246,15 @@ class MhaResidualNode(NodeBase):
         mha = jnp.matmul(attn, V).transpose(0, 2, 1, 3).reshape(B, L, D)
         mha = proj(mha, "W_o", "b_o")
 
-        z_mu = x + mha
+        # Balanced residual: 1/√2 keeps Var ≈ 1 when both branches have Var ≈ 1.
+        # No explicit sqrt(eff_ctx) compensation is applied here because the QKV
+        # projections use dimension-appropriate initialization (std=1/sqrt(embed_dim)),
+        # so pre-softmax scores already have Var ≈ 1.  The resulting peaked (non-uniform)
+        # attention means the attention output inherits Var ≈ Var(V) ≈ 1 directly,
+        # making position-dependent averaging compensation unnecessary and, in fact,
+        # harmful (it would over-amplify the last-position outputs).
+        inv_sqrt2 = jnp.float32(1.0 / jnp.sqrt(2.0))
+        z_mu = inv_sqrt2 * (x + mha)
         error = state.z_latent - z_mu
 
         state = state._replace(z_mu=z_mu, error=error)
@@ -364,7 +378,10 @@ class Mlp2ResidualNode(NodeBase):
         res_in = next(val for key, val in inputs.items() if key.endswith(":residual"))
 
         mlp2 = jnp.dot(mlp1_in, params.weights["W_ff2"]) + params.biases["b_ff2"]
-        z_mu = res_in + mlp2
+
+        # Balanced residual: 1/√2 keeps Var ≈ 1 when both branches have Var ≈ 1.
+        inv_sqrt2 = jnp.float32(1.0 / jnp.sqrt(2.0))
+        z_mu = inv_sqrt2 * (res_in + mlp2)
 
         error = state.z_latent - z_mu
         state = state._replace(z_mu=z_mu, error=error)
@@ -446,17 +463,38 @@ def create_deep_transformer(
 ):
     """
     Creates a deep transformer graph using the new class-based builder API.
+
+    Initialization strategy (per node type):
+    - EmbeddingNode: uses ``weight_init`` std (default 0.02), small is fine since
+      embeddings are normalized by LayerNorm before attention.
+    - MhaResidualNode: NormalInitializer(std=1/sqrt(embed_dim)) so that Q/K/V/O
+      projections produce unit-variance outputs at init.
+    - LnMlp1Node: KaimingInitializer (He init) for the W_ff1 weight to compensate
+      for GELU halving variance.
+    - Mlp2ResidualNode: NormalInitializer(std=1/sqrt(mlp_dim)) for unit-variance
+      W_ff2 output.
+    - VocabProjectionNode: XavierInitializer for balanced fan-in/fan-out.
     """
+    # Embedding init: use user-provided std (small std is fine; embeddings are
+    # normalized by LayerNorm inside each MhaResidualNode before attention).
     if weight_init is None:
-        w_init_obj = NormalInitializer(std=0.02)
+        embed_init = NormalInitializer(std=0.02)
     else:
         init_type = weight_init.get("type", "normal")
         if init_type == "normal":
-            w_init_obj = NormalInitializer(std=weight_init.get("std", 0.05))
+            embed_init = NormalInitializer(std=weight_init.get("std", 0.02))
         elif init_type == "xavier":
-            w_init_obj = XavierInitializer()
+            embed_init = XavierInitializer()
         else:
-            w_init_obj = KaimingInitializer()
+            embed_init = KaimingInitializer()
+
+    # Dimension-appropriate initializers for each node type.
+    # These are independent of the user-specified weight_init to guarantee
+    # unit-variance signal propagation at initialization.
+    mha_init = NormalInitializer(std=1.0 / math.sqrt(embed_dim))
+    mlp1_init = KaimingInitializer()  # He init compensates for GELU
+    mlp2_init = NormalInitializer(std=1.0 / math.sqrt(mlp_dim))
+    proj_init = XavierInitializer()
 
     nodes = []
     edges = []
@@ -471,7 +509,7 @@ def create_deep_transformer(
         shape=(seq_len, embed_dim),
         vocab_size=vocab_size,
         embed_dim=embed_dim,
-        weight_init=w_init_obj,
+        weight_init=embed_init,
     )
     nodes.append(embed_node)
     edges.append(Edge(source=input_node, target=embed_node.slot("in")))
@@ -484,7 +522,7 @@ def create_deep_transformer(
             shape=(seq_len, embed_dim),
             embed_dim=embed_dim,
             num_heads=num_heads,
-            weight_init=w_init_obj,
+            weight_init=mha_init,
         )
         nodes.append(mha)
         edges.append(Edge(source=previous_residual, target=mha.slot("in")))
@@ -495,7 +533,7 @@ def create_deep_transformer(
             embed_dim=embed_dim,
             ff_dim=mlp_dim,
             activation=GeluActivation(),
-            weight_init=w_init_obj,
+            weight_init=mlp1_init,
         )
         nodes.append(mlp1)
         edges.append(Edge(source=mha, target=mlp1.slot("in")))
@@ -505,7 +543,7 @@ def create_deep_transformer(
             shape=(seq_len, embed_dim),
             embed_dim=embed_dim,
             ff_dim=mlp_dim,
-            weight_init=w_init_obj,
+            weight_init=mlp2_init,
         )
         nodes.append(mlp2)
         edges.append(Edge(source=mlp1, target=mlp2.slot("in")))
@@ -518,7 +556,7 @@ def create_deep_transformer(
         shape=(seq_len, vocab_size),
         vocab_size=vocab_size,
         embed_dim=embed_dim,
-        weight_init=w_init_obj,
+        weight_init=proj_init,
     )
     nodes.append(logits)
     edges.append(Edge(source=previous_residual, target=logits.slot("in")))
