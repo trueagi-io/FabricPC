@@ -21,7 +21,7 @@ from fabricpc.graph_initialization.state_initializer import (
 from fabricpc.core.inference import run_inference, InferenceSGD
 from fabricpc.training import train_step
 import optax
-from fabricpc.nodes import Linear
+from fabricpc.nodes import Linear, IdentityNode
 from fabricpc.core.topology import Edge
 from fabricpc.graph_assembly import TaskMap, graph
 
@@ -456,6 +456,198 @@ class TestEvaluateTransformer:
         }
         for k, v in metrics.items():
             assert np.isfinite(v), f"{k} is not finite: {v}"
+
+
+class TestVarianceScaling:
+    """Tests that verify variance control in v2 transformer nodes."""
+
+    def test_mha_residual_variance_near_unity(self, rng_key):
+        """MhaResidualNode z_mu should have Var ≈ 1 at initialisation.
+
+        With proper 1/√2 residual scaling and sqrt(eff_ctx) softmax
+        compensation, the output variance should stay close to 1.
+        """
+        seq_len, embed_dim, num_heads = 16, 32, 4
+        batch_size = 64
+
+        input_node = Linear(shape=(seq_len, embed_dim), name="input")
+        mha = MhaResidualNode(
+            shape=(seq_len, embed_dim),
+            name="mha",
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+        )
+        output_node = Linear(shape=(seq_len, embed_dim), name="output")
+
+        structure = graph(
+            nodes=[input_node, mha, output_node],
+            edges=[
+                Edge(source=input_node, target=mha.slot("in")),
+                Edge(source=mha, target=output_node.slot("in")),
+            ],
+            task_map=TaskMap(x=input_node, y=output_node),
+            inference=InferenceSGD(eta_infer=0.1, infer_steps=3),
+        )
+        params = initialize_params(structure, rng_key)
+
+        k1, k2 = jax.random.split(rng_key)
+        x_data = jax.random.normal(k1, (batch_size, seq_len, embed_dim))
+        y_data = jax.random.normal(k2, (batch_size, seq_len, embed_dim))
+
+        state = initialize_graph_state(
+            structure,
+            batch_size,
+            rng_key,
+            clamps={"input": x_data, "output": y_data},
+            params=params,
+            state_init=FeedforwardStateInit(),
+        )
+
+        var_z_mu = float(jnp.var(state.nodes["mha"].z_mu))
+        assert 0.2 < var_z_mu < 3.0, (
+            f"MhaResidualNode z_mu variance {var_z_mu:.4f} outside [0.2, 3.0]"
+        )
+
+    def test_mlp2_residual_variance_near_unity(self, rng_key):
+        """Mlp2ResidualNode z_mu should have Var ≈ 1 at initialisation."""
+        seq_len, embed_dim, ff_dim = 16, 32, 64
+        batch_size = 64
+
+        input_node = Linear(shape=(seq_len, embed_dim), name="input")
+        mlp1 = LnMlp1Node(
+            shape=(seq_len, ff_dim),
+            name="mlp1",
+            embed_dim=embed_dim,
+            ff_dim=ff_dim,
+        )
+        mlp2 = Mlp2ResidualNode(
+            shape=(seq_len, embed_dim),
+            name="mlp2",
+            embed_dim=embed_dim,
+            ff_dim=ff_dim,
+        )
+        output_node = Linear(shape=(seq_len, embed_dim), name="output")
+
+        structure = graph(
+            nodes=[input_node, mlp1, mlp2, output_node],
+            edges=[
+                Edge(source=input_node, target=mlp1.slot("in")),
+                Edge(source=mlp1, target=mlp2.slot("in")),
+                Edge(source=input_node, target=mlp2.slot("residual")),
+                Edge(source=mlp2, target=output_node.slot("in")),
+            ],
+            task_map=TaskMap(x=input_node, y=output_node),
+            inference=InferenceSGD(eta_infer=0.1, infer_steps=3),
+        )
+        params = initialize_params(structure, rng_key)
+
+        k1, k2 = jax.random.split(rng_key)
+        x_data = jax.random.normal(k1, (batch_size, seq_len, embed_dim))
+        y_data = jax.random.normal(k2, (batch_size, seq_len, embed_dim))
+
+        state = initialize_graph_state(
+            structure,
+            batch_size,
+            rng_key,
+            clamps={"input": x_data, "output": y_data},
+            params=params,
+            state_init=FeedforwardStateInit(),
+        )
+
+        var_z_mu = float(jnp.var(state.nodes["mlp2"].z_mu))
+        assert 0.2 < var_z_mu < 3.0, (
+            f"Mlp2ResidualNode z_mu variance {var_z_mu:.4f} outside [0.2, 3.0]"
+        )
+
+    def test_deep_transformer_v2_variance_stable(self, rng_key):
+        """After several blocks, variance should remain bounded (no explosion)."""
+        seq_len, embed_dim, num_heads, mlp_dim = 16, 32, 4, 64
+        vocab_size, depth = 50, 4
+        batch_size = 32
+
+        structure = create_deep_transformer(
+            depth=depth,
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            mlp_dim=mlp_dim,
+            seq_len=seq_len,
+            vocab_size=vocab_size,
+            inference=InferenceSGD(eta_infer=0.1, infer_steps=2),
+        )
+        params = initialize_params(structure, rng_key)
+
+        x_data = jax.random.randint(rng_key, (batch_size, seq_len), 0, vocab_size)
+        y_dummy = jnp.zeros((batch_size, seq_len, vocab_size))
+
+        state = initialize_graph_state(
+            structure,
+            batch_size,
+            rng_key,
+            clamps={"input_ids": x_data, "logits": y_dummy},
+            params=params,
+            state_init=FeedforwardStateInit(),
+        )
+
+        # Check variance at each MhaResidualNode output does not explode
+        for layer in range(depth):
+            mha_name = f"L{layer}_mha"
+            var_mha = float(jnp.var(state.nodes[mha_name].z_mu))
+            assert 0.1 < var_mha < 5.0, (
+                f"Layer {layer} MhaResidualNode variance {var_mha:.4f} "
+                f"outside [0.1, 5.0] — possible variance explosion"
+            )
+            mlp2_name = f"L{layer}_mlp2"
+            var_mlp2 = float(jnp.var(state.nodes[mlp2_name].z_mu))
+            assert 0.1 < var_mlp2 < 5.0, (
+                f"Layer {layer} Mlp2ResidualNode variance {var_mlp2:.4f} "
+                f"outside [0.1, 5.0] — possible variance explosion"
+            )
+
+    def test_skip_connection_two_inputs_variance(self, rng_key):
+        """SkipConnection with 2 unit-variance inputs should produce Var ≈ 1."""
+        from fabricpc.nodes.skip_connection import SkipConnection
+        from fabricpc.graph_initialization.state_initializer import FeedforwardStateInit
+
+        shape = (32,)
+        batch_size = 256
+
+        x = IdentityNode(shape=shape, name="x")
+        h = Linear(shape=shape, name="h")
+        skip = SkipConnection(shape=shape, name="skip")
+        y = Linear(shape=shape, name="y")
+
+        structure = graph(
+            nodes=[x, h, skip, y],
+            edges=[
+                Edge(source=x, target=h.slot("in")),
+                Edge(source=x, target=skip.slot("in")),   # skip path
+                Edge(source=h, target=skip.slot("in")),   # compute path
+                Edge(source=skip, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(eta_infer=0.1, infer_steps=3),
+        )
+        params = initialize_params(structure, rng_key)
+
+        k1, k2 = jax.random.split(rng_key)
+        x_data = jax.random.normal(k1, (batch_size,) + shape)
+        y_data = jax.random.normal(k2, (batch_size,) + shape)
+
+        state = initialize_graph_state(
+            structure,
+            batch_size,
+            rng_key,
+            clamps={"x": x_data, "y": y_data},
+            params=params,
+            state_init=FeedforwardStateInit(),
+        )
+
+        # The skip connection output should have variance close to 1,
+        # not 2 (which would happen without 1/√2 scaling).
+        var_skip = float(jnp.var(state.nodes["skip"].z_mu))
+        assert 0.2 < var_skip < 2.5, (
+            f"SkipConnection variance {var_skip:.4f} outside [0.2, 2.5]"
+        )
 
 
 if __name__ == "__main__":

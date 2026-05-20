@@ -1,10 +1,14 @@
 """
 Skip connection node for residual architectures.
 
-SkipConnection is identical to IdentityNode in behavior — it sums inputs
-and passes them through — but its slot has ``is_variance_scalable=False``.
-This tells muPC to leave edges into this node unscaled (scale = 1.0),
-preserving the identity mapping that carries signal through deep networks.
+SkipConnection sums its inputs and scales by 1/√N (where N is the number
+of inputs), then passes the result through. Its slot has
+``is_variance_scalable=False``, so muPC leaves incoming edges at scale 1.0.
+
+When used as a residual connection with N=2 (skip path + compute path),
+the 1/√2 scaling keeps output variance ≈ 1 when both branches have
+variance ≈ 1, preventing the variance doubling that would occur from a raw
+sum.  For a single input (N=1) the node behaves as an identity pass-through.
 
 Use SkipConnection for residual/skip paths in your graph. Use IdentityNode
 for summation points where all inputs are independent and should be
@@ -42,11 +46,16 @@ if TYPE_CHECKING:
 
 class SkipConnection(NodeBase):
     """
-    Skip connection node: sums inputs without muPC variance scaling.
+    Skip connection node: sums inputs with 1/√N variance scaling.
 
-    Identical to IdentityNode in forward behavior (sums all inputs, no
-    learnable parameters). Its slot has ``is_variance_scalable=False``,
-    so muPC leaves incoming edges at scale 1.0.
+    Sums all inputs and scales by 1/√N (where N is the number of connected
+    inputs), then passes the result through without learnable parameters.
+    Its slot has ``is_variance_scalable=False``, so muPC leaves incoming
+    edges at scale 1.0.
+
+    The 1/√N scaling preserves unit output variance when all N input branches
+    have unit variance, preventing the variance doubling from a raw sum.
+    For a single input (N=1) the scaling is a no-op (identity pass-through).
 
     This preserves the identity mapping through deep residual networks.
     Without this, muPC's in-degree formula scales skip edges by
@@ -102,13 +111,19 @@ class SkipConnection(NodeBase):
         state: NodeState,
         node_info: NodeInfo,
     ) -> Tuple[jax.Array, NodeState]:
-        """Sum all inputs and pass through (no transformation)."""
+        """Sum all inputs and scale by 1/√N to maintain unit variance."""
         pre_activation = None
         for edge_key, x in inputs.items():
             if pre_activation is None:
                 pre_activation = x
             else:
                 pre_activation = pre_activation + x
+
+        # Scale by 1/√N when N > 1 to keep Var ≈ 1 when all N inputs have Var ≈ 1.
+        # For a single input (N=1) this is a no-op.
+        n_inputs = len(inputs)
+        if n_inputs > 1:
+            pre_activation = pre_activation / jnp.sqrt(jnp.float32(n_inputs))
 
         z_mu = pre_activation  # no activation function applied: z_mu = pre_activation
         error = state.z_latent - z_mu
