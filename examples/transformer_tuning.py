@@ -1,54 +1,60 @@
 """
-Hyperparameter Tuning — Transformer on Tiny Shakespeare (multi-GPU)
+Hyperparameter Tuning — Transformer on Tiny Shakespeare (Two-Phase)
 
-Architecture (auto-tuned via Optuna)::
+Phase 1 — Architecture search: explore embed_dim, mlp_dim, num_heads, depth,
+           infer_steps, eta_infer, lr, weight_init_std. Prune unstable trials
+           early based on energy explosion. Minimize energy.
 
-    input ──→ Embedding ──→ [MhaResidual ──→ LnMlp1 ──→ Mlp2Residual] x depth ──→ VocabProjection
+Phase 2 — Continuous fine-tuning: fix the winning architecture, search only
+           lr, eta_infer, infer_steps in a tight window. Minimize perplexity.
 
-    Tunable: embed_dim, mlp_dim, num_heads, depth, infer_steps, eta_infer, lr, weight_init_std
+Architecture::
+    input -> Embedding -> [MhaResidual -> LnMlp1 -> Mlp2Residual] x depth -> VocabProjection
 """
 
 from jax_setup import set_jax_flags_before_importing_jax
-
 set_jax_flags_before_importing_jax()
 
-import jax
-import optax
 import optuna
 from fabricpc.graph_initialization import initialize_params
-from fabricpc.core.inference import InferenceSGD
+from fabricpc.core.inference import InferenceSGDNormClip
 from fabricpc.nodes.transformer_v2 import create_deep_transformer
-from fabricpc.training import train_pcn, evaluate_transformer
 from fabricpc.tuning.bayesian_tuner import BayesianTuner
 from fabricpc.utils.data import CharDataLoader
+from optuna.storages import JournalStorage, JournalFileStorage
 
-# --- Model Factory ---
-
-
+# Model Factory
 def trial_model(config, rng_key):
-    """Create the PC transformer graph; returns (params, structure)."""
+    """Create the PC transformer graph; returns (params, structure, train_loader, val_loader)."""
     embed_dim = config.get("embed_dim", 64)
     num_heads = config.get("num_heads", 4)
     mlp_dim = config.get("mlp_dim", 128)
     depth = config.get("depth", 1)
     seq_len = config.get("seq_len", 32)
+    batch_size = config.get("batch_size", 32)
     vocab_size = config.get("vocab_size", 65)
-
-    # Weight initialization config
     weight_init_std = config.get("weight_init_std", 0.02)
-    weight_init = {"type": "normal", "std": weight_init_std}
 
     if embed_dim % num_heads != 0:
         raise optuna.TrialPruned(
             f"embed_dim={embed_dim} not divisible by num_heads={num_heads}"
         )
 
-    inference = InferenceSGD(
-        eta_infer=config.get("eta_infer", 0.05),
-        infer_steps=config.get("infer_steps", 20),
+    inference = InferenceSGDNormClip(
+            eta_infer=config.get("eta_infer", 0.1),
+            infer_steps=config.get("infer_steps", 20),
+            max_norm=5.0,
+            latent_decay=0.0,
     )
 
-    # Create the structure directly
+    train_loader = CharDataLoader(
+        "train", seq_len=seq_len, batch_size=batch_size,
+        shuffle=True, seed=42, max_samples=50000,
+    )
+    val_loader = CharDataLoader(
+        "validation", seq_len=seq_len, batch_size=batch_size, shuffle=False,
+    )
+
     structure = create_deep_transformer(
         depth=depth,
         embed_dim=embed_dim,
@@ -57,87 +63,68 @@ def trial_model(config, rng_key):
         seq_len=seq_len,
         vocab_size=vocab_size,
         inference=inference,
-        weight_init=weight_init,
+        weight_init={"type": "normal", "std": weight_init_std},
     )
 
-    # Initialize params using the structure
     params = initialize_params(structure, rng_key)
+    return params, structure, train_loader, val_loader
 
-    return params, structure
+# ==============================================================================
+# PHASE 1: Architecture search
+# ==============================================================================
 
-
-# ----------------------------------------------------------------------
-# OPTUNA SEARCH SPACE
-# ----------------------------------------------------------------------
-
-
-# Scaled down since bigger range gives NAN values
-def search_space_transformer(trial):
-    lr = trial.suggest_float("lr", 1e-4, 1e-2, log=True)
-    embed_dim = trial.suggest_categorical("embed_dim", [32, 64])
-    mlp_dim = trial.suggest_categorical("mlp_dim", [64, 128])
-    num_heads = trial.suggest_categorical("num_heads", [2, 4])
-
-    infer_steps = trial.suggest_int("infer_steps", 10, 30)
-    eta_infer = trial.suggest_float("eta_infer", 0.01, 0.2)
-    depth = trial.suggest_int("depth", 1, 12)
-
-    # Tuning weight initialization scale
-    weight_init_std = trial.suggest_float("weight_init_std", 0.005, 0.05, log=True)
+def phase1_search_space(trial):
+    """
+    Full search space for architecture and training hyperparameters.
+    Ranges are conservative to avoid NaN/explosion.
+    """
+    embed_dim = trial.suggest_categorical("embed_dim", [64, 128])
+    num_heads = trial.suggest_categorical("num_heads", [4, 8])
+    mlp_dim = trial.suggest_categorical("mlp_dim", [256, 512])
+    depth = trial.suggest_int("depth", 1, 4)
+    seq_len = trial.suggest_categorical("seq_len", [64, 128])
+    batch_size = trial.suggest_categorical("batch_size", [16, 32])
+    infer_steps = trial.suggest_int("infer_steps", 15, 25)
+    eta_infer = trial.suggest_float("eta_infer", 0.01, 0.15)
+    lr = trial.suggest_float("lr", 1e-5, 3e-4, log=True)
+    weight_init_std = trial.suggest_float("weight_init_std", 0.01, 0.05, log=True)
 
     return {
-        "lr": lr,
-        "optimizer": {"type": "adam", "lr": lr},
-        "embed_dim": embed_dim,
-        "mlp_dim": mlp_dim,
-        "num_heads": num_heads,
-        "depth": depth,
-        "infer_steps": infer_steps,
-        "eta_infer": eta_infer,
-        "weight_init_std": weight_init_std,
+        "embed_dim": embed_dim, "num_heads": num_heads, "mlp_dim": mlp_dim,
+        "depth": depth, "seq_len": seq_len, "batch_size": batch_size,
+        "infer_steps": infer_steps, "eta_infer": eta_infer,
+        "lr": lr, "weight_init_std": weight_init_std,
     }
 
+# ==============================================================================
+# PHASE 2 SEARCH SPACE — Continuous fine-tuning around Phase 1 winner
+# ==============================================================================
 
-# --- Multi-GPU Train/Eval ---
+def phase2_search_space(trial, best_params):
+    """
+    Fine-tune only continuous training params around the Phase 1 best values.
+    Architecture (embed_dim, num_heads, mlp_dim, depth, weight_init_std) is fixed.
+    """
+    lr = best_params.get("lr", 1e-4)
+    eta_infer = best_params.get("eta_infer", 0.1)
+    infer_steps = best_params.get("infer_steps", 20)
 
+    return {
+        "lr": trial.suggest_float("lr", max(1e-5, lr * 0.5), min(1e-3, lr * 2.0), log=True),
+        "eta_infer": trial.suggest_float("eta_infer", max(0.01, eta_infer * 0.7), min(0.2, eta_infer * 1.3)),
+        "infer_steps": trial.suggest_int("infer_steps", max(15, infer_steps - 3), min(25, infer_steps + 3)),
+    }
 
-def multi_gpu_train_eval(params, structure, train_loader, val_loader, config, rng_key):
-    train_key, eval_key = jax.random.split(rng_key)
-
-    lr = config.get("lr", 1e-3)
-    optimizer = optax.adam(lr)
-
-    trained_params, _, _ = train_pcn(
-        params=params,
-        structure=structure,
-        train_loader=train_loader,
-        optimizer=optimizer,
-        config=config,
-        rng_key=train_key,
-        verbose=False,
-        use_tqdm=False,
-    )
-
-    metrics = evaluate_transformer(
-        trained_params, structure, val_loader, config, eval_key
-    )
-
-    alpha = 0.5
-    energy = metrics.get("energy", 0.0)
-    perplexity = metrics.get("perplexity", 0.0)
-
-    combined = alpha * energy + (1 - alpha) * perplexity
-    metrics["combined_loss"] = combined
-    return metrics
-
-
-# --- MAIN — TUNING SETUP ---
+# ==============================================================================
+# MAIN
+# ==============================================================================
 
 if __name__ == "__main__":
-    seq_len = 32
+    seq_len = 128
     batch_size = 32
-    max_tuning_samples = 50_000
+    max_tuning_samples = 50000
 
+    # Used only to get vocab_size training loaders are created per trial in trial_model
     train_loader = CharDataLoader(
         "train",
         seq_len=seq_len,
@@ -162,23 +149,38 @@ if __name__ == "__main__":
     base_config = {
         "seq_len": seq_len,
         "vocab_size": vocab_size,
+        "num_epochs": 5,
     }
+
+    storage = JournalStorage(JournalFileStorage("fabricpc/tuning/optuna_journal.log"))
 
     tuner = BayesianTuner(
         train_loader=train_loader,
         val_loader=val_loader,
         trial_model=trial_model,
         base_config=base_config,
-        trainer_fn=multi_gpu_train_eval,
-        metric="combined_loss",
-        direction="minimize",
-        study_name="transformer_multi_gpu_tuning",
-        log_file="transformer_multi_gpu_results.jsonl",
+        study_name="transformer_v2_tuning",
+        storage=storage,
+        log_file="tuning/transformer_v2_results.txt",
+        energy_threshold=300,
     )
 
-    print("\n=== Starting Multi-GPU Hyperparameter Search ===")
-    study = tuner.tune(n_trials=30, search_space=search_space_transformer)
+    print("\n=== Starting Two-Phase Hyperparameter Search ===")
+    results = tuner.tune(
+        phase1_search_space=phase1_search_space,
+        phase2_search_space=phase2_search_space,
+        n_trials_phase1=20,
+        n_trials_phase2=15,
+        save_best_to="tuning/best_hyperparameters.txt",
+    )
 
-    print("\nBest params:")
-    print(study.best_params)
-    print(f"Best value: {study.best_value}")
+    if results:
+        print("\n" + "=" * 60)
+        print("TUNING COMPLETE")
+        print("=" * 60)
+        print(f"Phase 1 Best Energy:     {results['phase1_best_energy']:.4f}")
+        print(f"Phase 2 Best Perplexity: {results['phase2_best_ppl']:.4f}")
+        print(f"\nFinal parameters:")
+        for k, v in results["final_params"].items():
+            print(f"  {k}: {v}")
+        print(f"\nSaved to: tuning/best_hyperparameters.txt")
