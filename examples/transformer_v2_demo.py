@@ -35,14 +35,17 @@ from fabricpc.training import (
     evaluate_autoregressive,
     train_backprop_autoregressive,
     evaluate_backprop_autoregressive,
-    generate_autoregressive
 )
-from fabricpc.core.inference import InferenceSGD
+from fabricpc.core.inference import InferenceSGDNormClip
 from fabricpc.nodes.transformer_v2 import create_deep_transformer
 from fabricpc.utils.data import CharDataLoader
 import optax
 import time
 
+# --- Text Generation ---
+from fabricpc.graph_initialization.state_initializer import initialize_graph_state
+from fabricpc.core.inference import run_inference
+from fabricpc.training.train_autoregressive import create_causal_mask
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -61,31 +64,31 @@ def parse_args():
     parser.add_argument(
         "--num_heads", type=int, default=4, help="Number of attention heads"
     )
-    parser.add_argument("--mlp_dim", type=int, default=128, help="MLP hidden dimension")
-    parser.add_argument("--seq_len", type=int, default=32, help="Sequence length")
+    parser.add_argument("--mlp_dim", type=int, default=256, help="MLP hidden dimension")
+    parser.add_argument("--seq_len", type=int, default=64, help="Sequence length")
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=32,
+        default=16,
         help="Batch size (per-device for PC mode, total for backprop)",
     )
     parser.add_argument(
         "--num_epochs", type=int, default=5, help="Number of training epochs"
     )
-    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=0.0002, help="Learning rate")
     parser.add_argument(
-        "--infer_steps", type=int, default=17, help="PC inference steps"
+        "--infer_steps", type=int, default=23, help="PC inference steps"
     )
     parser.add_argument(
         "--eta_infer",
         type=float,
-        default=0.033195052120243505,
+        default=0.06701833916050529,
         help="PC inference step size",
     )
     parser.add_argument(
         "--weight_init_std",
         type=float,
-        default=0.04402197307582635,
+        default=0.013123252658288186,
         help="Weight init std",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
@@ -114,9 +117,9 @@ def main(args=None):
         shuffle=True,
         seed=args.seed,
     )
-    val_loader = CharDataLoader(
-        "validation", seq_len=args.seq_len, batch_size=batch_size, shuffle=False
-    )
+    # val_loader = CharDataLoader(
+    #     "validation", seq_len=args.seq_len, batch_size=batch_size, shuffle=False
+    # )
     test_loader = CharDataLoader(
         "test", seq_len=args.seq_len, batch_size=batch_size, shuffle=False
     )
@@ -132,7 +135,12 @@ def main(args=None):
         mlp_dim=args.mlp_dim,
         seq_len=args.seq_len,
         vocab_size=vocab_size,
-        inference=InferenceSGD(eta_infer=args.eta_infer, infer_steps=args.infer_steps),
+        inference=InferenceSGDNormClip(
+            eta_infer=args.eta_infer,
+            infer_steps=args.infer_steps,
+            max_norm=5.0,
+            latent_decay=0.0,
+        ),
         weight_init={"type": "normal", "std": args.weight_init_std},
     )
 
@@ -141,12 +149,20 @@ def main(args=None):
     graph_key, train_key, eval_key = jax.random.split(master_rng_key, 3)
 
     params = initialize_params(structure, graph_key)
+    n_params = sum(x.size for x in jax.tree_util.tree_leaves(params))
+    print(f"Model parameters: {n_params:,}")
 
     train_config = {
         "num_epochs": args.num_epochs,
         "use_causal_mask": True,
     }
-    optimizer = optax.adam(args.lr)
+    steps_per_epoch = train_loader.num_sequences // batch_size
+    schedule = optax.cosine_decay_schedule(
+        init_value=args.lr,
+        decay_steps=args.num_epochs * steps_per_epoch,
+        alpha=0.1,
+    )
+    optimizer = optax.adam(schedule)
 
     print(f"Vocab Size: {vocab_size}")
     start = time.time()
@@ -154,6 +170,7 @@ def main(args=None):
     def iter_callback(epoch_idx, batch_idx, energy):
         if (batch_idx + 1) % 50 == 0:
             print(f"Epoch {epoch_idx + 1} | Batch {batch_idx + 1} | Energy: {energy:.4f}")
+        return energy
 
     if use_pc:
         trained_params, _, _ = train_autoregressive(
@@ -168,6 +185,7 @@ def main(args=None):
     print(f"Training completed in {time.time() - start:.1f}s")
 
     # --- Evaluate ---
+    eval_start = time.time()
     if use_pc:
         metrics = evaluate_autoregressive(
             trained_params, structure, test_loader, train_config, eval_key
@@ -176,18 +194,45 @@ def main(args=None):
         metrics = evaluate_backprop_autoregressive(
             trained_params, structure, test_loader, train_config, eval_key
         )
+    print(f"Evaluation completed in {time.time() - eval_start:.1f}s")
+
+    print(f"Test Accuracy:   {metrics['accuracy'] * 100:.2f}%")
+    print(f"Test CE Loss:    {metrics['loss']:.4f}")
+    print(f"Test Perplexity: {metrics['perplexity']:.2f}")
 
     # --- Text Generation ---
     gen_key = jax.random.PRNGKey(99)
     prompt_text = "ROMEO: "
-    prompt_indices = jnp.array([char_to_ix.get(c, 0) for c in prompt_text], dtype=jnp.int32)
+    seq_len = args.seq_len
 
-    generated = generate_autoregressive(
-        trained_params, structure, prompt_indices,
-        max_new_tokens=100, rng_key=gen_key, temperature=0.8,
-    )
+    seed_indices = [char_to_ix.get(c, 0) for c in prompt_text]
+    current_indices = ([0] * (seq_len - len(seed_indices)) + seed_indices)[-seq_len:]
+
+    result_text = prompt_text
     print("--- Generating ---")
-    print("".join(ix_to_char[int(i)] for i in generated))
+    for _ in range(200):
+        input_batch = jnp.array([current_indices], dtype=jnp.int32)
+        mask = create_causal_mask(seq_len)[None, None, :, :]
+        mask = jnp.broadcast_to(mask, (1, 1, seq_len, seq_len))
+
+        clamps = {
+            structure.task_map["x"]: input_batch,
+            structure.task_map["causal_mask"]: mask,
+        }
+        state = initialize_graph_state(
+            structure, 1, gen_key, clamps=clamps, params=trained_params
+        )
+        final_state = run_inference(trained_params, state, clamps, structure)
+
+        probs = final_state.nodes["logits"].z_mu[0, -1, :]
+        log_probs = jnp.log(probs + 1e-9)
+        gen_key, sample_key = jax.random.split(gen_key)
+        next_idx = int(jax.random.categorical(sample_key, log_probs / 0.8))
+
+        result_text += ix_to_char[next_idx]
+        current_indices = (current_indices + [next_idx])[-seq_len:]
+
+    print(result_text)
 
 if __name__ == "__main__":
     args = parse_args()

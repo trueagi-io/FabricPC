@@ -21,6 +21,7 @@ from fabricpc.core.initializers import (
     XavierInitializer,
     KaimingInitializer,
 )
+from fabricpc.graph_initialization import FeedforwardStateInit
 from fabricpc.core.positional import precompute_freqs_cis, apply_rotary_emb
 from fabricpc.utils.helpers import layernorm
 
@@ -33,7 +34,7 @@ from fabricpc.core.activations import (
     IdentityActivation,
     SoftmaxActivation,
 )
-from fabricpc.core.energy import KLDivergenceEnergy, GaussianEnergy
+from fabricpc.core.energy import CrossEntropyEnergy, GaussianEnergy
 from fabricpc.core.inference import InferenceBase
 from fabricpc.core.mupc import MuPCConfig
 
@@ -382,7 +383,7 @@ class Mlp2ResidualNode(NodeBase):
 
 
 class VocabProjectionNode(NodeBase):
-    DEFAULT_ENERGY = KLDivergenceEnergy
+    DEFAULT_ENERGY = CrossEntropyEnergy
     DEFAULT_ACTIVATION = SoftmaxActivation
 
     def __init__(
@@ -405,7 +406,7 @@ class VocabProjectionNode(NodeBase):
             activation=activation or SoftmaxActivation(),
             weight_init=weight_init or XavierInitializer(),
             latent_init=latent_init or NormalInitializer(),
-            energy=energy or KLDivergenceEnergy(),
+            energy=energy or CrossEntropyEnergy(),
             **kwargs,
         )
 
@@ -475,7 +476,7 @@ def create_deep_transformer(
         shape=(seq_len, embed_dim),
         vocab_size=vocab_size,
         embed_dim=embed_dim,
-        weight_init=w_init_obj,
+        weight_init=NormalInitializer(std=1.0),
     )
     nodes.append(embed_node)
     edges.append(Edge(source=input_node, target=embed_node.slot("in")))
@@ -529,7 +530,7 @@ def create_deep_transformer(
         shape=(seq_len, vocab_size),
         vocab_size=vocab_size,
         embed_dim=embed_dim,
-        weight_init=w_init_obj,
+        weight_init=NormalInitializer(std=float(jnp.sqrt(1.0 / embed_dim))),
     )
     nodes.append(logits)
     edges.append(Edge(source=previous_residual, target=logits.slot("in")))
@@ -539,5 +540,6 @@ def create_deep_transformer(
         edges=edges,
         task_map=TaskMap(x=input_node, y=logits, causal_mask=mask_node),
         inference=inference,
-        scaling=MuPCConfig(),
+        scaling=MuPCConfig(include_output=False),
+        graph_state_initializer=FeedforwardStateInit(),
     )
