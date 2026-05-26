@@ -20,9 +20,7 @@ Test Accuracy: 98.14%
 
 from jax_setup import set_jax_flags_before_importing_jax
 
-set_jax_flags_before_importing_jax(
-    jax_platforms="cuda"
-)  # options: "cpu", "cuda", "tpu"
+set_jax_flags_before_importing_jax()  # options: "cpu", "cuda", "tpu"
 
 import jax
 from fabricpc.nodes import Linear, IdentityNode
