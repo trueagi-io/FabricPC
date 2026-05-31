@@ -41,7 +41,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 from dataclasses import dataclass
-from fabricpc.core.types import NodeParams, NodeState, NodeInfo, SlotInfo, EdgeInfo
+from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.topology import SlotRef, _get_current_namespace
 
 if TYPE_CHECKING:

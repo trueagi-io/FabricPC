@@ -52,9 +52,7 @@ import optax
 import argparse
 import time
 from custom_node import Conv2DNode
-from fabricpc.nodes import Linear, IdentityNode, SkipConnection
-from fabricpc.nodes.base import NodeBase, SlotSpec
-from fabricpc.core.types import NodeParams
+from fabricpc.nodes import Linear, IdentityNode, SkipConnection, AvgPool
 from fabricpc.core.topology import Edge
 from fabricpc.graph_assembly import TaskMap, graph
 from fabricpc.core import InferenceSGDNormClip
@@ -141,61 +139,8 @@ class AugmentedCifar10Loader:
 # =============================================================================
 
 
-class AvgPoolNode(NodeBase):
-    """
-    Global average pooling: (B, H, W, C) -> (B, C).
-
-    Averages over spatial dimensions. No learnable parameters.
-    """
-
-    def __init__(
-        self,
-        shape,
-        name,
-        activation=IdentityActivation(),
-        energy=GaussianEnergy(),
-        latent_init=NormalInitializer(),
-    ):
-        super().__init__(
-            shape=shape,
-            name=name,
-            activation=activation,
-            energy=energy,
-            latent_init=latent_init,
-        )
-
-    @staticmethod
-    def get_slots():
-        return {"in": SlotSpec(name="in", is_multi_input=True)}
-
-    @staticmethod
-    def get_weight_fan_in(source_shape, config):
-        return 1
-
-    @staticmethod
-    def initialize_params(key, node_shape, input_shapes, weight_init=None, config=None):
-        return NodeParams(weights={}, biases={})
-
-    @staticmethod
-    def forward(params, inputs, state, node_info):
-        # Sum all inputs (typically just one)
-        spatial = None
-        for edge_key, x in inputs.items():
-            if spatial is None:
-                spatial = x
-            else:
-                spatial = spatial + x
-
-        # Global average pooling: (B, H, W, C) -> (B, C)
-        z_mu = jnp.mean(spatial, axis=(1, 2))
-
-        error = state.z_latent - z_mu
-        state = state._replace(pre_activation=z_mu, z_mu=z_mu, error=error)
-
-        node_class = node_info.node_class
-        state = node_class.energy_functional(state, node_info)
-        total_energy = jnp.sum(state.energy)
-        return total_energy, state
+# AvgPool now lives in fabricpc.nodes.pooling (imported above). Use
+# global_pool=True for the (B, H, W, C) -> (B, C) global average pooling here.
 
 
 # =============================================================================
@@ -358,7 +303,7 @@ def build_resnet18(
             prev = add_node
 
     # Global average pooling: (B, 4, 4, 256) -> (B, 256)
-    avg_pool = AvgPoolNode(shape=(256,), name="avgpool")
+    avg_pool = AvgPool(shape=(256,), name="avgpool", global_pool=True)
     all_nodes.append(avg_pool)
     all_edges.append(Edge(source=prev, target=avg_pool.slot("in")))
 

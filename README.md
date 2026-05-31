@@ -45,7 +45,7 @@ python examples/mnist_demo.py
 ## Features
 - Modular node and wire abstractions for flexible model construction
 - Inherently supports arbitrary architectures: feedforward, recurrent, skip connections, etc.
-- Support for various node types: Linear, Conv1D/2D/3D (planned), Transfomers (in progress)
+- Support for various node types: Linear, ConvNode (1D/2D/3D), Transformers (in progress)
 - Local automatic differentiation for efficient inference and learning
 - JAX backend for GPU acceleration and scalability
 
@@ -121,7 +121,7 @@ Node level initializers extend `InitializerBase` and implement `initialize_weigh
  - 2D Conv: shape=(H, W, C) - e.g., (28, 28, 64) for 28x28 image, 64 channels (NHWC)
  - 3D Conv: shape=(D, H, W, C) - e.g., (32, 32, 32, 16) for 3D volume
 
-Conv Node Shape Flow (Future Reference)
+Conv Node Shape Flow
 
  - Input:  (batch, H_in, W_in, C_in)   e.g., (32, 28, 28, 1)
  - Kernel: (kH, kW, C_in, C_out)       e.g., (3, 3, 1, 64)
