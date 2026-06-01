@@ -119,6 +119,18 @@ def parse_args():
         help="Hopfield strength: float >=0 or 'None' for learnable (default: 2.0)",
     )
     parser.add_argument(
+        "--all_hopfield",
+        action="store_true",
+        default=False,
+        help=(
+            "Fully-Hopfield MLP: run a Hopfield hidden layer at input width (784) "
+            "with no entry projection (only the Linear softmax head remains), "
+            "compared vs a vanilla MLP of the same shape. Default (off) reproduces "
+            "the original single-Hopfield-node architecture (784->128(Linear)->"
+            "128(StorkeyHopfield)->10)."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         default=False,
@@ -134,22 +146,61 @@ def parse_args():
 BATCH_SIZE = 64
 
 
-def make_hopfield_factory(hopfield_strength=None):
-    """Return a model factory closure with the given hopfield_strength."""
+def make_model_factory(hidden_type, width, depth, hopfield_strength):
+    """Return a model_factory(rng_key) for a classifier whose hidden stack is
+    either all StorkeyHopfield ('hopfield') or all Linear ('linear') nodes.
 
-    def create_hopfield_model(rng_key):
+    StorkeyHopfield is width-preserving (square W), so a Linear entry projection
+    (784 -> width) is inserted only when width != 784. The output is always a
+    Linear softmax + CrossEntropy head -- the classifier readout (an output node,
+    not a hidden node), so "all hidden nodes Hopfield" still holds when
+    hidden_type == 'hopfield'.
+
+    Reproduces the original demo arms when (width=128, depth=1):
+        'hopfield' -> pixels(784) -> entry(128,Linear) -> hidden0(128,SH) -> class(10)
+        'linear'   -> pixels(784) -> entry(128,Linear) -> hidden0(128,Linear) -> class(10)
+    Fully-Hopfield arm when (width=784, depth=1):
+        'hopfield' -> pixels(784) -> hidden0(784,SH) -> class(10)   (no entry projection)
+    """
+
+    def create_model(rng_key):
         pixels = IdentityNode(shape=(784,), name="pixels")
-        hidden = Linear(
-            shape=(128,),
-            activation=TanhActivation(),
-            name="hidden",
-            weight_init=XavierInitializer(),
-        )
-        hopfield = StorkeyHopfield(
-            shape=(128,),
-            name="hopfield",
-            hopfield_strength=hopfield_strength,
-        )
+        nodes = [pixels]
+        edges = []
+        prev = pixels
+
+        # Entry projection only needed to change width into the hidden stack.
+        if width != 784:
+            entry = Linear(
+                shape=(width,),
+                activation=TanhActivation(),
+                name="entry",
+                weight_init=XavierInitializer(),
+            )
+            nodes.append(entry)
+            edges.append(Edge(source=prev, target=entry.slot("in")))
+            prev = entry
+
+        # Hidden stack: all StorkeyHopfield or all Linear, at constant width.
+        for i in range(depth):
+            if hidden_type == "hopfield":
+                hidden = StorkeyHopfield(
+                    shape=(width,),
+                    name=f"hidden{i}",
+                    hopfield_strength=hopfield_strength,
+                )
+            else:
+                hidden = Linear(
+                    shape=(width,),
+                    activation=TanhActivation(),
+                    name=f"hidden{i}",
+                    weight_init=XavierInitializer(),
+                )
+            nodes.append(hidden)
+            edges.append(Edge(source=prev, target=hidden.slot("in")))
+            prev = hidden
+
+        # Linear softmax classifier head (output node, not a hidden node).
         output = Linear(
             shape=(10,),
             activation=SoftmaxActivation(),
@@ -157,58 +208,31 @@ def make_hopfield_factory(hopfield_strength=None):
             name="class",
             weight_init=XavierInitializer(),
         )
+        nodes.append(output)
+        edges.append(Edge(source=prev, target=output.slot("in")))
 
         structure = graph(
-            nodes=[pixels, hidden, hopfield, output],
-            edges=[
-                Edge(source=pixels, target=hidden.slot("in")),
-                Edge(source=hidden, target=hopfield.slot("in")),
-                Edge(source=hopfield, target=output.slot("in")),
-            ],
+            nodes=nodes,
+            edges=edges,
             task_map=TaskMap(x=pixels, y=output),
             inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
         )
         params = initialize_params(structure, rng_key)
         return params, structure
 
-    return create_hopfield_model
+    return create_model
 
 
-def create_mlp_model(rng_key):
-    """Standard MLP baseline with identical capacity."""
-    pixels = IdentityNode(shape=(784,), name="pixels")
-    hidden1 = Linear(
-        shape=(128,),
-        activation=TanhActivation(),
-        name="hidden1",
-        weight_init=XavierInitializer(),
-    )
-    hidden2 = Linear(
-        shape=(128,),
-        activation=TanhActivation(),
-        name="hidden2",
-        weight_init=XavierInitializer(),
-    )
-    output = Linear(
-        shape=(10,),
-        activation=SoftmaxActivation(),
-        energy=CrossEntropyEnergy(),
-        name="class",
-        weight_init=XavierInitializer(),
-    )
-
-    structure = graph(
-        nodes=[pixels, hidden1, hidden2, output],
-        edges=[
-            Edge(source=pixels, target=hidden1.slot("in")),
-            Edge(source=hidden1, target=hidden2.slot("in")),
-            Edge(source=hidden2, target=output.slot("in")),
-        ],
-        task_map=TaskMap(x=pixels, y=output),
-        inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
-    )
-    params = initialize_params(structure, rng_key)
-    return params, structure
+def arch_str(hidden_type, width, depth):
+    """Human-readable architecture string for the header print."""
+    parts = ["784"]
+    if width != 784:
+        parts.append(f"{width}(Linear, tanh)")
+    node = "StorkeyHopfield" if hidden_type == "hopfield" else "Linear"
+    for _ in range(depth):
+        parts.append(f"{width}({node}, tanh)")
+    parts.append("10(softmax, CE)")
+    return " -> ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -292,12 +316,24 @@ def main():
         "learnable" if hopfield_strength is None else f"{hopfield_strength}"
     )
 
+    # Architecture: --all_hopfield runs the Hopfield layer at input width (784)
+    # with no entry projection (fully-Hopfield MLP); default keeps the original
+    # 128-width single-Hopfield-node architecture.
+    hidden_width = 784 if args.all_hopfield else 128
+    hidden_depth = 1
+
+    title = (
+        "Fully-Hopfield MLP vs vanilla MLP"
+        if args.all_hopfield
+        else "Few-Shot + Noise Robustness: StorkeyHopfield vs MLP"
+    )
+
     print("=" * 70)
-    print("Few-Shot + Noise Robustness: StorkeyHopfield vs MLP")
+    print(title)
     print("=" * 70)
     print("Dataset: Fashion-MNIST")
-    print("Hopfield: 784 -> 128(tanh) -> 128(StorkeyHopfield, tanh) -> 10(softmax, CE)")
-    print("MLP:      784 -> 128(tanh) -> 128(tanh) -> 10(softmax, CE)")
+    print(f"Hopfield: {arch_str('hopfield', hidden_width, hidden_depth)}")
+    print(f"MLP:      {arch_str('linear', hidden_width, hidden_depth)}")
     print(f"Hopfield strength: {strength_label}")
     print(f"Epochs per trial: {args.num_epochs}")
     print(f"Trials per condition: {args.n_trials}")
@@ -307,7 +343,9 @@ def main():
 
     arm_hop = ExperimentArm(
         name="Hopfield",
-        model_factory=make_hopfield_factory(hopfield_strength),
+        model_factory=make_model_factory(
+            "hopfield", hidden_width, hidden_depth, hopfield_strength
+        ),
         train_fn=train_pcn,
         eval_fn=evaluate_pcn,
         optimizer=optimizer,
@@ -316,7 +354,9 @@ def main():
 
     arm_mlp = ExperimentArm(
         name="MLP",
-        model_factory=create_mlp_model,
+        model_factory=make_model_factory(
+            "linear", hidden_width, hidden_depth, hopfield_strength
+        ),
         train_fn=train_pcn,
         eval_fn=evaluate_pcn,
         optimizer=optimizer,
