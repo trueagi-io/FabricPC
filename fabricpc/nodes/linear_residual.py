@@ -194,7 +194,7 @@ class LinearResidual(FlattenInputMixin, NodeBase):
         z_mu = transformed + skip_sum if skip_sum is not None else transformed
 
         error = state.z_latent - z_mu
-        state = state._replace(pre_activation=pre_activation, z_mu=z_mu, error=error)
+        state = state._replace(z_mu=z_mu, error=error)
 
         node_class = node_info.node_class
         state = node_class.energy_functional(state, node_info)

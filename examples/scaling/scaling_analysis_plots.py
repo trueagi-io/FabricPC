@@ -789,7 +789,7 @@ def analyze_pc_bp_ratios(pc_df, bp_df, widths, depths, batch_size=256, infer_ste
     2. Time ratio starts at ~1.7x for narrow networks and saturates at ~5-6x for wide
 
     Key insights:
-    - PC stores 5 tensors per node: z_latent, z_mu, error, pre_activation, latent_grad
+    - PC stores 4 tensors per node: z_latent, z_mu, error, latent_grad
       Each tensor is (batch_size, width) - this is O(batch * width * depth)
     - Parameters are O(width²) per layer
     - As width increases, parameters dominate state → memory ratio → 1
@@ -843,14 +843,13 @@ def analyze_pc_bp_ratios(pc_df, bp_df, widths, depths, batch_size=256, infer_ste
     # Theoretical memory breakdown
     print("\n--- Theoretical Memory Breakdown ---")
     print("""
-    PC memory per node (5 tensors):
+    PC memory per node (4 tensors):
       - z_latent:      (batch, width) - inferred latent states
       - z_mu:          (batch, width) - predicted expectations
       - error:         (batch, width) - prediction errors (z_latent - z_mu)
-      - pre_activation:(batch, width) - values before activation function
       - latent_grad:   (batch, width) - gradients for inference updates
 
-    Total state memory: 5 * num_nodes * batch * width * 4 bytes
+    Total state memory: 4 * num_nodes * batch * width * 4 bytes
 
     Parameters scale as O(width²) per layer, dominating at large widths.
     This explains why memory ratio → 1 as width increases.
@@ -903,7 +902,7 @@ def analyze_pc_bp_ratios(pc_df, bp_df, widths, depths, batch_size=256, infer_ste
         print(f"--- Example: Width={w}, Depth={d} ---")
         num_nodes = d + 1  # input + hidden layers
 
-        state_mem = 5 * num_nodes * batch_size * w * 4 / 1024 / 1024  # MB
+        state_mem = 4 * num_nodes * batch_size * w * 4 / 1024 / 1024  # MB
         param_mem = d * w * w * 4 / 1024 / 1024  # MB (approximate)
         opt_mem = 2 * param_mem  # Adam stores first and second moments
 

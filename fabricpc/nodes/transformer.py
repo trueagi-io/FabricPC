@@ -373,12 +373,10 @@ class TransformerBlock(NodeBase):
         # Residual connection 2
         z_mu = inv_sqrt2 * (x_res1 + ff_output)
 
-        pre_activation = z_mu
         error = state.z_latent - z_mu
 
         state = state._replace(
             z_mu=z_mu,
-            pre_activation=pre_activation,
             error=error,
         )
 
@@ -489,7 +487,6 @@ class TransformerBlock(NodeBase):
         )
 
         # Output projection
-        pre_activation = jnp.matmul(attn_output, W_o) + b_o
-        projection = activation_fn(pre_activation)
+        projection = activation_fn(jnp.matmul(attn_output, W_o) + b_o)
 
         return projection

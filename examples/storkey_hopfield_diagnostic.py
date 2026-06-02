@@ -576,9 +576,9 @@ def diagnostic_inference_step(params, state, clamps, structure, config):
             / (jnp.mean(jnp.linalg.norm(top_down, axis=-1)) + 1e-10)
         ),
         "tanh_saturation_frac": float(
-            jnp.mean(jnp.abs(hop_state.pre_activation) > 2.0)
+            jnp.mean(jnp.abs(hop_state.z_mu) > jnp.tanh(2.0))
         ),
-        "pre_act_mean_abs": float(jnp.mean(jnp.abs(hop_state.pre_activation))),
+        "act_mean_abs": float(jnp.mean(jnp.abs(hop_state.z_mu))),
         "hidden_grad_norm": float(
             jnp.mean(jnp.linalg.norm(hidden_state.latent_grad, axis=-1))
         ),
@@ -693,7 +693,7 @@ def phase2_inference_dynamics():
                 f"{d['ratio_hop_over_pc']:>8.2f} "
                 f"{d['ratio_hop_over_topdown']:>8.2f} "
                 f"{d['tanh_saturation_frac']*100:>5.1f}% "
-                f"{d['pre_act_mean_abs']:>8.3f} "
+                f"{d['act_mean_abs']:>8.3f} "
                 f"{d['hop_self_crosscheck_err']:>8.2e}"
             )
 

@@ -307,7 +307,6 @@ class TestForwardMethods:
                 z_mu=jnp.zeros(full_shape),
                 error=jnp.zeros(full_shape),
                 energy=jnp.zeros((batch_size,)),
-                pre_activation=jnp.zeros(full_shape),
             )
 
         state = GraphState(nodes=nodes, batch_size=batch_size)
@@ -481,7 +480,6 @@ class TestIdentityNode:
             z_mu=jnp.zeros(full_shape),
             error=jnp.zeros(full_shape),
             energy=jnp.zeros((batch_size,)),
-            pre_activation=jnp.zeros(full_shape),
             latent_grad=jnp.zeros(full_shape),
         )
         node_info = NodeInfo(

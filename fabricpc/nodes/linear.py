@@ -87,6 +87,49 @@ class Linear(FlattenInputMixin, NodeBase):
         return {"in": SlotSpec(name="in", is_multi_input=True)}
 
     @staticmethod
+    def _forward_with_preact(
+        params: NodeParams,
+        inputs: Dict[str, jnp.ndarray],
+        state: NodeState,
+        node_info: NodeInfo,
+    ) -> tuple[jax.Array, NodeState, jnp.ndarray]:
+        """Internal forward returning (energy, state, pre_activation).
+
+        Shared between Linear.forward (which discards pre_activation) and
+        LinearExplicitGrad's gradient methods (which thread pre_activation
+        into f'(z) for the gain-modulated error). Not for use by other node
+        types — LinearResidual, StorkeyHopfield, and Transformer compute
+        pre_activation differently and override forward directly.
+        """
+        batch_size = state.z_latent.shape[0]
+        out_shape = node_info.shape
+        flatten_input = node_info.node_config.get("flatten_input", False)
+
+        if flatten_input:
+            pre_activation = FlattenInputMixin.compute_linear(
+                inputs, params.weights, batch_size, out_shape
+            )
+        else:
+            pre_activation = jnp.zeros((batch_size,) + out_shape)
+            for edge_key, x in inputs.items():
+                pre_activation = pre_activation + jnp.matmul(
+                    x, params.weights[edge_key]
+                )
+        if "b" in params.biases and params.biases["b"].size > 0:
+            pre_activation = pre_activation + params.biases["b"]
+
+        activation = node_info.activation
+        z_mu = type(activation).forward(pre_activation, activation.config)
+        error = state.z_latent - z_mu
+        state = state._replace(z_mu=z_mu, error=error)
+
+        node_class = node_info.node_class
+        state = node_class.energy_functional(state, node_info)
+
+        total_energy = jnp.sum(state.energy)
+        return total_energy, state, pre_activation
+
+    @staticmethod
     def initialize_params(
         key: jax.Array,
         node_shape: Tuple[int, ...],
@@ -182,45 +225,7 @@ class Linear(FlattenInputMixin, NodeBase):
         Returns:
             Tuple of (total_energy, NodeState)
         """
-        # Get batch size and output shape
-        batch_size = state.z_latent.shape[0]
-        out_shape = node_info.shape
-        flatten_input = node_info.node_config.get("flatten_input", False)
-
-        if flatten_input:
-            # Dense/fully-connected: flatten all dimensions
-            pre_activation = FlattenInputMixin.compute_linear(
-                inputs, params.weights, batch_size, out_shape
-            )
-        else:
-            # Per-position: matmul on last axis only (standard for embeddings)
-            # Input shape: (batch, ..., in_features)
-            # Weight shape: (in_features, out_features)
-            # Output shape: (batch, ..., out_features)
-            pre_activation = jnp.zeros((batch_size,) + out_shape)
-            for edge_key, x in inputs.items():
-                # jnp.matmul broadcasts over leading dimensions
-                pre_activation = pre_activation + jnp.matmul(
-                    x, params.weights[edge_key]
-                )
-
-        # Add bias if present
-        if "b" in params.biases and params.biases["b"].size > 0:
-            pre_activation = pre_activation + params.biases["b"]
-
-        # Apply activation function from node_info
-        activation = node_info.activation
-        z_mu = type(activation).forward(pre_activation, activation.config)
-
-        # Error
-        error = state.z_latent - z_mu
-
-        # Update node state
-        state = state._replace(pre_activation=pre_activation, z_mu=z_mu, error=error)
-
-        # Compute energy, accumulate the self-latent gradient
-        node_class = node_info.node_class
-        state = node_class.energy_functional(state, node_info)
-
-        total_energy = jnp.sum(state.energy)
+        total_energy, state, _ = Linear._forward_with_preact(
+            params, inputs, state, node_info
+        )
         return total_energy, state

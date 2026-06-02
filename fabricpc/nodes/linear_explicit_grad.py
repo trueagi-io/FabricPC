@@ -62,8 +62,11 @@ class LinearExplicitGrad(Linear):
         """
         node_class = node_info.node_class
 
-        # Forward pass to get new state
-        _, state = node_class.forward(params, inputs, state, node_info)
+        # Single forward computing energy, state, and pre_activation together.
+        # pre_activation feeds the explicit gain-modulated error below.
+        _, state, pre_activation = Linear._forward_with_preact(
+            params, inputs, state, node_info
+        )
 
         # Explicit self-latent gradient
         energy_obj = node_info.energy
@@ -72,7 +75,9 @@ class LinearExplicitGrad(Linear):
         )
 
         # Gain-modulated error for input gradients
-        gain_mod_error = node_class.compute_gain_mod_error(state, node_info)
+        gain_mod_error = node_class.compute_gain_mod_error(
+            pre_activation, state.error, node_info
+        )
 
         energy_type = type(energy_obj).__name__
         flatten_input = node_info.node_config.get("flatten_input", False)
@@ -119,13 +124,16 @@ class LinearExplicitGrad(Linear):
         """
         node_class = node_info.node_class
 
-        # Forward pass to get new state
-        _, state = node_class.forward(params, inputs, state, node_info)
+        # Single forward computing energy, state, and pre_activation together.
+        _, state, pre_activation = Linear._forward_with_preact(
+            params, inputs, state, node_info
+        )
+        flatten_input = node_info.node_config.get("flatten_input", False)
 
         # Gain-modulated error computation
-        gain_mod_error = node_class.compute_gain_mod_error(state, node_info)
-
-        flatten_input = node_info.node_config.get("flatten_input", False)
+        gain_mod_error = node_class.compute_gain_mod_error(
+            pre_activation, state.error, node_info
+        )
         weight_grads = {}
         bias_grads = {}
 
@@ -151,12 +159,16 @@ class LinearExplicitGrad(Linear):
         return state, NodeParams(weights=weight_grads, biases=bias_grads)
 
     @staticmethod
-    def compute_gain_mod_error(state: NodeState, node_info: NodeInfo) -> jnp.ndarray:
-        """Compute gain-modulated error for this node.
+    def compute_gain_mod_error(
+        pre_activation: jnp.ndarray,
+        error: jnp.ndarray,
+        node_info: NodeInfo,
+    ) -> jnp.ndarray:
+        """Compute gain-modulated error: error * f'(pre_activation).
 
         Returns:
             gain_mod_error array (error * activation derivative)
         """
         activation = node_info.activation
-        f_prime = type(activation).derivative(state.pre_activation, activation.config)
-        return state.error * f_prime
+        f_prime = type(activation).derivative(pre_activation, activation.config)
+        return error * f_prime

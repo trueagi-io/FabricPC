@@ -332,7 +332,7 @@ class StorkeyHopfield(NodeBase):
         error = state.z_latent - z_mu
 
         # Update state
-        state = state._replace(pre_activation=pre_activation, z_mu=z_mu, error=error)
+        state = state._replace(z_mu=z_mu, error=error)
 
         # Standard PC energy via energy_functional
         node_class = node_info.node_class

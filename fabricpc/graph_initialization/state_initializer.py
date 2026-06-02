@@ -150,7 +150,6 @@ class GlobalStateInit(StateInitBase):
                 z_mu=jnp.zeros(shape),
                 error=jnp.zeros(shape),
                 energy=jnp.zeros((batch_size,)),
-                pre_activation=jnp.zeros(shape),
                 latent_grad=jnp.zeros(shape),
             )
 
@@ -201,7 +200,6 @@ class NodeDistributionStateInit(StateInitBase):
                 z_mu=jnp.zeros(shape),
                 error=jnp.zeros(shape),
                 energy=jnp.zeros((batch_size,)),
-                pre_activation=jnp.zeros(shape),
                 latent_grad=jnp.zeros(shape),
             )
 
@@ -261,7 +259,6 @@ class FeedforwardStateInit(StateInitBase):
                 z_mu=jnp.zeros(shape),
                 error=jnp.zeros(shape),
                 energy=jnp.zeros((batch_size,)),
-                pre_activation=jnp.zeros(shape),
                 latent_grad=jnp.zeros(shape),
             )
 
@@ -285,7 +282,7 @@ class FeedforwardStateInit(StateInitBase):
                 _, projected = node_class.forward(
                     node_params, scaled_inputs, node_state, node_info
                 )
-                # node forward modifies z_mu, pre_activation, error, and energy
+                # node forward modifies z_mu, error, and energy
 
                 if node_name not in clamps:
                     # z_latent <- z_mu, error <- 0 (since z_latent = z_mu)
