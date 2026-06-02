@@ -113,7 +113,6 @@ class SkipConnection(NodeBase):
         z_mu = pre_activation  # no activation function applied: z_mu = pre_activation
         error = state.z_latent - z_mu
         state = state._replace(
-            pre_activation=pre_activation,
             z_mu=z_mu,
             error=error,
         )

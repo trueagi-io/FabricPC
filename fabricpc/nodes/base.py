@@ -308,7 +308,7 @@ class NodeBase(ABC):
         Returns:
             Tuple of (total_energy, NodeState)
                 - total_energy: scalar energy value for this node
-                - NodeState: updated node state (z_mu, pre_activation, etc.)
+                - NodeState: updated node state (z_mu, error, energy, etc.)
         """
         pass
 
@@ -380,8 +380,8 @@ class NodeBase(ABC):
 
         Returns:
             Tuple of (NodeState, input_grads, self_grad):
-                - NodeState: updated state (z_mu, pre_activation, error,
-                  energy). ``latent_grad`` is *not* modified here.
+                - NodeState: updated state (z_mu, error, energy).
+                  ``latent_grad`` is *not* modified here.
                 - input_grads: dict of gradients w.r.t. each input edge
                   (dE/d_input per edge), unscaled.
                 - self_grad: dE/dz_latent contribution from this node,
@@ -400,7 +400,6 @@ class NodeBase(ABC):
             new_state = state._replace(
                 z_mu=state.z_latent.astype(state.z_mu.dtype),
                 error=jnp.zeros_like(state.error),
-                pre_activation=jnp.zeros_like(state.pre_activation),
             )
             # Update the state's energy; will be zero since z_mu = z_latent
             new_state = node_class.energy_functional(new_state, node_info)

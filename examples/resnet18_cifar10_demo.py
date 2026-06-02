@@ -190,7 +190,7 @@ class AvgPoolNode(NodeBase):
         z_mu = jnp.mean(spatial, axis=(1, 2))
 
         error = state.z_latent - z_mu
-        state = state._replace(pre_activation=z_mu, z_mu=z_mu, error=error)
+        state = state._replace(z_mu=z_mu, error=error)
 
         node_class = node_info.node_class
         state = node_class.energy_functional(state, node_info)

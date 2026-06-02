@@ -223,7 +223,6 @@ def forward(params, inputs, state, node_info):
 
     # Update state
     state = state._replace(
-        pre_activation=pre_activation,
         z_mu=z_mu,
         error=error,
     )

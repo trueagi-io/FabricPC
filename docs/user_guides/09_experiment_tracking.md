@@ -205,7 +205,6 @@ from fabricpc.utils.dashboarding import (
     extract_weight_statistics,
     extract_bias_statistics,
     extract_latent_statistics,
-    extract_preactivation_statistics,
     extract_activation_statistics,
     extract_error_statistics,
     extract_latent_grad_statistics,

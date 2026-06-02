@@ -73,32 +73,6 @@ def extract_latent_statistics(
     return stats
 
 
-def extract_preactivation_statistics(
-    state: GraphState,
-    nodes: Optional[List[str]] = None,
-) -> Dict[str, Dict[str, float]]:
-    """Extract pre-activation statistics per node.
-
-    Args:
-        state: GraphState.
-        nodes: Optional list of node names (default: all nodes).
-
-    Returns:
-        Dictionary: {node_name: {"mean": ..., "std": ..., "min": ..., "max": ...}}
-    """
-    nodes = nodes or list(state.nodes.keys())
-    stats = {}
-    for node_name in nodes:
-        pre_act = state.nodes[node_name].pre_activation
-        stats[node_name] = {
-            "mean": float(jnp.mean(pre_act)),
-            "std": float(jnp.std(pre_act)),
-            "min": float(jnp.min(pre_act)),
-            "max": float(jnp.max(pre_act)),
-        }
-    return stats
-
-
 def extract_activation_statistics(
     state: GraphState,
     nodes: Optional[List[str]] = None,
@@ -266,7 +240,6 @@ def extract_all_distributions(
         {
             "z_latent": {node_name: flattened_array, ...},
             "z_mu": {...},
-            "pre_activation": {...},
             "error": {...},
             "weights": {f"{node}_{edge}": flattened_array, ...},
             "biases": {...},
@@ -277,7 +250,6 @@ def extract_all_distributions(
     distributions: Dict[str, Dict[str, np.ndarray]] = {
         "z_latent": {},
         "z_mu": {},
-        "pre_activation": {},
         "error": {},
         "weights": {},
         "biases": {},
@@ -289,9 +261,6 @@ def extract_all_distributions(
             node_state.z_latent
         )
         distributions["z_mu"][node_name] = flatten_for_distribution(node_state.z_mu)
-        distributions["pre_activation"][node_name] = flatten_for_distribution(
-            node_state.pre_activation
-        )
         distributions["error"][node_name] = flatten_for_distribution(node_state.error)
 
     for node_name in nodes:
