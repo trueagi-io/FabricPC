@@ -117,7 +117,6 @@ class NodeState(NamedTuple):
         z_mu: Predicted expectations (what the network predicts)
         error: Prediction errors (z_latent - z_mu)
         energy: Energy
-        pre_activation: Pre-activation values (before activation function)
         latent_grad: Gradients w.r.t. latent states for inference updates
     """
 
@@ -125,7 +124,6 @@ class NodeState(NamedTuple):
     z_mu: jnp.ndarray
     error: jnp.ndarray
     energy: jnp.ndarray  # per-sample energy, shape (batch_size,)
-    pre_activation: jnp.ndarray
     latent_grad: jnp.ndarray  # For local gradient accumulation
 
 
@@ -195,7 +193,6 @@ tree_util.register_pytree_node(
             ns.z_mu,
             ns.error,
             ns.energy,
-            ns.pre_activation,
             ns.latent_grad,
         ),
         None,

@@ -254,3 +254,36 @@ End-to-end checks, in order:
    expected numerical equivalence on a matched run.
 7. **Dashboard wiring:** `grep -rn "extract_preactivation_statistics\|\"pre_activation\""` in the
    repo after edits — no remaining call sites or key references.
+
+
+Results
+
+  - Factored Linear._compute_pre_activation static helper.
+  - Linear.forward no longer stores pre_activation on state.
+  - LinearExplicitGrad.compute_gain_mod_error now takes pre_activation, error, node_info directly.
+  - Both forward_and_latent_grads / forward_and_weight_grads compute pre_activation locally via the helper.
+
+  Step 2 — Drop the field (fabricpc/core/types.py): removed pre_activation from the NodeState NamedTuple and from the pytree flatten lambda.
+
+  Step 3 — Drop write sites: state_initializer.py (3 sites), base.py terminal-node reset, linear_residual.py, storkey_hopfield.py, skip_connection.py, identity.py, transformer.py (both _replace and the inlined _mha local), and the four examples (custom_node.py, resnet18_cifar10_demo.py,
+  jpc_fc_resnet_compare.py).
+
+  Step 4 — Tests: dropped pre_activation=... from NodeState constructions in test_fabricpc.py and test_auto_node_grad.py.
+
+  Step 5 — Dashboarding: deleted extract_preactivation_statistics, removed the "pre_activation" key from extract_all_distributions, and updated __init__.py exports.
+
+  Step 6 — Storkey Hopfield diagnostic: replaced pre_activation-based tanh_saturation_frac / pre_act_mean_abs with z_mu-based equivalents (renamed to act_mean_abs); updated the print line at l.696.
+
+  Step 7 — Docs: dropped pre_activation from the _replace call in 06_custom_nodes.md; removed extract_preactivation_statistics from the 09_experiment_tracking.md import block; updated the 5→4 tensor count in examples/scaling/scaling_analysis_plots.py.
+
+  Verification:
+  - NodeState._fields → ('z_latent', 'z_mu', 'error', 'energy', 'latent_grad') ✓
+  - pytest tests/test_auto_node_grad.py -v → 9/9 passed (gradient equivalence intact across Identity/ReLU/Tanh/Sigmoid).
+  - pytest tests/ → 127/127 passed.
+  - grep extract_preactivation_statistics|"pre_activation" → no remaining references.
+
+Additional changes made:
+
+Removed code duplication in LinearExplictGrad. `Linear` now exposes
+`_forward_with_preact(params, inputs, state, node_info) -> (energy, state,
+pre_activation)` and the public `Linear.forward` delegates to it.

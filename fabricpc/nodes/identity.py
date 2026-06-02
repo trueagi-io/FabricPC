@@ -143,15 +143,11 @@ class IdentityNode(NodeBase):
             z_mu * node_info.node_config["scale"]
         )  # Apply fixed scaling factor (default is 1.0)
 
-        # For identity node, pre_activation equals z_mu (no activation transform)
-        pre_activation = z_mu
-
         # Compute prediction error
         error = state.z_latent - z_mu
 
         # Update node state
         state = state._replace(
-            pre_activation=pre_activation,
             z_mu=z_mu,
             error=error,
         )
