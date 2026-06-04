@@ -10,9 +10,10 @@
 
 > CUDA 13 wheels require NVIDIA driver ≥580.
 >
-> The optional Aim experiment tracker (in `[viz]`/`[all]`) supports Python ≤3.12 only. On
-> Python 3.13 it is skipped automatically, so `[viz]`/`[all]` still install everything else;
-> experiment tracking is unavailable until you use Python ≤3.12.
+> The optional Aim experiment tracker (in `[viz]`/`[all]`) is Linux/macOS only (it needs
+> aimrocks, which has no Windows wheels) and supports Python ≤3.12. It is skipped
+> automatically on Windows and on Python 3.13, so `[viz]`/`[all]` still install everything
+> else; experiment tracking is unavailable in those cases.
 
 ## Install from Source
 
@@ -83,7 +84,7 @@ This enables automatic formatting (Black) and code quality checks on each commit
 
 ## Aim Setup (Optional)
 
-Aim provides experiment tracking dashboards and supports Python ≤3.12. After installing with `[viz]` on a Python ≤3.12 interpreter:
+Aim provides experiment tracking dashboards and is Linux/macOS only (Python ≤3.12). After installing with `[viz]` on a Linux/macOS, Python ≤3.12 interpreter:
 
 ```bash
 aim up
@@ -103,4 +104,8 @@ This starts a web dashboard at `http://localhost:43800`. See the [Experiment Tra
 export FABRICPC_DISABLE_TRITON_GEMM=1
 ```
 
-**Aim not available on Python 3.13+**: Aim supports Python ≤3.12. On Python 3.13, `[viz]`/`[all]` install everything except Aim (it is skipped automatically). Use Python ≤3.12 if you need experiment tracking.
+**Aim not available on Windows or Python 3.13+**: Aim is Linux/macOS only (it needs aimrocks, which has no Windows wheels) and supports Python ≤3.12. On Windows or Python 3.13, `[viz]`/`[all]` install everything except Aim (it is skipped automatically). Use a Linux/macOS, Python ≤3.12 environment (or WSL2 on Windows) if you need experiment tracking.
+
+**`[WinError 206] The filename or extension is too long` on Windows**: A required dependency (`orbax-checkpoint`) ships deeply nested files that exceed Windows' default 260-character path limit.
+
+Recommended to use WSL2, which has no `MAX_PATH` limit. You're only seeing this error if you have a general purpose Windows environment, in which case it's not advisable to enable long paths in Windows.

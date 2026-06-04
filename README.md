@@ -15,7 +15,7 @@ Internally, everything is organized around three abstractions: nodes (state and 
 ## Installation
 Clone this repo and cd to the project path.
 
-Create a virtual environment with Python 3.10–3.13. (The optional Aim experiment tracker in `[viz]`/`[all]` supports Python ≤3.12 only; on Python 3.13 it is skipped automatically and everything else installs normally.)
+Create a virtual environment with Python 3.10–3.13. (The optional Aim experiment tracker in `[viz]`/`[all]` is Linux/macOS only and supports Python ≤3.12; on Windows or Python 3.13 it is skipped automatically and everything else installs normally.)
 
 **Platform:** GPU acceleration requires **Linux** (x86_64 or aarch64) — JAX publishes CUDA wheels for Linux only. On native Windows or macOS, install CPU-only; for GPU on Windows use WSL2 (JAX marks WSL2 GPU support experimental).
 ```bash

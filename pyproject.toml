@@ -56,8 +56,9 @@ viz = [
     "plotly>=5.0.0",
     "kaleido>=0.2.1",
     "pandas>=2.0.0",
-    # Aim supports Python <=3.12 only; skipped automatically on 3.13 so [viz]/[all] still resolve.
-    "aim>=3.0.0; python_version < '3.13'",
+    # Aim needs aimrocks (RocksDB), which ships no Windows wheels, and supports Python <=3.12
+    # only; skipped on Windows and on 3.13 so [viz]/[all] still resolve everywhere.
+    "aim>=3.0.0; python_version < '3.13' and platform_system != 'Windows'",
 ]
 # Backend selection. Each delegates the full coupled wheel set to JAX
 # (jaxlib, plugin, pjrt, nvidia-*); FabricPC pins none of those versions.
