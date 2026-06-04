@@ -16,6 +16,17 @@ If you see CUDA-related errors, install the backend matching your driver and re-
 pip install -U "jax[cuda12]"   # or "jax[cuda13]" for driver ≥580
 ```
 
+**GPU install fails on Windows / macOS**
+
+If `pip install -U -e ".[all,cuda12]"` (or `cuda13`) fails with
+`No matching distribution found for jax-cuda12-plugin`, you are on a platform without
+JAX CUDA wheels — JAX publishes them for Linux x86_64/aarch64 only (see the
+[Requirements](01_installation.md#requirements) summary). Install CPU-only, or use WSL2
+for GPU on Windows (JAX marks WSL2 GPU support experimental).
+```bash
+pip install -U -e ".[all]"   # CPU-only; works on Windows and macOS
+```
+
 **Triton GEMM XLA errors**
 
 If XLA compilation fails with Triton-related errors:

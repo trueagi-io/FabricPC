@@ -3,10 +3,12 @@
 ## Requirements
 
 - Python 3.10–3.13
+- **Platform: GPU requires Linux (x86_64 or aarch64).** JAX publishes CUDA wheels for
+  Linux only. Native Windows and macOS are CPU-only; for GPU on Windows, use WSL2 (JAX
+  marks WSL2 GPU support experimental).
 - CUDA 12 or CUDA 13 for GPU acceleration (CPU-only works but is significantly slower)
 
-> CUDA 13 wheels require NVIDIA driver ≥580. JAX's prebuilt CUDA wheels are Linux
-> x86_64/aarch64 only.
+> CUDA 13 wheels require NVIDIA driver ≥580.
 >
 > The optional Aim experiment tracker (in `[viz]`/`[all]`) supports Python ≤3.12 only. On
 > Python 3.13 it is skipped automatically, so `[viz]`/`[all]` still install everything else;
@@ -92,6 +94,8 @@ This starts a web dashboard at `http://localhost:43800`. See the [Experiment Tra
 ## Common Issues
 
 **JAX/CUDA version conflict**: If you see CUDA-related errors, install the backend matching your driver (`cuda12`, or `cuda13` for driver ≥580) and re-run with `-U` so the coupled JAX wheels upgrade together.
+
+**GPU install fails on Windows / macOS**: If `pip install -U -e ".[all,cuda12]"` (or `cuda13`) fails with `No matching distribution found for jax-cuda12-plugin`, you are on a platform without JAX CUDA wheels — JAX publishes them for Linux x86_64/aarch64 only. Install CPU-only (`pip install -U -e ".[all]"`), or use WSL2 for GPU on Windows (JAX marks WSL2 GPU support experimental).
 
 **Triton GEMM errors**: If you see XLA errors mentioning Triton:
 

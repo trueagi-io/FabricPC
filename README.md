@@ -16,6 +16,8 @@ Internally, everything is organized around three abstractions: nodes (state and 
 Clone this repo and cd to the project path.
 
 Create a virtual environment with Python 3.10–3.13. (The optional Aim experiment tracker in `[viz]`/`[all]` supports Python ≤3.12 only; on Python 3.13 it is skipped automatically and everything else installs normally.)
+
+**Platform:** GPU acceleration requires **Linux** (x86_64 or aarch64) — JAX publishes CUDA wheels for Linux only. On native Windows or macOS, install CPU-only; for GPU on Windows use WSL2 (JAX marks WSL2 GPU support experimental).
 ```bash
 # Verify your cuda version
 nvidia-smi
@@ -39,8 +41,10 @@ python examples/mnist_demo.py
 Define the graph. Initialize the parameters. Start experimenting.
 
 ```python
-import jax
+from jax_setup import set_jax_flags_before_importing_jax
+set_jax_flags_before_importing_jax()
 
+import jax
 from fabricpc.nodes import Linear
 from fabricpc.core.topology import Edge
 from fabricpc.graph_assembly import TaskMap, graph
