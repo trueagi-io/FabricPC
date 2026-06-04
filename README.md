@@ -2,7 +2,7 @@
 
 **State-of-the-art predictive coding, made easy.**
 
-FabricPC is an easy-to-use, high-performance open-source Python library for building and training predictive coding networks. It is designed to get researchers from idea to running experiment as fast as possible, eliminating the boilerplate of the algorithm. A single directed edge between nodes is all that's needed to define a connection. Local derivatives are built in, following graph topology. The framework handles inference and learning dynamics automatically for whatever you write in the forward method of a node.
+FabricPC is an easy-to-use, high-performance open-source Python library for building and training predictive coding networks. It is designed to get researchers from idea to running experiment as fast as possible, eliminating algorithm boilerplate. A single directed edge between nodes is all that's needed to define a connection. Local derivatives are built in, following graph topology. The framework handles inference and learning dynamics automatically for whatever you write in a node's `forward()` method.
 
 Built on JAX for GPU and multi-GPU acceleration with local (node-level) automatic differentiation.
 
@@ -13,23 +13,28 @@ FabricPC supports arbitrary graph topologies: feedforward, recurrent, skip conne
 Internally, everything is organized around three abstractions: nodes (state and computation), edges (connections between nodes), and updates (inference and learning algorithms).
 
 ## Installation
-Clone this repo and cd to the project path.
+
+Clone this repo and `cd` into the project directory.
 
 Create a virtual environment with Python 3.10–3.13. (The optional Aim experiment tracker in `[viz]`/`[all]` is Linux/macOS only and supports Python ≤3.12; on Windows or Python 3.13 it is skipped automatically and everything else installs normally.)
 
 **Platform:** GPU acceleration requires **Linux** (x86_64 or aarch64) — JAX publishes CUDA wheels for Linux only. On native Windows or macOS, install CPU-only; for GPU on Windows use WSL2 (JAX marks WSL2 GPU support experimental).
 ```bash
-# Verify your cuda version
+# Verify your CUDA version
 nvidia-smi
+```
 
-# One command: FabricPC + all optional deps + a version-matched JAX backend.
-# GPU, CUDA 13:
-pip install -U -e ".[all,cuda13]"
-# GPU, CUDA 12:  pip install -U -e ".[all,cuda12]"
-# CPU only:      pip install -U -e ".[all]"
-#
-# See docs/user_guides/01_installation.md for details.
+One command installs FabricPC, all optional deps, and a version-matched JAX backend. Pick the line that matches your platform:
 
+```bash
+pip install -U -e ".[all,cuda13]"   # GPU, CUDA 13
+pip install -U -e ".[all,cuda12]"   # GPU, CUDA 12
+pip install -U -e ".[all]"          # CPU only
+```
+
+See [`docs/user_guides/01_installation.md`](docs/user_guides/01_installation.md) for details. Then set up hooks and run an example:
+
+```bash
 # Install pre-commit hooks for code quality
 pre-commit install
 
@@ -38,6 +43,7 @@ python examples/mnist_demo.py
 ```
 
 ## Build a Model
+
 Define the graph. Initialize the parameters. Start experimenting.
 
 ```python
@@ -74,16 +80,17 @@ The [`examples`](examples/) folder includes working demonstrations across image 
 ## Documentation
 
 User guides, API reference, and tutorials live in [`docs/user_guides`](docs/user_guides/00_index.md). Development plans and technical design documents are in [`docs/dev_plans`](docs/dev_plans/).
- 
+
 ## Extending FabricPC
 
 ### Custom Nodes
 
 Create custom node types by subclassing `NodeBase`. Implement the `forward()` and `initialize_params()` methods. Nodes have a single output. Define slots for incoming connections. Slots are named arguments of the node's `forward()` method and are referenced in edges when building the graph.
 
-See `examples/custom_node.py` for a complete Conv2D implementation.
+See [`docs/user_guides/06_custom_nodes.md`](Writing Custom Nodes) for the node contract and an example of Conv2D implementation.
 
 ## Contributing
+
 Contributions are welcome! Please open issues or pull requests on the GitHub repository.
 - Develop on a branch using the convention `username/your_feature_name`.
 - Demos must match baseline results, or explain any divergence.
@@ -101,4 +108,5 @@ This is a research-first project.
 FabricPC is actively maintained by SingularityNET as part of the Artificial Superintelligence Alliance. Project lead: Dr. Matthew Behrend.
 
 ## License
+
 This project is licensed under the [MIT License](LICENSE).
