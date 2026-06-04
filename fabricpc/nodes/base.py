@@ -157,6 +157,11 @@ class NodeBase(ABC):
     Nodes are instantiated with their configuration, then finalized by the
     graph() builder which attaches topology info via copy-on-finalize.
 
+    Subclasses implement three static methods: ``get_slots`` (the input slots),
+    ``initialize_params`` (the weights and biases), and ``forward`` (the
+    prediction and energy). ``forward`` is the core computation; the required
+    steps every implementation must perform are documented in its docstring.
+
     Subclasses set concrete default instances for activation, energy, latent_init,
     and weight_init in their ``__init__`` parameter defaults.
     """
@@ -297,7 +302,44 @@ class NodeBase(ABC):
         node_info: NodeInfo,
     ) -> tuple[jax.Array, NodeState]:
         """
-        Forward pass through the node, returning energy scalar and updated state.
+        Predict this node's latent state and report the resulting energy.
+
+        ``forward`` is a pure function: it has no side effects and expresses its
+        dependence on ``params``, ``inputs``, and ``state.z_latent`` entirely
+        through JAX operations. It is differentiated under ``jax.value_and_grad``
+        by ``forward_and_latent_grads`` (w.r.t. inputs and z_latent) and
+        ``forward_and_weight_grads`` (w.r.t. params).
+
+        How the prediction is produced is intentionally unconstrained: Linear
+        does a matmul, IdentityNode sums its inputs, TransformerBlock runs an
+        attention pipeline, StorkeyHopfield blends a probe with a learned weight
+        matrix. Every implementation must, however, perform these six steps in
+        order:
+
+        1. Predict ``z_mu``: this node's prediction of its own latent, with shape
+           ``(batch,) + node_info.shape``.
+        2. Record ``pre_activation``: the value before the activation function.
+           If the node applies no activation, set ``pre_activation = z_mu``.
+        3. Compute the error: ``error = state.z_latent - z_mu``. The energy
+           functionals assume this sign (latent minus prediction).
+        4. Write the fields back:
+           ``state = state._replace(z_mu=..., pre_activation=..., error=...)``.
+           NodeState is a fixed-schema NamedTuple; no other fields may be added.
+        5. Populate energy:
+           ``state = node_info.node_class.energy_functional(state, node_info)``.
+           This sets ``state.energy`` from ``energy(z_latent, z_mu)``, so ``z_mu``
+           must already be set. Additional energy terms (e.g. the Hopfield
+           attractor term in StorkeyHopfield) are added by replacing
+           ``state.energy`` after this call.
+        6. Return ``jnp.sum(state.energy), state``: the scalar total energy
+           first, the updated state second.
+
+        muPC scaling is NOT applied here; the inference/learning callsite applies
+        it. Do not scale inputs or gradients inside this method.
+
+        See ``Linear`` (linear.py), ``IdentityNode`` (identity.py), and
+        ``StorkeyHopfield`` (storkey_hopfield.py) for worked examples, and
+        docs/user_guides/06_custom_nodes.md for the full guide.
 
         Args:
             params: Node parameters (weights, biases)
@@ -308,7 +350,8 @@ class NodeBase(ABC):
         Returns:
             Tuple of (total_energy, NodeState)
                 - total_energy: scalar energy value for this node
-                - NodeState: updated node state (z_mu, pre_activation, etc.)
+                - NodeState: updated node state (z_mu, pre_activation, error,
+                  energy)
         """
         pass
 

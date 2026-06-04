@@ -22,6 +22,8 @@ Nodes are computational units with state and learnable parameters. Each node mai
 
 - **Learnable parameters**: Weights and biases (varies by node type)
 
+A node computes `z_mu`, `error`, and `energy` from its inputs inside its `forward()` method. For the steps a `forward()` implementation must perform, see the [`forward()` contract](06_custom_nodes.md#the-nodebase-contract) in the Writing Custom Nodes guide.
+
 ### Edges
 
 Edges are directed connections from one node's output to another node's input slot. They define the flow of information through the network.
@@ -449,7 +451,7 @@ The builder will emit a warning about topological sort when cycles are detected.
 
 ## Shape Conventions
 
-FabricPC uses batch-first, channels-last format for all tensors.
+FabricPC uses batch-first, channels-last format for all tensors: NHWC for 2D data, NLC for sequences, and NDHWC for 3D data. This matches JAX's default convolution data layout.
 
 **Important**: The batch dimension is NOT included in node shape definitions.
 
@@ -484,3 +486,13 @@ node = CustomNode(shape=(16, 64, 64, 3), name="video_input")
 ```
 
 The batch dimension is always implicitly first and handled automatically by the framework.
+
+### Conv Node Shape Flow
+
+For convolutional nodes, the channels-last convention determines how inputs, kernels, and outputs line up. The kernel layout is `(kH, kW, C_in, C_out)`, and the spatial dimensions shrink (or are preserved, with `padding="SAME"`) according to the kernel size, stride, and padding:
+
+```
+Input:  (batch, H_in, W_in, C_in)     e.g., (32, 28, 28, 1)
+Kernel: (kH, kW, C_in, C_out)         e.g., (3, 3, 1, 64)
+Output: (batch, H_out, W_out, C_out)  e.g., (32, 26, 26, 64)
+```
