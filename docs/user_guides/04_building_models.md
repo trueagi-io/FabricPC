@@ -22,6 +22,8 @@ Nodes are computational units with state and learnable parameters. Each node mai
 
 - **Learnable parameters**: Weights and biases (varies by node type)
 
+A node computes `z_mu`, `error`, and `energy` from its inputs inside its `forward()` method. For the steps a `forward()` implementation must perform, see the [`forward()` contract](06_custom_nodes.md#the-nodebase-contract) in the Writing Custom Nodes guide.
+
 ### Edges
 
 Edges are directed connections from one node's output to another node's input slot. They define the flow of information through the network.

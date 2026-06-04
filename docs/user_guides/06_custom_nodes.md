@@ -26,6 +26,11 @@ All nodes inherit from `NodeBase` and must implement three static methods:
 
 These methods are static because FabricPC uses a functional JAX-based design. Node instances hold configuration; the static methods define pure functional transformations.
 
+`forward()` is where the node does its real work, and its body is intentionally unconstrained: how you turn inputs into a prediction is up to you. But a fixed set of steps must happen inside it for the node to participate in inference and learning — these are spelled out in [Implement Forward Computation](#step-5-implement-forward-computation) below. The split is:
+
+- **Required (every node):** produce `z_mu`, record `pre_activation`, compute `error`, write those fields back, populate `energy` via the energy functional, and return `(total_energy, state)`.
+- **Flexible (per node):** how inputs are combined (sum, matmul, attention, embedding lookup), whether weights/biases exist, whether and which activation applies, any internal sub-structure (LayerNorm, attention, residual paths), and any extra energy terms.
+
 ## Step-by-Step: Conv2D Node
 
 Let's build a 2D convolutional node from scratch. This example is adapted from `examples/custom_node.py`.
@@ -228,7 +233,7 @@ def forward(params, inputs, state, node_info):
     )
 
     # Compute energy using the energy functional
-    node_class = type(node_info.activation).__bases__[0]
+    node_class = node_info.node_class
     state = node_class.energy_functional(state, node_info)
 
     # Return total energy and updated state
@@ -236,15 +241,20 @@ def forward(params, inputs, state, node_info):
     return total_energy, state
 ```
 
-The forward method must:
+`forward()` is a **pure function**. It must have no side effects and must express its dependence on `params`, `inputs`, and `state.z_latent` entirely through JAX operations, because the framework differentiates it under `jax.value_and_grad` — `forward_and_latent_grads` differentiates it with respect to inputs and `z_latent`, and `forward_and_weight_grads` with respect to `params`. Side effects or Python-level control flow on traced values produce wrong gradients during inference and learning.
 
-1. **Accumulate inputs**: Sum contributions from all input edges (if multi-input slot)
-2. **Apply transformation**: Perform the node's computation (convolution in this case)
-3. **Apply activation**: Use the activation's static `forward()` method
-4. **Compute error**: `error = z_latent - z_mu`
-5. **Update state**: Replace relevant fields in the `NodeState` namedtuple
-6. **Compute energy**: Call the node's energy functional
-7. **Return**: `(total_energy, updated_state)`
+Within that constraint, every `forward()` must perform these six steps in order:
+
+1. **Predict `z_mu`**: produce the node's prediction of its own latent, with shape `(batch,) + node_info.shape`. *How* is up to the node — a convolution here, a matmul in `Linear`, an attention pipeline in `TransformerBlock`.
+2. **Record `pre_activation`**: the value before the activation function. If the node applies no activation, set `pre_activation = z_mu`. `pre_activation` is planned for deprecation as persistent attribute of NodeState; it's actually an ephemeral intermediate to `z_mu`.
+3. **Compute the error**: `error = state.z_latent - z_mu`. The energy functionals assume this sign (latent minus prediction).
+4. **Write the fields back**: `state = state._replace(z_mu=..., pre_activation=..., error=...)`. `NodeState` is a fixed-schema NamedTuple (`z_latent, z_mu, error, energy, pre_activation, latent_grad`); no other fields exist or may be added.
+5. **Populate energy**: `node_class = node_info.node_class; state = node_class.energy_functional(state, node_info)`. This sets `state.energy` from `energy(z_latent, z_mu)`, so `z_mu` must already be set. Extra energy terms (for example the Hopfield attractor term in `StorkeyHopfield`) are added by replacing `state.energy` after this call.
+6. **Return**: `return jnp.sum(state.energy), state` — the scalar total energy first, the updated state second.
+
+The steps *between* predicting `z_mu` and writing it back are free: input aggregation, weights and biases, the choice of activation, and any internal sub-structure are all node-specific.
+
+> **muPC scaling is not applied inside `forward()`.** The inference and learning callsites scale inputs and gradients; doing so again here double-scales them. See the [Initialization and Scaling guide](05_initialization_and_scaling.md).
 
 ### Step 6: Use the Custom Node
 
@@ -303,42 +313,67 @@ from fabricpc.nodes.base import FlattenInputMixin
 class MyDenseNode(FlattenInputMixin, NodeBase):
     @staticmethod
     def forward(params, inputs, state, node_info):
-        # Flatten inputs to 2D: (batch, features)
-        flat_inputs = MyDenseNode.flatten_input(inputs, node_info)
+        batch_size = state.z_latent.shape[0]
+        out_shape = node_info.shape
 
-        # Perform dense computation
-        pre_activation = MyDenseNode.compute_linear(flat_inputs, params, node_info)
+        # Sum (flattened_input @ weight) over all input edges -> (batch, *out_shape)
+        pre_activation = MyDenseNode.compute_linear(
+            inputs, params.weights, batch_size, out_shape
+        )
+
+        # Add bias, if the node has one
+        if "b" in params.biases and params.biases["b"].size > 0:
+            pre_activation = pre_activation + params.biases["b"]
 
         # Apply activation
-        z_mu = type(node_info.activation).forward(pre_activation, node_info.activation.config)
+        z_mu = type(node_info.activation).forward(
+            pre_activation, node_info.activation.config
+        )
 
-        # ... rest of forward computation
+        # ... then compute error, update state, populate energy, and return
+        #     (the six required steps above)
 ```
 
 The mixin provides:
-- `flatten_input()`: Flattens multi-dimensional inputs to 2D
-- `reshape_output()`: Reshapes outputs back to the node's shape
-- `compute_linear()`: Performs `W @ x + b` with proper summing over edges
+- `flatten_input(x)`: Flattens one input tensor from `(batch, *shape)` to `(batch, numel)`
+- `reshape_output(x_flat, out_shape)`: Reshapes `(batch, numel)` back to `(batch, *out_shape)`
+- `compute_linear(inputs, weights, batch_size, out_shape)`: Sums `flattened_input @ weight` across all input edges and reshapes to `(batch, *out_shape)`. It does not add a bias — add it yourself, as shown above.
 
 ### Explicit Gradients
 
-By default, JAX autodiff computes gradients during learning. For hand-coded gradients (e.g., for efficiency or control), override `forward_and_latent_grads()` and `forward_and_weight_grads()`:
+By default, FabricPC computes gradients with JAX autodiff: it differentiates your `forward()` to obtain both the latent gradients (inference) and the weight gradients (learning). For hand-coded gradients (e.g. for efficiency or control), override `forward_and_latent_grads()` and `forward_and_weight_grads()`. These return gradients, not energy, so their signatures differ from `forward()`:
 
 ```python
 class MyNode(NodeBase):
     @staticmethod
-    def forward_and_latent_grads(params, inputs, state, node_info):
-        # Forward pass for inference (same as forward())
-        return MyNode.forward(params, inputs, state, node_info)
+    def forward_and_latent_grads(params, inputs, state, node_info, is_clamped):
+        # Run forward() for the updated state, then compute gradients analytically.
+        node_class = node_info.node_class
+        _, state = node_class.forward(params, inputs, state, node_info)
+
+        # Self-latent gradient dE/dz_latent via the energy functional
+        energy_obj = node_info.energy
+        self_grad = type(energy_obj).grad_latent(
+            state.z_latent, state.z_mu, energy_obj.config
+        )
+
+        # Per-edge input gradients dE/d_input (uses activation.derivative())
+        input_grads = {...}
+
+        # Returns (updated_state, input_grads, self_grad)
+        return state, input_grads, self_grad
 
     @staticmethod
-    def forward_and_weight_grads(params, inputs, state, node_info, scaling_factors=None):
-        # Forward pass with explicit gradient computation
-        # ...
-        # Return (total_energy, updated_state, custom_grads)
+    def forward_and_weight_grads(params, inputs, state, node_info):
+        node_class = node_info.node_class
+        _, state = node_class.forward(params, inputs, state, node_info)
+
+        # Compute weight/bias gradients analytically ...
+        # Returns (updated_state, NodeParams(weights=..., biases=...))
+        return state, NodeParams(weights=weight_grads, biases=bias_grads)
 ```
 
-See `LinearExplicitGrad` in the source code for a complete example.
+Note that muPC scaling and accumulation into `state.latent_grad` are handled by the callsite, not inside these overrides. See `LinearExplicitGrad` (`fabricpc/nodes/linear_explicit_grad.py`) for a complete example, including its `compute_gain_mod_error()` helper that combines `state.error` with `activation.derivative()`.
 
 ### Multiple Input Slots
 
@@ -362,30 +397,29 @@ def forward(params, inputs, state, node_info):
     # ...
 ```
 
-### Stateful Nodes (e.g., Recurrent)
+### Working Within the Fixed NodeState Schema
 
-For nodes that maintain hidden state across time steps, add fields to the `NodeState` via `_replace()`:
+`NodeState` is a fixed-schema `NamedTuple` with exactly these fields:
 
 ```python
-@staticmethod
-def forward(params, inputs, state, node_info):
-    # Access custom state
-    hidden = state.custom_fields.get("hidden", jnp.zeros(node_info.shape))
-
-    # Update hidden state (e.g., RNN-style)
-    new_hidden = tanh(W_input @ input + W_hidden @ hidden + b)
-
-    # Store updated hidden state
-    custom_fields = state.custom_fields.copy()
-    custom_fields["hidden"] = new_hidden
-
-    state = state._replace(
-        z_mu=new_hidden,
-        custom_fields=custom_fields,
-    )
-
-    # ... rest of computation
+class NodeState(NamedTuple):
+    z_latent: jnp.ndarray       # latent states (what the network infers)
+    z_mu: jnp.ndarray           # predictions (what the network predicts)
+    error: jnp.ndarray          # prediction errors (z_latent - z_mu)
+    energy: jnp.ndarray         # per-sample energy, shape (batch,)
+    pre_activation: jnp.ndarray # values before the activation function
+    latent_grad: jnp.ndarray    # gradient accumulator for inference updates
 ```
+
+You cannot add custom fields to it. `state._replace(...)` only updates these existing fields, so there is no place to stash arbitrary per-step memory (such as an RNN hidden vector) on the `NodeState`.
+
+If your node needs additional state, route it through what already exists:
+
+- **Latent memory**: anything the node should "remember" and infer over belongs in `z_latent`. The inference loop already carries `z_latent` across steps and updates it from the energy gradient.
+- **Inputs**: state supplied by other nodes arrives through `inputs`, keyed by edge. Add an input slot (see [Multiple Input Slots](#multiple-input-slots)) to receive it.
+- **Parameters**: fixed-per-graph quantities belong in `params.weights` / `params.biases`, allocated in `initialize_params()`.
+
+Adding a genuinely new piece of dynamic state (a field on `NodeState`) is a framework-level change, not something a single node can do on its own.
 
 ## Testing Your Node
 
