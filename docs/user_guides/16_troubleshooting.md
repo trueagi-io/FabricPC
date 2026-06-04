@@ -2,11 +2,18 @@
 
 ## Installation Issues
 
+First run NVIDIA-SMI to view system driver version and cuda version.
+```bash
+nvidia-smi
+```
+
 **JAX/CUDA version conflict**
 
-If you see CUDA-related errors, ensure your CUDA 12 drivers match the JAX build:
+If you see CUDA-related errors, install the backend matching your driver and re-run with
+`-U` so JAX's coupled wheels (`jax`, `jaxlib`, plugin, pjrt) upgrade together. See
+[Why `-U`?](01_installation.md#why--u) for the reason.
 ```bash
-pip install --upgrade jax[cuda12]
+pip install -U "jax[cuda12]"   # or "jax[cuda13]" for driver ≥580
 ```
 
 **Triton GEMM XLA errors**
@@ -18,7 +25,7 @@ export FABRICPC_DISABLE_TRITON_GEMM=1
 
 **Python version**
 
-FabricPC requires Python 3.10–3.12. Python 3.13+ may not work with the Aim experiment tracking library.
+FabricPC supports Python 3.10–3.13. Only the optional Aim experiment tracker (in `[viz]`/`[all]`) is limited to Python ≤3.12; on Python 3.13 it is skipped automatically and the rest installs normally.
 
 ---
 
@@ -72,6 +79,8 @@ os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.9"
 
 A node cannot connect to itself via an Edge. The graph builder will raise an error.
 
+See the `StorkeyHopfield` node for an example of self-feedback lateral connections; implement self-connection inside a node.
+
 **Duplicate node names**
 
 Each node must have a unique name. Use `GraphNamespace` for scoped naming:
@@ -108,7 +117,7 @@ Under certain conditions (infinite inference steps, specific energy functionals)
 
 **Why is PC slower than backprop?**
 
-PC requires iterative inference (typically 10–50 steps per batch) before weight updates. Each inference step is a forward pass through the network. This overhead is inherent to the algorithm. Potential speedups include neuromorphic hardware that runs inference in parallel, or incremental PC methods that amortize inference across batches.
+PC requires iterative inference (typically 3 to 5 steps per layer of depth per batch) before weight updates. Each inference step is a forward pass through the network. This overhead is inherent to the algorithm. Potential speedups include neuromorphic hardware that runs inference in parallel, or incremental PC methods that amortize inference across batches.
 
 **Can I use FabricPC for non-classification tasks?**
 

@@ -11,7 +11,6 @@ Built-in nodes include:
 - `TransformerBlock`: Multi-head attention and feedforward
 
 Create a custom node when you need:
-- Convolutional layers (Conv1D, Conv2D, Conv3D)
 - Gating mechanisms (LSTM, GRU)
 - Custom transfer functions
 - Specialized domain-specific projections
