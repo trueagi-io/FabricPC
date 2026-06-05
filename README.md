@@ -87,7 +87,7 @@ User guides, API reference, and tutorials live in [`docs/user_guides`](docs/user
 
 Create custom node types by subclassing `NodeBase`. Implement the `forward()` and `initialize_params()` methods. Nodes have a single output. Define slots for incoming connections. Slots are named arguments of the node's `forward()` method and are referenced in edges when building the graph.
 
-See [`docs/user_guides/06_custom_nodes.md`](Writing Custom Nodes) for the node contract and an example of Conv2D implementation.
+See [`docs/user_guides/06_custom_nodes.md`](docs/user_guides/06_custom_nodes.md) for the node contract and an example of Conv2D implementation.
 
 ## Contributing
 
