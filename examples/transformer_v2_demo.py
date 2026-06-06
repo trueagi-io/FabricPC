@@ -35,17 +35,27 @@ from fabricpc.training import (
     evaluate_autoregressive,
     train_backprop_autoregressive,
     evaluate_backprop_autoregressive,
+    generate_autoregressive,
 )
 from fabricpc.core.inference import InferenceSGDNormClip
 from fabricpc.nodes.transformer_v2 import create_deep_transformer
-from fabricpc.utils.data import CharDataLoader
+from fabricpc.utils.data import CharDataLoader, BpeDataLoader
 import optax
 import time
 
-# --- Text Generation ---
-from fabricpc.graph_initialization.state_initializer import initialize_graph_state
-from fabricpc.core.inference import run_inference
-from fabricpc.training.train_autoregressive import create_causal_mask
+BPE_DEFAULTS = {
+    "embed_dim": 256, "num_heads": 8, "mlp_dim": 512, "depth": 4,
+    "seq_len": 64, "batch_size": 16, "num_epochs": 5, "infer_steps": 30,
+    "lr": 4.8336867874408474e-05, "eta_infer": 0.087354491301969,
+    "weight_init_std": 0.019440512955251017,
+}
+
+CHAR_DEFAULTS = {
+    "embed_dim": 64, "num_heads": 4, "mlp_dim": 512, "depth": 3,
+    "seq_len": 64, "batch_size": 16, "num_epochs": 5, "infer_steps": 18,
+    "lr": 6.710357156410781e-05, "eta_infer": 0.08895631378177452,
+    "weight_init_std": 0.043898823650793964,
+}
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -92,11 +102,13 @@ def parse_args():
         help="Weight init std",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    return parser.parse_args()
+    parser.add_argument("--tokenizer", choices=["char", "bpe"], default="char", help="Tokenizer to use",
+)
+    return parser.parse_args(), parser
 
 def main(args=None):
     if args is None:
-        args = parse_args()
+        args, parser = parse_args()
 
     use_pc = args.mode == "pc"
 
@@ -110,22 +122,23 @@ def main(args=None):
         print(f"Backprop mode: single device, batch_size={batch_size}")
 
     # --- Data ---
-    train_loader = CharDataLoader(
-        "train",
-        seq_len=args.seq_len,
-        batch_size=batch_size,
-        shuffle=True,
-        seed=args.seed,
-    )
-    # val_loader = CharDataLoader(
-    #     "validation", seq_len=args.seq_len, batch_size=batch_size, shuffle=False
-    # )
-    test_loader = CharDataLoader(
-        "test", seq_len=args.seq_len, batch_size=batch_size, shuffle=False
-    )
+    use_bpe = args.tokenizer == "bpe"
+    defaults = BPE_DEFAULTS if use_bpe else CHAR_DEFAULTS
+
+    for key, val in defaults.items():
+        if getattr(args, key) == parser.get_default(key):
+            setattr(args, key, val)
+            
+    if use_bpe:
+        train_loader = BpeDataLoader("train", seq_len=args.seq_len, batch_size=batch_size, shuffle=True, seed=args.seed)
+        test_loader = BpeDataLoader("test", seq_len=args.seq_len, batch_size=batch_size, shuffle=False)
+    else:
+        train_loader = CharDataLoader("train", seq_len=args.seq_len, batch_size=batch_size, shuffle=True, seed=args.seed)
+        test_loader = CharDataLoader("test", seq_len=args.seq_len, batch_size=batch_size, shuffle=False)
+
     vocab_size = train_loader.vocab_size
-    char_to_ix = train_loader.char_to_idx
-    ix_to_char = train_loader.idx_to_char
+    char_to_ix = train_loader.token_to_idx if use_bpe else train_loader.char_to_idx
+    ix_to_char = train_loader.idx_to_token if use_bpe else train_loader.idx_to_char
 
     # --- Model ---
     structure = create_deep_transformer(
@@ -203,37 +216,27 @@ def main(args=None):
     # --- Text Generation ---
     gen_key = jax.random.PRNGKey(99)
     prompt_text = "ROMEO: "
-    seq_len = args.seq_len
+    if use_bpe:
+        seed_indices = train_loader._tok.encode(prompt_text).ids
+    else:
+        seed_indices = [char_to_ix.get(c, 0) for c in prompt_text]
 
-    seed_indices = [char_to_ix.get(c, 0) for c in prompt_text]
-    current_indices = ([0] * (seq_len - len(seed_indices)) + seed_indices)[-seq_len:]
+    current_indices = ([0] * (args.seq_len - len(seed_indices)) + seed_indices)[-args.seq_len:]
+    prompt = jnp.array(current_indices, dtype=jnp.int32)
 
-    result_text = prompt_text
     print("--- Generating ---")
-    for _ in range(200):
-        input_batch = jnp.array([current_indices], dtype=jnp.int32)
-        mask = create_causal_mask(seq_len)[None, None, :, :]
-        mask = jnp.broadcast_to(mask, (1, 1, seq_len, seq_len))
+    generated = generate_autoregressive(
+        trained_params,
+        structure,
+        prompt,
+        max_new_tokens=200,
+        rng_key=gen_key,
+        temperature=0.8,
+    )
 
-        clamps = {
-            structure.task_map["x"]: input_batch,
-            structure.task_map["causal_mask"]: mask,
-        }
-        state = initialize_graph_state(
-            structure, 1, gen_key, clamps=clamps, params=trained_params
-        )
-        final_state = run_inference(trained_params, state, clamps, structure)
-
-        probs = final_state.nodes["logits"].z_mu[0, -1, :]
-        log_probs = jnp.log(probs + 1e-9)
-        gen_key, sample_key = jax.random.split(gen_key)
-        next_idx = int(jax.random.categorical(sample_key, log_probs / 0.8))
-
-        result_text += ix_to_char[next_idx]
-        current_indices = (current_indices + [next_idx])[-seq_len:]
-
-    print(result_text)
+    # Decode - skip the prompt padding, decode only from where prompt starts
+    generated_ids = generated[args.seq_len:]
+    print(prompt_text + train_loader.decode(generated_ids))
 
 if __name__ == "__main__":
-    args = parse_args()
-    main(args)
+    main()

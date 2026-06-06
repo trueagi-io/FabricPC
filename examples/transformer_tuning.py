@@ -20,7 +20,7 @@ from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.inference import InferenceSGDNormClip
 from fabricpc.nodes.transformer_v2 import create_deep_transformer
 from fabricpc.tuning.bayesian_tuner import BayesianTuner
-from fabricpc.utils.data import CharDataLoader
+from fabricpc.utils.data import CharDataLoader, BpeDataLoader
 from optuna.storages import JournalStorage, JournalFileStorage
 
 # Model Factory
@@ -34,6 +34,7 @@ def trial_model(config, rng_key):
     batch_size = config.get("batch_size", 32)
     vocab_size = config.get("vocab_size", 65)
     weight_init_std = config.get("weight_init_std", 0.02)
+    use_bpe = config.get("use_bpe", False)
 
     if embed_dim % num_heads != 0:
         raise optuna.TrialPruned(
@@ -47,13 +48,22 @@ def trial_model(config, rng_key):
             latent_decay=0.0,
     )
 
-    train_loader = CharDataLoader(
-        "train", seq_len=seq_len, batch_size=batch_size,
-        shuffle=True, seed=42, max_samples=50000,
-    )
-    val_loader = CharDataLoader(
-        "validation", seq_len=seq_len, batch_size=batch_size, shuffle=False,
-    )
+    if use_bpe:
+        train_loader = BpeDataLoader(
+            "train", seq_len=seq_len, batch_size=batch_size,
+            shuffle=True, seed=42, max_samples=50000
+        )
+        val_loader = BpeDataLoader(
+            "validation", seq_len=seq_len, batch_size=batch_size, shuffle=False
+        )
+    else:
+        train_loader = CharDataLoader(
+            "train", seq_len=seq_len, batch_size=batch_size,
+            shuffle=True, seed=42, max_samples=50000
+        )
+        val_loader = CharDataLoader(
+            "validation", seq_len=seq_len, batch_size=batch_size, shuffle=False
+        )
 
     structure = create_deep_transformer(
         depth=depth,
@@ -84,7 +94,8 @@ def phase1_search_space(trial):
     depth = trial.suggest_int("depth", 1, 4)
     seq_len = trial.suggest_categorical("seq_len", [64, 128])
     batch_size = trial.suggest_categorical("batch_size", [16, 32])
-    infer_steps = trial.suggest_int("infer_steps", 15, 25)
+    min_infer_steps = depth * 3 + 2
+    infer_steps = trial.suggest_int("infer_steps", min_infer_steps, min_infer_steps + 10)
     eta_infer = trial.suggest_float("eta_infer", 0.01, 0.15)
     lr = trial.suggest_float("lr", 1e-5, 3e-4, log=True)
     weight_init_std = trial.suggest_float("weight_init_std", 0.01, 0.05, log=True)
@@ -108,11 +119,13 @@ def phase2_search_space(trial, best_params):
     lr = best_params.get("lr", 1e-4)
     eta_infer = best_params.get("eta_infer", 0.1)
     infer_steps = best_params.get("infer_steps", 20)
+    depth = best_params.get("depth", 4)
+    min_infer_steps = depth * 3 + 2
 
     return {
         "lr": trial.suggest_float("lr", max(1e-5, lr * 0.5), min(1e-3, lr * 2.0), log=True),
         "eta_infer": trial.suggest_float("eta_infer", max(0.01, eta_infer * 0.7), min(0.2, eta_infer * 1.3)),
-        "infer_steps": trial.suggest_int("infer_steps", max(15, infer_steps - 3), min(25, infer_steps + 3)),
+        "infer_steps": trial.suggest_int("infer_steps", max(min_infer_steps, infer_steps - 3), infer_steps + 5),
     }
 
 # ==============================================================================
@@ -123,22 +136,25 @@ if __name__ == "__main__":
     seq_len = 128
     batch_size = 32
     max_tuning_samples = 50000
+    use_bpe = True  # set to False for character-level tokenizer
 
     # Used only to get vocab_size training loaders are created per trial in trial_model
-    train_loader = CharDataLoader(
-        "train",
-        seq_len=seq_len,
-        batch_size=batch_size,
-        shuffle=True,
-        seed=42,
-        max_samples=max_tuning_samples,
-    )
-    val_loader = CharDataLoader(
-        "validation",
-        seq_len=seq_len,
-        batch_size=batch_size,
-        shuffle=False,
-    )
+    if use_bpe:
+        train_loader = BpeDataLoader(
+            "train", seq_len=seq_len, batch_size=batch_size,
+            shuffle=True, seed=42, max_samples=max_tuning_samples
+        )
+        val_loader = BpeDataLoader(
+            "validation", seq_len=seq_len, batch_size=batch_size, shuffle=False
+        )
+    else:
+        train_loader = CharDataLoader(
+            "train", seq_len=seq_len, batch_size=batch_size,
+            shuffle=True, seed=42, max_samples=max_tuning_samples
+        )
+        val_loader = CharDataLoader(
+            "validation", seq_len=seq_len, batch_size=batch_size, shuffle=False
+        )
     vocab_size = train_loader.vocab_size
 
     print(
@@ -150,6 +166,7 @@ if __name__ == "__main__":
         "seq_len": seq_len,
         "vocab_size": vocab_size,
         "num_epochs": 5,
+        "use_bpe": use_bpe
     }
 
     storage = JournalStorage(JournalFileStorage("fabricpc/tuning/optuna_journal.log"))
@@ -161,7 +178,7 @@ if __name__ == "__main__":
         base_config=base_config,
         study_name="transformer_v2_tuning",
         storage=storage,
-        log_file="tuning/transformer_v2_results.txt",
+        log_file="fabricpc/tuning/transformer_v2_results.txt",
         energy_threshold=300,
     )
 
@@ -171,7 +188,7 @@ if __name__ == "__main__":
         phase2_search_space=phase2_search_space,
         n_trials_phase1=20,
         n_trials_phase2=15,
-        save_best_to="tuning/best_hyperparameters.txt",
+        save_best_to="fabricpc/tuning/best_hyperparameters.txt",
     )
 
     if results:
@@ -183,4 +200,4 @@ if __name__ == "__main__":
         print(f"\nFinal parameters:")
         for k, v in results["final_params"].items():
             print(f"  {k}: {v}")
-        print(f"\nSaved to: tuning/best_hyperparameters.txt")
+        print(f"\nSaved to: fabricpc/tuning/best_hyperparameters.txt")
