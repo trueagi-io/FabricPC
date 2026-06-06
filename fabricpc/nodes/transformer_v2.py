@@ -171,7 +171,9 @@ class MhaResidualNode(NodeBase):
     def get_slots():
         return {
             "in": SlotSpec("in", False),
-            "skip": SlotSpec("skip", False, is_variance_scalable=False, is_skip_connection=True),
+            "skip": SlotSpec(
+                "skip", False, is_variance_scalable=False, is_skip_connection=True
+            ),
             "mask": SlotSpec("mask", False, is_variance_scalable=False),
         }
 

@@ -44,18 +44,33 @@ import optax
 import time
 
 BPE_DEFAULTS = {
-    "embed_dim": 256, "num_heads": 8, "mlp_dim": 512, "depth": 4,
-    "seq_len": 64, "batch_size": 16, "num_epochs": 5, "infer_steps": 30,
-    "lr": 4.8336867874408474e-05, "eta_infer": 0.087354491301969,
+    "embed_dim": 256,
+    "num_heads": 8,
+    "mlp_dim": 512,
+    "depth": 4,
+    "seq_len": 64,
+    "batch_size": 16,
+    "num_epochs": 5,
+    "infer_steps": 30,
+    "lr": 4.8336867874408474e-05,
+    "eta_infer": 0.087354491301969,
     "weight_init_std": 0.019440512955251017,
 }
 
 CHAR_DEFAULTS = {
-    "embed_dim": 64, "num_heads": 4, "mlp_dim": 512, "depth": 3,
-    "seq_len": 64, "batch_size": 16, "num_epochs": 5, "infer_steps": 18,
-    "lr": 6.710357156410781e-05, "eta_infer": 0.08895631378177452,
+    "embed_dim": 64,
+    "num_heads": 4,
+    "mlp_dim": 512,
+    "depth": 3,
+    "seq_len": 64,
+    "batch_size": 16,
+    "num_epochs": 5,
+    "infer_steps": 18,
+    "lr": 6.710357156410781e-05,
+    "eta_infer": 0.08895631378177452,
     "weight_init_std": 0.043898823650793964,
 }
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -102,9 +117,14 @@ def parse_args():
         help="Weight init std",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    parser.add_argument("--tokenizer", choices=["char", "bpe"], default="char", help="Tokenizer to use",
-)
+    parser.add_argument(
+        "--tokenizer",
+        choices=["char", "bpe"],
+        default="char",
+        help="Tokenizer to use",
+    )
     return parser.parse_args(), parser
+
 
 def main(args=None):
     if args is None:
@@ -128,13 +148,29 @@ def main(args=None):
     for key, val in defaults.items():
         if getattr(args, key) == parser.get_default(key):
             setattr(args, key, val)
-            
+
     if use_bpe:
-        train_loader = BpeDataLoader("train", seq_len=args.seq_len, batch_size=batch_size, shuffle=True, seed=args.seed)
-        test_loader = BpeDataLoader("test", seq_len=args.seq_len, batch_size=batch_size, shuffle=False)
+        train_loader = BpeDataLoader(
+            "train",
+            seq_len=args.seq_len,
+            batch_size=batch_size,
+            shuffle=True,
+            seed=args.seed,
+        )
+        test_loader = BpeDataLoader(
+            "test", seq_len=args.seq_len, batch_size=batch_size, shuffle=False
+        )
     else:
-        train_loader = CharDataLoader("train", seq_len=args.seq_len, batch_size=batch_size, shuffle=True, seed=args.seed)
-        test_loader = CharDataLoader("test", seq_len=args.seq_len, batch_size=batch_size, shuffle=False)
+        train_loader = CharDataLoader(
+            "train",
+            seq_len=args.seq_len,
+            batch_size=batch_size,
+            shuffle=True,
+            seed=args.seed,
+        )
+        test_loader = CharDataLoader(
+            "test", seq_len=args.seq_len, batch_size=batch_size, shuffle=False
+        )
 
     vocab_size = train_loader.vocab_size
     char_to_ix = train_loader.token_to_idx if use_bpe else train_loader.char_to_idx
@@ -182,17 +218,31 @@ def main(args=None):
 
     def iter_callback(epoch_idx, batch_idx, energy):
         if (batch_idx + 1) % 50 == 0:
-            print(f"Epoch {epoch_idx + 1} | Batch {batch_idx + 1} | Energy: {energy:.4f}")
+            print(
+                f"Epoch {epoch_idx + 1} | Batch {batch_idx + 1} | Energy: {energy:.4f}"
+            )
         return energy
 
     if use_pc:
         trained_params, _, _ = train_autoregressive(
-            params, structure, train_loader, optimizer, train_config, train_key, verbose=True, 
+            params,
+            structure,
+            train_loader,
+            optimizer,
+            train_config,
+            train_key,
+            verbose=True,
             iter_callback=iter_callback,
         )
     else:
         trained_params, _, _ = train_backprop_autoregressive(
-            params, structure, train_loader, optimizer, train_config, train_key, verbose=True,
+            params,
+            structure,
+            train_loader,
+            optimizer,
+            train_config,
+            train_key,
+            verbose=True,
         )
 
     print(f"Training completed in {time.time() - start:.1f}s")
@@ -221,7 +271,9 @@ def main(args=None):
     else:
         seed_indices = [char_to_ix.get(c, 0) for c in prompt_text]
 
-    current_indices = ([0] * (args.seq_len - len(seed_indices)) + seed_indices)[-args.seq_len:]
+    current_indices = ([0] * (args.seq_len - len(seed_indices)) + seed_indices)[
+        -args.seq_len :
+    ]
     prompt = jnp.array(current_indices, dtype=jnp.int32)
 
     print("--- Generating ---")
@@ -235,8 +287,9 @@ def main(args=None):
     )
 
     # Decode - skip the prompt padding, decode only from where prompt starts
-    generated_ids = generated[args.seq_len:]
+    generated_ids = generated[args.seq_len :]
     print(prompt_text + train_loader.decode(generated_ids))
+
 
 if __name__ == "__main__":
     main()

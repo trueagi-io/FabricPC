@@ -13,6 +13,7 @@ Architecture::
 """
 
 from jax_setup import set_jax_flags_before_importing_jax
+
 set_jax_flags_before_importing_jax()
 
 import optuna
@@ -22,6 +23,7 @@ from fabricpc.nodes.transformer_v2 import create_deep_transformer
 from fabricpc.tuning.bayesian_tuner import BayesianTuner
 from fabricpc.utils.data import CharDataLoader, BpeDataLoader
 from optuna.storages import JournalStorage, JournalFileStorage
+
 
 # Model Factory
 def trial_model(config, rng_key):
@@ -42,24 +44,32 @@ def trial_model(config, rng_key):
         )
 
     inference = InferenceSGDNormClip(
-            eta_infer=config.get("eta_infer", 0.1),
-            infer_steps=config.get("infer_steps", 20),
-            max_norm=5.0,
-            latent_decay=0.0,
+        eta_infer=config.get("eta_infer", 0.1),
+        infer_steps=config.get("infer_steps", 20),
+        max_norm=5.0,
+        latent_decay=0.0,
     )
 
     if use_bpe:
         train_loader = BpeDataLoader(
-            "train", seq_len=seq_len, batch_size=batch_size,
-            shuffle=True, seed=42, max_samples=50000
+            "train",
+            seq_len=seq_len,
+            batch_size=batch_size,
+            shuffle=True,
+            seed=42,
+            max_samples=50000,
         )
         val_loader = BpeDataLoader(
             "validation", seq_len=seq_len, batch_size=batch_size, shuffle=False
         )
     else:
         train_loader = CharDataLoader(
-            "train", seq_len=seq_len, batch_size=batch_size,
-            shuffle=True, seed=42, max_samples=50000
+            "train",
+            seq_len=seq_len,
+            batch_size=batch_size,
+            shuffle=True,
+            seed=42,
+            max_samples=50000,
         )
         val_loader = CharDataLoader(
             "validation", seq_len=seq_len, batch_size=batch_size, shuffle=False
@@ -79,9 +89,11 @@ def trial_model(config, rng_key):
     params = initialize_params(structure, rng_key)
     return params, structure, train_loader, val_loader
 
+
 # ==============================================================================
 # PHASE 1: Architecture search
 # ==============================================================================
+
 
 def phase1_search_space(trial):
     """
@@ -95,21 +107,31 @@ def phase1_search_space(trial):
     seq_len = trial.suggest_categorical("seq_len", [64, 128])
     batch_size = trial.suggest_categorical("batch_size", [16, 32])
     min_infer_steps = depth * 3 + 2
-    infer_steps = trial.suggest_int("infer_steps", min_infer_steps, min_infer_steps + 10)
+    infer_steps = trial.suggest_int(
+        "infer_steps", min_infer_steps, min_infer_steps + 10
+    )
     eta_infer = trial.suggest_float("eta_infer", 0.01, 0.15)
     lr = trial.suggest_float("lr", 1e-5, 3e-4, log=True)
     weight_init_std = trial.suggest_float("weight_init_std", 0.01, 0.05, log=True)
 
     return {
-        "embed_dim": embed_dim, "num_heads": num_heads, "mlp_dim": mlp_dim,
-        "depth": depth, "seq_len": seq_len, "batch_size": batch_size,
-        "infer_steps": infer_steps, "eta_infer": eta_infer,
-        "lr": lr, "weight_init_std": weight_init_std,
+        "embed_dim": embed_dim,
+        "num_heads": num_heads,
+        "mlp_dim": mlp_dim,
+        "depth": depth,
+        "seq_len": seq_len,
+        "batch_size": batch_size,
+        "infer_steps": infer_steps,
+        "eta_infer": eta_infer,
+        "lr": lr,
+        "weight_init_std": weight_init_std,
     }
+
 
 # ==============================================================================
 # PHASE 2 SEARCH SPACE — Continuous fine-tuning around Phase 1 winner
 # ==============================================================================
+
 
 def phase2_search_space(trial, best_params):
     """
@@ -123,10 +145,17 @@ def phase2_search_space(trial, best_params):
     min_infer_steps = depth * 3 + 2
 
     return {
-        "lr": trial.suggest_float("lr", max(1e-5, lr * 0.5), min(1e-3, lr * 2.0), log=True),
-        "eta_infer": trial.suggest_float("eta_infer", max(0.01, eta_infer * 0.7), min(0.2, eta_infer * 1.3)),
-        "infer_steps": trial.suggest_int("infer_steps", max(min_infer_steps, infer_steps - 3), infer_steps + 5),
+        "lr": trial.suggest_float(
+            "lr", max(1e-5, lr * 0.5), min(1e-3, lr * 2.0), log=True
+        ),
+        "eta_infer": trial.suggest_float(
+            "eta_infer", max(0.01, eta_infer * 0.7), min(0.2, eta_infer * 1.3)
+        ),
+        "infer_steps": trial.suggest_int(
+            "infer_steps", max(min_infer_steps, infer_steps - 3), infer_steps + 5
+        ),
     }
+
 
 # ==============================================================================
 # MAIN
@@ -141,16 +170,24 @@ if __name__ == "__main__":
     # Used only to get vocab_size training loaders are created per trial in trial_model
     if use_bpe:
         train_loader = BpeDataLoader(
-            "train", seq_len=seq_len, batch_size=batch_size,
-            shuffle=True, seed=42, max_samples=max_tuning_samples
+            "train",
+            seq_len=seq_len,
+            batch_size=batch_size,
+            shuffle=True,
+            seed=42,
+            max_samples=max_tuning_samples,
         )
         val_loader = BpeDataLoader(
             "validation", seq_len=seq_len, batch_size=batch_size, shuffle=False
         )
     else:
         train_loader = CharDataLoader(
-            "train", seq_len=seq_len, batch_size=batch_size,
-            shuffle=True, seed=42, max_samples=max_tuning_samples
+            "train",
+            seq_len=seq_len,
+            batch_size=batch_size,
+            shuffle=True,
+            seed=42,
+            max_samples=max_tuning_samples,
         )
         val_loader = CharDataLoader(
             "validation", seq_len=seq_len, batch_size=batch_size, shuffle=False
@@ -166,7 +203,7 @@ if __name__ == "__main__":
         "seq_len": seq_len,
         "vocab_size": vocab_size,
         "num_epochs": 5,
-        "use_bpe": use_bpe
+        "use_bpe": use_bpe,
     }
 
     storage = JournalStorage(JournalFileStorage("fabricpc/tuning/optuna_journal.log"))

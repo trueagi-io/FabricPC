@@ -12,10 +12,12 @@ from typing import Callable, Any, Dict, Tuple, Optional
 from fabricpc.training import train_autoregressive, evaluate_autoregressive
 from fabricpc.core.types import GraphParams, GraphStructure
 
+
 def set_seed(seed: int = 42):
     random.seed(seed)
     np.random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
+
 
 class BayesianTuner:
     """
@@ -29,7 +31,9 @@ class BayesianTuner:
         self,
         train_loader: Any,
         val_loader: Any,
-        trial_model: Callable[[Dict[str, Any], jax.Array], Tuple[GraphParams, GraphStructure]],
+        trial_model: Callable[
+            [Dict[str, Any], jax.Array], Tuple[GraphParams, GraphStructure]
+        ],
         base_config: Dict[str, Any],
         study_name: str = "fabricpc_tuning",
         storage=None,
@@ -46,7 +50,10 @@ class BayesianTuner:
         self.energy_threshold = energy_threshold
 
         if log_file:
-            os.makedirs(os.path.dirname(log_file) if os.path.dirname(log_file) else ".", exist_ok=True)
+            os.makedirs(
+                os.path.dirname(log_file) if os.path.dirname(log_file) else ".",
+                exist_ok=True,
+            )
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -78,7 +85,7 @@ class BayesianTuner:
         except Exception as e:
             print(f"  Trial {trial.number} pruned, model creation failed: {e}")
             raise optuna.TrialPruned()
-  
+
         optimizer = _optax.adam(config.get("lr", 1e-3))
         train_config = {**config, "use_causal_mask": True}
 
@@ -88,12 +95,16 @@ class BayesianTuner:
                     f"  [Phase {phase}] Trial {trial.number} | "
                     f"Epoch {epoch_idx + 1} | Batch {batch_idx + 1} | Energy: {energy:.4f}"
                 )
-            return energy  
+            return energy
 
         try:
             trained_params, iter_results, _ = train_autoregressive(
-                params, structure, train_loader,
-                optimizer, train_config, train_key,
+                params,
+                structure,
+                train_loader,
+                optimizer,
+                train_config,
+                train_key,
                 verbose=False,
                 iter_callback=iter_callback,
             )
@@ -102,7 +113,9 @@ class BayesianTuner:
             raise optuna.TrialPruned()
 
         # Check energy stability from last epoch
-        last_epoch_energies = [e for e in (iter_results[-1] if iter_results else []) if e is not None]
+        last_epoch_energies = [
+            e for e in (iter_results[-1] if iter_results else []) if e is not None
+        ]
         if last_epoch_energies:
             avg_energy = sum(last_epoch_energies) / len(last_epoch_energies)
             if avg_energy != avg_energy or avg_energy > self.energy_threshold:
@@ -125,7 +138,15 @@ class BayesianTuner:
         score = avg_energy if phase == 1 else metrics.get("perplexity", float("inf"))
         return score, metrics
 
-    def _log(self, phase: int, trial_number: int, duration: float, score: float, metrics: Dict, config: Dict):
+    def _log(
+        self,
+        phase: int,
+        trial_number: int,
+        duration: float,
+        score: float,
+        metrics: Dict,
+        config: Dict,
+    ):
         if not self.log_file:
             return
         line = (
@@ -143,7 +164,9 @@ class BayesianTuner:
         )
         with open(self.log_file, "a") as f:
             f.write(line)
-        print(f"  → Score: {score:.4f} | PPL: {metrics.get('perplexity', 0.0):.4f} | Energy: {metrics.get('energy', 0.0):.4f}")
+        print(
+            f"  → Score: {score:.4f} | PPL: {metrics.get('perplexity', 0.0):.4f} | Energy: {metrics.get('energy', 0.0):.4f}"
+        )
 
     # ------------------------------------------------------------------
     # Phase 1 — architecture search, minimize energy
@@ -160,7 +183,9 @@ class BayesianTuner:
             direction="minimize",
             load_if_exists=True,
             sampler=optuna.samplers.TPESampler(seed=42, n_startup_trials=5),
-            pruner=optuna.pruners.HyperbandPruner(min_resource=1, max_resource=15, reduction_factor=2),
+            pruner=optuna.pruners.HyperbandPruner(
+                min_resource=1, max_resource=15, reduction_factor=2
+            ),
         )
 
         def objective(trial):
@@ -233,7 +258,9 @@ class BayesianTuner:
         if self.log_file:
             with open(self.log_file, "a") as f:
                 f.write("=" * 120 + "\n")
-                f.write(f"RUN STARTED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(
+                    f"RUN STARTED: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                )
                 f.write("PHASE 1 — Architecture Search (minimize energy)\n")
                 f.write("=" * 120 + "\n")
 
@@ -268,7 +295,10 @@ class BayesianTuner:
 
         if not study2.best_trial:
             print("Phase 2 produced no successful trials.")
-            return {"phase1_best_energy": best_energy, "phase1_best_params": best_params}
+            return {
+                "phase1_best_energy": best_energy,
+                "phase1_best_params": best_params,
+            }
 
         best_ppl = study2.best_value
         best_continuous = study2.best_params
