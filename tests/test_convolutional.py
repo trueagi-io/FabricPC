@@ -96,15 +96,14 @@ class TestConvNodeValidation:
         node = ConvNode(shape=(28, 28, 16), name="x", kernel_size=(3, 3))
         assert isinstance(node._activation, ReLUActivation)
 
-    def test_default_bias_init_resolves_to_zeros_in_initialize_params(self):
-        """The constructor no longer pre-fills bias_init (that defaulting lives in
-        initialize_params now). Constructing with use_bias=True stores None in config;
-        initialize_params then fills ZerosInitializer() and yields an all-zero bias."""
+    def test_default_bias_init_is_zeros(self):
+        """With signature defaults, the constructor fills bias_init=ZerosInitializer()
+        into config; initialize_params then produces an all-zero bias."""
         node = ConvNode(shape=(10, 8), name="x", kernel_size=(3,), use_bias=True)
-        assert node._extra_config.get("bias_init") is None
+        assert isinstance(node._extra_config["bias_init"], ZerosInitializer)
         key = jax.random.PRNGKey(0)
         params = ConvNode.initialize_params(
-            key, (10, 8), {"e:in": (10, 4)}, NormalInitializer(), node._extra_config
+            key, (10, 8), {"e:in": (10, 4)}, node._weight_init, node._extra_config
         )
         assert jnp.all(params.biases["b"] == 0.0)
 
@@ -118,11 +117,33 @@ class TestConvNodeValidation:
         )
         assert node._extra_config.get("bias_init") is None
 
-    def test_mutable_default_isolation(self):
-        """Two ConvNodes should not share the same activation object."""
+    def test_default_singletons_shared_but_weights_independent(self):
+        """Signature defaults mean two ConvNodes share the same default activation
+        and initializer singleton. That is safe: the configs are immutable
+        (MappingProxyType) and ``initialize`` is a pure static method, so nothing
+        mutates the shared object. Weights still differ per layer because
+        ``initialize_params`` draws from a distinct PRNG key on each call."""
         n1 = ConvNode(shape=(8, 8, 4), name="a", kernel_size=(3, 3))
         n2 = ConvNode(shape=(8, 8, 4), name="b", kernel_size=(3, 3))
-        assert n1._activation is not n2._activation
+        # Shared singleton is expected and harmless.
+        assert n1._activation is n2._activation
+        assert n1._weight_init is n2._weight_init
+        # ...yet weights drawn with different keys are not identical.
+        p1 = ConvNode.initialize_params(
+            jax.random.PRNGKey(1),
+            (8, 8, 4),
+            {"e:in": (8, 8, 3)},
+            n1._weight_init,
+            n1._extra_config,
+        )
+        p2 = ConvNode.initialize_params(
+            jax.random.PRNGKey(2),
+            (8, 8, 4),
+            {"e:in": (8, 8, 3)},
+            n2._weight_init,
+            n2._extra_config,
+        )
+        assert not jnp.array_equal(p1.weights["e:in"], p2.weights["e:in"])
 
 
 # =============================================================================
@@ -221,17 +242,6 @@ class TestConvNodeInitializeParams:
         )
         assert params.biases == {}
 
-    def test_use_bias_without_bias_init_defaults_to_zeros(self):
-        """use_bias=True with no bias_init should silently default to zeros."""
-        key = jax.random.PRNGKey(0)
-        config = {"kernel_size": (3,), "use_bias": True}  # bias_init absent
-        params = ConvNode.initialize_params(
-            key, (10, 8), {"e:in": (10, 4)}, NormalInitializer(), config
-        )
-        assert params.biases["b"].shape == (1, 1, 8)
-        # implicit ZerosInitializer => the bias should be all zeros
-        assert jnp.all(params.biases["b"] == 0.0)
-
     def test_xavier_init_accepted(self):
         """Non-Kaiming initializers should be forwarded directly."""
         node = ConvNode(
@@ -266,6 +276,21 @@ class TestConvNodeInitializeParams:
         assert params.weights["a->c:in"].shape == (3, 3, 8)
         assert params.weights["b->c:in"].shape == (3, 5, 8)
 
+    def test_wrong_declared_output_shape_raises(self):
+        """initialize_params fails fast when the declared output spatial shape
+        disagrees with what the conv params produce (VALID shrinks 10 -> 8)."""
+        node = ConvNode(shape=(8, 8), name="c", kernel_size=(3,), padding="VALID")
+        key = jax.random.PRNGKey(0)
+        # Declare (10, 8) but VALID k=3 on input length 10 yields length 8.
+        with pytest.raises(ValueError, match="declared output spatial shape"):
+            ConvNode.initialize_params(
+                key,
+                (10, 8),
+                {"e:in": (10, 4)},
+                KaimingInitializer(),
+                node._extra_config,
+            )
+
 
 # =============================================================================
 # ConvNode — forward pass
@@ -283,17 +308,20 @@ class TestConvNodeForward:
         activation = ReLUActivation()
         energy_obj = GaussianEnergy()
 
+        # Output length depends on padding: SAME preserves, VALID shrinks by k-1.
+        out_len = seq_len if padding == "SAME" else seq_len - k + 1
+
         node = ConvNode(
-            shape=(seq_len, C_out), name="c1d", kernel_size=(k,), padding=padding
+            shape=(out_len, C_out), name="c1d", kernel_size=(k,), padding=padding
         )
         config = node._extra_config
         input_shapes = {"e:in": (seq_len, C_in)}
         params = ConvNode.initialize_params(
-            key, (seq_len, C_out), input_shapes, KaimingInitializer(), config
+            key, (out_len, C_out), input_shapes, KaimingInitializer(), config
         )
         node_info = _make_node_info(
             ConvNode,
-            (seq_len, C_out),
+            (out_len, C_out),
             config,
             activation,
             energy_obj,
@@ -301,22 +329,7 @@ class TestConvNodeForward:
             KaimingInitializer(),
             in_edges=("e:in",),
         )
-        state = _make_state(key, batch, (seq_len, C_out))
-
-        # For VALID padding the spatial output is seq_len - k + 1
-        if padding == "VALID":
-            out_len = seq_len - k + 1
-            node_info = _make_node_info(
-                ConvNode,
-                (out_len, C_out),
-                config,
-                activation,
-                energy_obj,
-                NormalInitializer(),
-                KaimingInitializer(),
-                in_edges=("e:in",),
-            )
-            state = _make_state(key, batch, (out_len, C_out))
+        state = _make_state(key, batch, (out_len, C_out))
 
         inputs = {"e:in": jax.random.normal(key, (batch, seq_len, C_in))}
         return params, state, node_info, inputs, padding

@@ -25,7 +25,7 @@ import jax
 import jax.lax as lax
 import jax.numpy as jnp
 
-from fabricpc.nodes.base import NodeBase, SlotSpec
+from fabricpc.nodes.base import NodeBase, SlotSpec, compute_windowed_output_shape
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.activations import ReLUActivation
 from fabricpc.core.energy import GaussianEnergy
@@ -57,13 +57,14 @@ class ConvNode(NodeBase):
         kernel_size: Spatial kernel size per axis. **Required — no default.**
         stride:      Stride per spatial axis. Defaults to all-ones.
         padding:     "SAME" or "VALID", or sequence of (low, high) pad pairs.
+                     Defaults to "SAME" (conv usually preserves spatial size);
+                     note the pooling nodes default to "VALID" instead.
         activation:  Default: ReLUActivation().
         energy:      Default: GaussianEnergy().
         use_bias:    Default: True.
         weight_init: Default: KaimingInitializer().
         bias_init:   Default: ZerosInitializer().
         latent_init: Default: NormalInitializer().
-        slots:       Custom slot dict for skip connections / gating.
     """
 
     _DIM_NUMBERS = {
@@ -79,13 +80,12 @@ class ConvNode(NodeBase):
         kernel_size: Tuple[int, ...],
         stride: Optional[Tuple[int, ...]] = None,
         padding: Union[str, Sequence[Tuple[int, int]]] = "SAME",
-        activation: Optional["ActivationBase"] = None,
-        energy: Optional["EnergyFunctional"] = None,
+        activation: "ActivationBase" = ReLUActivation(),
+        energy: "EnergyFunctional" = GaussianEnergy(),
         use_bias: bool = True,
-        weight_init: Optional["InitializerBase"] = None,
-        bias_init: Optional["InitializerBase"] = None,
-        latent_init: Optional["InitializerBase"] = None,
-        slots: Optional[Dict[str, SlotSpec]] = None,
+        weight_init: "InitializerBase" = KaimingInitializer(),
+        bias_init: "InitializerBase" = ZerosInitializer(),
+        latent_init: "InitializerBase" = NormalInitializer(),
     ):
         """
         Args:
@@ -100,7 +100,6 @@ class ConvNode(NodeBase):
             weight_init: Initializer for kernels. Default: KaimingInitializer.
             bias_init: Initializer for bias. Default: ZerosInitializer.
             latent_init: Initializer for latent states. Default: NormalInitializer.
-            slots: Custom slot dictionary.
         """
         spatial_rank = len(shape) - 1
         if spatial_rank not in (1, 2, 3):
@@ -113,18 +112,12 @@ class ConvNode(NodeBase):
                 f"spatial_rank {spatial_rank} inferred from shape={shape}."
             )
 
-        # Fill defaults in the body — never in the signature — to avoid the
-        # mutable-default-argument pitfall.
-        if activation is None:
-            activation = ReLUActivation()
-        if energy is None:
-            energy = GaussianEnergy()
-        if latent_init is None:
-            latent_init = NormalInitializer()
+        # Stride default depends on spatial_rank, so it stays in the body.
+        # Other defaults moved to signature: framework guarantees init class
+        # configs are MappingProxyType (immutable), so sharing the singleton
+        # default across nodes is safe.
         if stride is None:
             stride = (1,) * spatial_rank
-
-        self._slots = slots or {"in": SlotSpec(name="in", is_multi_input=True)}
 
         super().__init__(
             shape=shape,
@@ -167,17 +160,37 @@ class ConvNode(NodeBase):
         kernel_size = config.get("kernel_size")
         out_channels = node_shape[-1]
         use_bias = config.get("use_bias", True)
+        # weight_init and bias_init are defaulted once, in the __init__
+        # signature, and flow in via node_info.weight_init / config. They are
+        # not re-defaulted here — the single source of truth is the constructor.
         bias_init = config.get("bias_init")
-        if use_bias and bias_init is None:
-            bias_init = ZerosInitializer()
-
-        if weight_init is None:
-            weight_init = KaimingInitializer()
 
         keys = jax.random.split(key, len(input_shapes) + 1)
 
+        stride = config.get("stride")
+        padding = config.get("padding")
+        declared_spatial = tuple(node_shape[:-1])
+        # Validate the declared output shape only when stride/padding are
+        # present (always so via the constructor; a hand-built config may omit
+        # them, in which case we skip rather than crash).
+        check_shape = stride is not None and padding is not None
+
         weights_dict = {}
         for i, (edge_key, in_shape) in enumerate(input_shapes.items()):
+            # Fail fast if the declared output shape disagrees with what the
+            # conv will actually produce (else it surfaces late inside JIT).
+            if check_shape:
+                expected_spatial = compute_windowed_output_shape(
+                    in_shape[:-1], kernel_size, stride, padding
+                )
+                if expected_spatial != declared_spatial:
+                    raise ValueError(
+                        f"ConvNode declared output spatial shape "
+                        f"{declared_spatial} but edge '{edge_key}' (input "
+                        f"spatial {tuple(in_shape[:-1])}, kernel "
+                        f"{tuple(kernel_size)}, stride {tuple(stride)}, "
+                        f"padding {padding!r}) produces {expected_spatial}."
+                    )
             in_channels = in_shape[-1]
             kernel_shape = (*kernel_size, in_channels, out_channels)
             weights_dict[edge_key] = initialize(keys[i], kernel_shape, weight_init)

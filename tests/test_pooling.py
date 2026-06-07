@@ -90,6 +90,26 @@ class TestMaxPoolMuPC:
 
 
 class TestMaxPoolParams:
+    def test_wrong_declared_output_shape_raises(self):
+        """Windowed pooling fails fast when the declared output spatial shape
+        disagrees with window/stride/padding (28 /2 -> 14, not 13)."""
+        node = MaxPool(
+            shape=(13, 13, 16),
+            name="p",
+            window_shape=(2, 2),
+            stride=(2, 2),
+            padding="VALID",
+        )
+        key = jax.random.PRNGKey(0)
+        with pytest.raises(ValueError, match="declared output spatial shape"):
+            MaxPool.initialize_params(
+                key,
+                (13, 13, 16),
+                {"src→pool:in": (28, 28, 16)},
+                None,
+                node._extra_config,
+            )
+
     def test_no_weights_or_biases(self):
         key = jax.random.PRNGKey(0)
         params = MaxPool.initialize_params(
@@ -411,6 +431,12 @@ class TestAvgPoolGlobal:
     def test_global_construction_no_window(self):
         node = AvgPool(shape=(256,), name="gap", global_pool=True)
         assert node._shape == (256,)
+
+    def test_global_pool_rejects_non_rank1_shape(self):
+        """global_pool=True maps (B, Spatial..., C) -> (B, C); the declared
+        output shape must be rank-1 (C,). A spatial-rank shape must fail fast."""
+        with pytest.raises(ValueError, match="rank-1 shape"):
+            AvgPool(shape=(4, 4, 256), name="bad_gap", global_pool=True)
 
     def test_global_forward_collapses_spatial(self):
         B, H, W, C = 4, 7, 7, 64

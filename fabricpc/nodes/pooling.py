@@ -37,7 +37,7 @@ import jax
 import jax.lax as lax
 import jax.numpy as jnp
 
-from fabricpc.nodes.base import NodeBase, SlotSpec
+from fabricpc.nodes.base import NodeBase, SlotSpec, compute_windowed_output_shape
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.activations import IdentityActivation
 from fabricpc.core.energy import GaussianEnergy
@@ -132,7 +132,38 @@ class _PoolBase(NodeBase):
         weight_init: Optional["InitializerBase"] = None,
         config: Optional[Dict[str, Any]] = None,
     ) -> NodeParams:
-        """Pooling has no learnable parameters."""
+        """Pooling has no learnable parameters.
+
+        Windowed mode still validates here (the only place input shapes are
+        available) that the declared output spatial shape matches what the
+        window/stride/padding will produce, failing fast instead of late in
+        forward. Global mode has no spatial output, so it is skipped (its
+        rank-1 shape is checked at construction).
+        """
+        config = config or {}
+        window_shape = config.get("window_shape")
+        stride = config.get("stride")
+        padding = config.get("padding")
+        # Validate only when the windowed-pool params are present (they always
+        # are via the constructor; a hand-built config may omit them).
+        if not config.get("global_pool", False) and None not in (
+            window_shape,
+            stride,
+            padding,
+        ):
+            declared_spatial = tuple(node_shape[:-1])
+            for edge_key, in_shape in input_shapes.items():
+                expected_spatial = compute_windowed_output_shape(
+                    in_shape[:-1], window_shape, stride, padding
+                )
+                if expected_spatial != declared_spatial:
+                    raise ValueError(
+                        f"Pooling declared output spatial shape "
+                        f"{declared_spatial} but edge '{edge_key}' "
+                        f"(input spatial {tuple(in_shape[:-1])}, window "
+                        f"{tuple(window_shape)}, stride {tuple(stride)}, "
+                        f"padding {padding!r}) produces {expected_spatial}."
+                    )
         return NodeParams(weights={}, biases={})
 
     @staticmethod
@@ -178,10 +209,11 @@ class MaxPool(_PoolBase):
         window_shape: Spatial window size per axis.
         stride:       Stride per spatial axis. Defaults to ``window_shape``.
         padding:      "SAME" / "VALID", or a sequence of spatial (low, high) pairs.
+                      Defaults to "VALID" (pooling usually downsamples); note
+                      that ConvNode defaults to "SAME" instead.
         activation:   Default: IdentityActivation().
         energy:       Default: GaussianEnergy().
         latent_init:  Default: NormalInitializer().
-        slots:        Custom slot dict.
     """
 
     def __init__(
@@ -194,7 +226,6 @@ class MaxPool(_PoolBase):
         activation: Optional["ActivationBase"] = None,
         energy: Optional["EnergyFunctional"] = None,
         latent_init: Optional["InitializerBase"] = None,
-        slots: Optional[Dict[str, SlotSpec]] = None,
     ):
         _, stride = self._validate_windowed(shape, window_shape, stride, "MaxPool")
 
@@ -204,8 +235,6 @@ class MaxPool(_PoolBase):
             energy = GaussianEnergy()
         if latent_init is None:
             latent_init = NormalInitializer()
-
-        self._slots = slots or {"in": SlotSpec(name="in", is_multi_input=True)}
 
         super().__init__(
             shape=shape,
@@ -255,6 +284,8 @@ class AvgPool(_PoolBase):
         window_shape: Spatial window size per axis (windowed mode only).
         stride:       Stride per spatial axis. Defaults to ``window_shape``.
         padding:      "SAME" / "VALID", or a sequence of spatial (low, high) pairs.
+                      Defaults to "VALID" (pooling usually downsamples); note
+                      that ConvNode defaults to "SAME" instead.
         global_pool:  If True, average over all spatial dims -> (B, C).
         count_include_pad: Windowed mode only. If True (default, matches
                       PyTorch), divide each window by the full window volume
@@ -264,7 +295,6 @@ class AvgPool(_PoolBase):
         activation:   Default: IdentityActivation().
         energy:       Default: GaussianEnergy().
         latent_init:  Default: NormalInitializer().
-        slots:        Custom slot dict.
     """
 
     def __init__(
@@ -279,9 +309,16 @@ class AvgPool(_PoolBase):
         activation: Optional["ActivationBase"] = None,
         energy: Optional["EnergyFunctional"] = None,
         latent_init: Optional["InitializerBase"] = None,
-        slots: Optional[Dict[str, SlotSpec]] = None,
     ):
         if global_pool:
+            # Global mode collapses all spatial dims -> (B, C), so the declared
+            # output shape (batch excluded) must be rank-1: (C,). Fail fast here
+            # rather than at the first forward with an opaque shape mismatch.
+            if len(shape) != 1:
+                raise ValueError(
+                    f"AvgPool global_pool=True requires a rank-1 shape (C,), "
+                    f"got shape={shape}."
+                )
             # Global mode collapses all spatial dims; window/stride unused.
             window_shape = window_shape or ()
             stride = stride or ()
@@ -298,8 +335,6 @@ class AvgPool(_PoolBase):
             energy = GaussianEnergy()
         if latent_init is None:
             latent_init = NormalInitializer()
-
-        self._slots = slots or {"in": SlotSpec(name="in", is_multi_input=True)}
 
         super().__init__(
             shape=shape,

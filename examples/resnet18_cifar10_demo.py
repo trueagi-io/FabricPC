@@ -51,8 +51,7 @@ import numpy as np
 import optax
 import argparse
 import time
-from custom_node import Conv2DNode
-from fabricpc.nodes import Linear, IdentityNode, SkipConnection, AvgPool
+from fabricpc.nodes import ConvNode, Linear, IdentityNode, SkipConnection, AvgPool
 from fabricpc.core.topology import Edge
 from fabricpc.graph_assembly import TaskMap, graph
 from fabricpc.core import InferenceSGDNormClip
@@ -178,7 +177,7 @@ def make_residual_block(
     nodes = []
     edges = []
 
-    conv_a = Conv2DNode(
+    conv_a = ConvNode(
         shape=(out_h, out_w, channels),
         kernel_size=(3, 3),
         stride=(stride, stride),
@@ -188,7 +187,7 @@ def make_residual_block(
         name=f"{block_name}_conv_a",
     )
 
-    conv_b = Conv2DNode(
+    conv_b = ConvNode(
         shape=(out_h, out_w, channels),
         kernel_size=(3, 3),
         stride=(1, 1),
@@ -213,7 +212,7 @@ def make_residual_block(
     # Skip connection
     needs_downsample = (stride != 1) or (in_channels != channels)
     if needs_downsample:
-        conv_skip = Conv2DNode(
+        conv_skip = ConvNode(
             shape=(out_h, out_w, channels),
             kernel_size=(1, 1),
             stride=(stride, stride),
@@ -263,7 +262,7 @@ def build_resnet18(
     input_node = IdentityNode(shape=(32, 32, 3), name="input")
 
     # Stem convolution: 3x3, 32 channels, no maxpool (CIFAR is 32x32)
-    stem = Conv2DNode(
+    stem = ConvNode(
         shape=(32, 32, 32),
         kernel_size=(3, 3),
         stride=(1, 1),

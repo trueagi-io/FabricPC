@@ -96,8 +96,6 @@ params = initialize_params(structure, rng_key)
 
 Create custom node types by subclassing `NodeBase`. Implement the `forward()` and `initialize_params()` methods. Nodes have a single output. Define slots for incoming connections. Slots are named arguments of the node's transfer function and are referenced in edges when building the graph.
 
-See `examples/custom_node.py` for a complete Conv2D implementation.
-
 ### Inference Algorithms
 Create custom inference algorithms by subclassing `InferenceBase` and implementing the `compute_new_latent()` method.
 

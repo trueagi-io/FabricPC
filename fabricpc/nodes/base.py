@@ -509,3 +509,43 @@ class NodeBase(ABC):
 
         energy = energy_cls.energy(state.z_latent, state.z_mu, config)
         return state._replace(energy=energy)
+
+
+def compute_windowed_output_shape(
+    in_spatial: Tuple[int, ...],
+    kernel: Tuple[int, ...],
+    stride: Tuple[int, ...],
+    padding: Any,
+) -> Tuple[int, ...]:
+    """Expected spatial output dims for a windowed op (conv or pooling).
+
+    Mirrors ``lax.conv_general_dilated`` / ``lax.reduce_window`` (dilation=1),
+    per spatial axis:
+
+      * ``"SAME"``        -> ceil(in / stride)
+      * ``"VALID"``       -> floor((in - k) / stride) + 1
+      * ``(low, high)``   -> floor((in + low + high - k) / stride) + 1
+
+    Validated empirically against both lax ops across stride/padding cases.
+    Used by ConvNode and the pooling nodes to fail fast in ``initialize_params``
+    when the declared node shape disagrees with what the op will produce
+    (otherwise the mismatch only surfaces as an opaque error inside the JITted
+    forward pass).
+    """
+    out = []
+    for axis, (n, k, s) in enumerate(zip(in_spatial, kernel, stride)):
+        if isinstance(padding, str):
+            p = padding.upper()
+            if p == "SAME":
+                o = -(-n // s)  # ceil division
+            elif p == "VALID":
+                o = (n - k) // s + 1
+            else:
+                raise ValueError(
+                    f"Unknown padding string {padding!r}; expected 'SAME' or 'VALID'."
+                )
+        else:
+            lo, hi = padding[axis]
+            o = (n + lo + hi - k) // s + 1
+        out.append(o)
+    return tuple(out)
