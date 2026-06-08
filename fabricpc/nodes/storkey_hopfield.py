@@ -131,6 +131,7 @@ class StorkeyHopfield(NodeBase):
         enforce_symmetry: Symmetrize W via 0.5*(W+W.T) in forward (default: True).
         zero_diagonal: Zero W diagonal in forward (default: False).
         weight_init: Initializer for weights (default: XavierInitializer()).
+        bias_init: Initializer for biases (default: ZerosInitializer()).
         latent_init: Initializer for latent states (default: NormalInitializer()).
     """
 
@@ -146,6 +147,7 @@ class StorkeyHopfield(NodeBase):
         zero_diagonal: bool = False,
         latent_init: Optional[InitializerBase] = NormalInitializer(),
         weight_init: Optional[InitializerBase] = XavierInitializer(),
+        bias_init: Optional[InitializerBase] = ZerosInitializer(),
     ):
         super().__init__(
             shape=shape,
@@ -154,6 +156,7 @@ class StorkeyHopfield(NodeBase):
             energy=energy,
             latent_init=latent_init,
             weight_init=weight_init,
+            bias_init=bias_init,
             hopfield_strength=hopfield_strength,
             use_bias=use_bias,
             enforce_symmetry=enforce_symmetry,
@@ -170,8 +173,8 @@ class StorkeyHopfield(NodeBase):
         key: jax.Array,
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
-        weight_init: Optional[InitializerBase] = None,
-        config: Optional[Dict[str, Any]] = None,
+        weight_init: Optional[InitializerBase],
+        config: Dict[str, Any],
     ) -> NodeParams:
         """
         Initialize Hopfield W matrix and biases.
@@ -183,11 +186,15 @@ class StorkeyHopfield(NodeBase):
             - "b": bias vector if use_bias
             - "hopfield_strength": learnable scalar if hopfield_strength is None
         """
-        if config is None:
-            config = {}
-
+        # LSP forces `weight_init` to be Optional in the signature (base declares
+        # it as Optional[InitializerBase]); narrow at the boundary so Pylance
+        # knows subsequent uses are non-None and so misuse fails loudly.
         if weight_init is None:
-            weight_init = ZerosInitializer()
+            raise TypeError(
+                "StorkeyHopfield.initialize_params: weight_init is required "
+                "(the framework supplies it from node_info.weight_init, which "
+                "is set by __init__'s XavierInitializer() default)."
+            )
 
         # Weights
         weights_dict = {}
@@ -196,7 +203,9 @@ class StorkeyHopfield(NodeBase):
             key,
         )
 
-        # Hopfield W: (D, D)
+        # Hopfield W: (D, D). weight_init is supplied by the framework caller
+        # (params_initializer reads it from node_info.weight_init, which is set
+        # by __init__). Defaults live in the __init__ signature, not here.
         W = initialize(key_hop, (D, D), weight_init)
         # Apply symmetry/diagonal constraints at init time too
         W = StorkeyHopfield._prepare_W(W, config)
@@ -211,20 +220,21 @@ class StorkeyHopfield(NodeBase):
             W  # Store W under the input edge key for gradient flow to presynaptic node.
         )
 
-        # Biases
+        # Biases — use_bias and bias_init are defaulted in __init__ and flow
+        # through node_info.node_config; no need to re-default here.
+        # ZerosInitializer ignores key_b, but we pass it so the call generalizes
+        # to any other initializer the user supplies via bias_init.
+        # Bias shape for proper broadcasting, prepending batch dim: (1, ..., 1, out_features)
         biases = {}
-        # Initialize bias (usually zeros)
-        # Bias shape for proper broadcasting, prepending batch dimension: (1, ..., 1, out_features)
-        use_bias = config.get("use_bias", True)
-        if use_bias:
+        if config["use_bias"]:
             bias_shape = (1,) * len(node_shape) + (node_shape[-1],)
-            biases["b"] = jnp.zeros(bias_shape)
+            biases["b"] = initialize(key_b, bias_shape, config["bias_init"])
 
         # Learnable hopfield_strength if not fixed.
         # Stored as an unconstrained raw parameter; jax.nn.softplus is applied
         # in forward() to guarantee effective strength >= 0. Init raw so that
         # softplus(raw) = 1.0.
-        hopfield_strength = config.get("hopfield_strength", None)
+        hopfield_strength = config["hopfield_strength"]
         if hopfield_strength is None:
             biases["hopfield_strength"] = inverse_softplus(jnp.array(1.0))
 
@@ -296,8 +306,6 @@ class StorkeyHopfield(NodeBase):
         (s/D)(W^2 - W)z accumulated to latent_grad.
         """
         config = node_info.node_config
-        batch_size = state.z_latent.shape[0]
-        out_shape = node_info.shape
 
         edge_key, input_probe_state = next(iter(inputs.items()))
 
