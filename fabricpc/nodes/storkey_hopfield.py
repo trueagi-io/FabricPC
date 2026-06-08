@@ -78,6 +78,7 @@ from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.activations import TanhActivation
 from fabricpc.core.energy import GaussianEnergy
 from fabricpc.core.initializers import (
+    ZerosInitializer,
     NormalInitializer,
     XavierInitializer,
     initialize,
@@ -129,6 +130,7 @@ class StorkeyHopfield(NodeBase):
         enforce_symmetry: Symmetrize W via 0.5*(W+W.T) in forward (default: True).
         zero_diagonal: Zero W diagonal in forward (default: False).
         weight_init: Initializer for weights (default: XavierInitializer()).
+        bias_init: Initializer for biases (default: ZerosInitializer()).
         latent_init: Initializer for latent states (default: NormalInitializer()).
     """
 
@@ -144,6 +146,7 @@ class StorkeyHopfield(NodeBase):
         zero_diagonal: bool = False,
         latent_init: InitializerBase = NormalInitializer(),
         weight_init: InitializerBase = XavierInitializer(),
+        bias_init: InitializerBase = ZerosInitializer(),
     ):
         super().__init__(
             shape=shape,
@@ -152,6 +155,7 @@ class StorkeyHopfield(NodeBase):
             energy=energy,
             latent_init=latent_init,
             weight_init=weight_init,
+            bias_init=bias_init,
             hopfield_strength=hopfield_strength,
             use_bias=use_bias,
             enforce_symmetry=enforce_symmetry,
@@ -210,20 +214,21 @@ class StorkeyHopfield(NodeBase):
             W  # Store W under the input edge key for gradient flow to presynaptic node.
         )
 
-        # Biases
+        # Biases — use_bias and bias_init are defaulted in __init__ and flow
+        # through node_info.node_config; no need to re-default here.
+        # ZerosInitializer ignores key_b, but we pass it so the call generalizes
+        # to any other initializer the user supplies via bias_init.
+        # Bias shape for proper broadcasting, prepending batch dim: (1, ..., 1, out_features)
         biases = {}
-        # Initialize bias (usually zeros)
-        # Bias shape for proper broadcasting, prepending batch dimension: (1, ..., 1, out_features)
-        use_bias = config.get("use_bias", True)
-        if use_bias:
+        if config["use_bias"]:
             bias_shape = (1,) * len(node_shape) + (node_shape[-1],)
-            biases["b"] = jnp.zeros(bias_shape)
+            biases["b"] = initialize(key_b, bias_shape, config["bias_init"])
 
         # Learnable hopfield_strength if not fixed.
         # Stored as an unconstrained raw parameter; jax.nn.softplus is applied
         # in forward() to guarantee effective strength >= 0. Init raw so that
         # softplus(raw) = 1.0.
-        hopfield_strength = config.get("hopfield_strength", None)
+        hopfield_strength = config["hopfield_strength"]
         if hopfield_strength is None:
             biases["hopfield_strength"] = inverse_softplus(jnp.array(1.0))
 
