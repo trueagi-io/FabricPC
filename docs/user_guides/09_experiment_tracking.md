@@ -4,8 +4,11 @@ FabricPC integrates with [Aim](https://aimstack.io/) for comprehensive experimen
 
 ## Installation
 
+> Aim supports Python ≤3.12. On Python 3.13 it is skipped automatically by `[viz]`/`[all]`,
+> so experiment tracking is unavailable there — use a Python ≤3.12 environment for Aim.
+
 ```bash
-pip install fabricpc[viz]
+pip install "fabricpc[viz]"
 ```
 
 Or install Aim directly:

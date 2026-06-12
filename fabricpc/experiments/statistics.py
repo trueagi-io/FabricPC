@@ -6,7 +6,6 @@ All functions operate on numpy arrays and are independent of FabricPC types.
 from dataclasses import dataclass
 
 import numpy as np
-from scipy import stats
 
 
 @dataclass(frozen=True)
@@ -67,6 +66,8 @@ def paired_ttest(group_a: np.ndarray, group_b: np.ndarray) -> PairedTestResult:
     Raises:
         ValueError: If arrays have different lengths or fewer than 2 samples.
     """
+    from scipy import stats
+
     if len(group_a) != len(group_b):
         raise ValueError(
             f"Groups must have same length: {len(group_a)} vs {len(group_b)}"
@@ -125,6 +126,8 @@ def estimate_required_n(
     """
     if abs(observed_d) < 1e-10:
         return 999999
+
+    from scipy import stats
 
     z_alpha = stats.norm.ppf(1 - alpha / 2)
     z_beta = stats.norm.ppf(power)
