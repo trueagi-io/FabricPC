@@ -1,74 +1,56 @@
 # FabricPC
 
-**A flexible, performant predictive coding library**
+**State-of-the-art predictive coding, made easy.**
 
-FabricPC implements predictive coding networks using a clean abstraction of:
-- **Nodes**: State variables (latents), projection functions, and activations
-- **Wires**: Connections (edges) between nodes in the model architecture
-- **Updates**: Iterative inference and local learning algorithms
+FabricPC is an easy-to-use, high-performance open-source Python library for building and training predictive coding networks. It is designed to get researchers from idea to running experiment as fast as possible, eliminating algorithm boilerplate. A single directed edge between nodes is all that's needed to define a connection. Local derivatives are built in, following graph topology. The framework handles inference and learning dynamics automatically for whatever you write in a node's `forward()` method.
 
-Uses JAX for GPU acceleration and local (node-level) automatic differentiation.
+Built on JAX for GPU and multi-GPU acceleration with local (node-level) automatic differentiation.
 
-## About Predictive Coding
-Predictive coding (PC) is a biologically-inspired framework for perception and learning in the brain. It posits that the brain continuously generates predictions about sensory inputs and updates its internal representations based on local prediction errors. 
-PC performs bilevel optimization: an inner loop infers latent activations by minimizing prediction errors, while an outer loop updates weights via local Hebbian-like rules. Under certain conditions, this process is equivalent to backpropagation. While currently slower than backprop on standard hardware, PC offers:
-- Potential for faster inference on neuromorphic hardware
-- Natural handling of recurrent and arbitrary graph architectures
-- Associative memory capabilities
-- Potential novel plasticity rules for continual learning
+## What It Does
 
-There are various flavors of PC. FabricPC provides a graph-based implementation that focuses on principles:
-- Local (Hebbian) learning rules
-- Parallel processing of nodes
-- Modularity of components
-- Arbitrary architectures
-- Scalability with JAX
-- Extensibility for research
- 
-## Quick Start
+FabricPC supports arbitrary graph topologies: feedforward, recurrent, skip connections, and cyclic architectures. Heterogeneous components such as linear nodes, transformer blocks, and Storkey-Hopfield associative memory coexist within the same energy-minimization graph. The same graph topology can be trained by predictive coding (`train_pcn`) or by backpropagation (`train_backprop`), so controlled PC-vs-backprop comparisons reuse one model definition instead of two. See `examples/PC_backprop_compare.py`.
 
-Create a virtual environement with python 3.12.x (higher versions may not work with Aim experiment tracking)
+Internally, everything is organized around three abstractions: nodes (state and computation), edges (connections between nodes), and updates (inference and learning algorithms).
+
+## Installation
+
+Clone this repo and `cd` into the project directory.
+
+Create a virtual environment with Python 3.10–3.13. (The optional Aim experiment tracker in `[viz]`/`[all]` is Linux/macOS only and supports Python ≤3.12; on Windows or Python 3.13 it is skipped automatically and everything else installs normally.)
+
+**Platform:** GPU acceleration requires **Linux** (x86_64 or aarch64) — JAX publishes CUDA wheels for Linux only. On native Windows or macOS, install CPU-only; for GPU on Windows use WSL2 (JAX marks WSL2 GPU support experimental).
 ```bash
-# Install in editable mode (recommended for development, and running examples)
-pip install -e ".[all]"
+# Verify your CUDA version
+nvidia-smi
+```
 
+One command installs FabricPC, all optional deps, and a version-matched JAX backend. Pick the line that matches your platform:
+
+```bash
+pip install -U -e ".[all,cuda13]"   # GPU, CUDA 13
+pip install -U -e ".[all,cuda12]"   # GPU, CUDA 12
+pip install -U -e ".[all]"          # CPU only
+```
+
+See [`docs/user_guides/01_installation.md`](docs/user_guides/01_installation.md) for details. Then set up hooks and run an example:
+
+```bash
 # Install pre-commit hooks for code quality
-pre-commit install     
-
-# Start the Aim visualization server (optional)
-aim up
+pre-commit install
 
 # Run an example
 python examples/mnist_demo.py
 ```
 
-## Features
-- Modular node and wire abstractions for flexible model construction
-- Inherently supports arbitrary architectures: feedforward, recurrent, skip connections, etc.
-- Support for various node types: Linear, ConvNode (1D/2D/3D), Transformers (in progress)
-- Local automatic differentiation for efficient inference and learning
-- JAX backend for GPU acceleration and scalability
+## Build a Model
 
-## Contributions
-Contributions are welcome! Please open issues or pull requests on the GitHub repository.
-- Develop on a branch using convention "feature/your_feature_name"
-- All demos must match baseline results or explain divergence and test suites must pass on rebased PR.
-- Write unit tests and docstrings for new code
-- Use the pre-commit hooks for PEP8 style and code quality (run `pre-commit install` once after cloning!)
-- Follow the rebase instructions in `docs/rebasing_feature_branch.md` before opening a PR.
-
-This is a research-first project.
-- APIs may change frequently until v1.0 release.
-- Any breaking changes are documented in the changelog.
-
-## License
-This project is licensed under the [MIT License](LICENSE).
-
-
-## Building a model
-A model consists of structure and parameters.
+Define the graph. Initialize the parameters. Start experimenting.
 
 ```python
+from jax_setup import set_jax_flags_before_importing_jax
+set_jax_flags_before_importing_jax()
+
+import jax
 from fabricpc.nodes import Linear
 from fabricpc.core.topology import Edge
 from fabricpc.graph_assembly import TaskMap, graph
@@ -81,46 +63,50 @@ layer3 = Linear(shape=(10,), name="output")
 
 structure = graph(
     nodes=[layer1, layer2, layer3],
-    edges=[Edge(layer1, layer2.slot("in")),
-           Edge(layer2, layer3.slot("in"))
-           ],
+    edges=[Edge(source=layer1, target=layer2.slot("in")),
+           Edge(source=layer2, target=layer3.slot("in"))],
     task_map=TaskMap(x=layer1, y=layer3),
     inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
 )
+
+rng_key = jax.random.PRNGKey(0)
 params = initialize_params(structure, rng_key)
 ```
+
+## Demos
+
+The [`examples`](examples/) folder includes working demonstrations across image classification, sequence modeling, depth scaling (`examples/scaling/`), associative memory, and architectural probes. Start with [`mnist_demo.py`](examples/mnist_demo.py) (over 98% accuracy on MNIST) and explore from there.
+
+## Documentation
+
+User guides, API reference, and tutorials live in [`docs/user_guides`](docs/user_guides/00_index.md). Development plans and technical design documents are in [`docs/dev_plans`](docs/dev_plans/).
 
 ## Extending FabricPC
 
 ### Custom Nodes
 
-Create custom node types by subclassing `NodeBase`. Implement the `forward()` and `initialize_params()` methods. Nodes have a single output. Define slots for incoming connections. Slots are named arguments of the node's transfer function and are referenced in edges when building the graph.
+Create custom node types by subclassing `NodeBase`. Implement the `forward()` and `initialize_params()` methods. Nodes have a single output. Define slots for incoming connections. Slots are named arguments of the node's `forward()` method and are referenced in edges when building the graph.
 
-### Inference Algorithms
-Create custom inference algorithms by subclassing `InferenceBase` and implementing the `compute_new_latent()` method.
+See [`docs/user_guides/06_custom_nodes.md`](docs/user_guides/06_custom_nodes.md) for the node contract and an example of Conv2D implementation.
 
-### Learning Algorithms
-Weight learning loop algorithm abstraction is planned for a future release. Optimizer chains are fully supported with Optax and can be used directly in the training loop.
+## Contributing
 
-### Custom Initializers
-Create custom initializers by subclassing `StateInitializerBase` for latent state initialization and implementing the `initialize()` method.
+Contributions are welcome! Please open issues or pull requests on the GitHub repository.
+- Develop on a branch using the convention `username/your_feature_name`.
+- Demos must match baseline results, or explain any divergence.
+- The test suite must pass.
+- Write unit tests and docstrings for new code.
+- Use the pre-commit hooks for PEP8 style and code quality.
+- Rebase before opening PR.
 
-Graph-aware weight initializers are in progress and will be added in a future release.
+This is a research-first project.
+- APIs may change frequently until the v1.0 release.
+- Any breaking changes are documented in the changelog.
 
-Node level initializers extend `InitializerBase` and implement `initialize_weights()` method. These are agnostic to acting on node state or parameters.
+## Team
 
-## Shape Conventions
+FabricPC is actively maintained by SingularityNET as part of the Artificial Superintelligence Alliance. Project lead: Dr. Matthew Behrend.
 
- All shapes use batch-first, channels-last format (NHWC, NLC, NDHWC) and the batch size is not included in node shape definitions.
+## License
 
- - Consistent with JAX's default conv behavior
- - Linear: shape=(features,) - e.g., (128,) for 128-dimensional vector
- - 1D Conv: shape=(seq_len, channels) - e.g., (100, 32) for 100 timesteps, 32 channels
- - 2D Conv: shape=(H, W, C) - e.g., (28, 28, 64) for 28x28 image, 64 channels (NHWC)
- - 3D Conv: shape=(D, H, W, C) - e.g., (32, 32, 32, 16) for 3D volume
-
-Conv Node Shape Flow
-
- - Input:  (batch, H_in, W_in, C_in)   e.g., (32, 28, 28, 1)
- - Kernel: (kH, kW, C_in, C_out)       e.g., (3, 3, 1, 64)
- - Output: (batch, H_out, W_out, C_out) e.g., (32, 26, 26, 64)
+This project is licensed under the [MIT License](LICENSE).
