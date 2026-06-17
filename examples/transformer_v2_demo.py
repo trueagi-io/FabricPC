@@ -85,7 +85,9 @@ def parse_args():
     parser.add_argument(
         "--depth", type=int, default=4, help="Number of transformer layers"
     )
-    parser.add_argument("--embed_dim", type=int, default=128, help="Embedding dimension")
+    parser.add_argument(
+        "--embed_dim", type=int, default=128, help="Embedding dimension"
+    )
     parser.add_argument(
         "--num_heads", type=int, default=8, help="Number of attention heads"
     )
@@ -100,7 +102,9 @@ def parse_args():
     parser.add_argument(
         "--num_epochs", type=int, default=5, help="Number of training epochs"
     )
-    parser.add_argument("--lr", type=float, default=4.8336867874408474e-05, help="Learning rate")
+    parser.add_argument(
+        "--lr", type=float, default=4.8336867874408474e-05, help="Learning rate"
+    )
     parser.add_argument(
         "--infer_steps", type=int, default=26, help="PC inference steps"
     )
@@ -158,10 +162,14 @@ def main(args=None):
             tiktoken_encoding="cl100k_base",  # OpenAI's GPT-4 encoding
             shuffle=True,
             seed=42,
-            vocab_size=11711
+            vocab_size=11711,
         )
         test_loader = BpeDataLoader(
-            "test", seq_len=args.seq_len, batch_size=8, shuffle=False,vocab_size=11711, 
+            "test",
+            seq_len=args.seq_len,
+            batch_size=8,
+            shuffle=False,
+            vocab_size=11711,
         )
     else:
         train_loader = CharDataLoader(
@@ -290,9 +298,9 @@ def main(args=None):
     )
 
     # Decode ONLY the generated tokens (skip the prompt part)
-    generated_ids = generated[args.seq_len:]  # Skip the prompt tokens
+    generated_ids = generated[args.seq_len :]  # Skip the prompt tokens
     generated_text = train_loader.decode(generated_ids)
-    
+
     # Print only the generated text without the prompt prefix
     print(generated_text)
 
