@@ -249,7 +249,9 @@ class FeedforwardStateInit(StateInitBase):
             shape = (batch_size, *node_info.shape)
 
             latent_init = node_info.latent_init
-            z_latent = initialize(rng_key_map[node_name], shape, latent_init)
+            z_latent = jnp.zeros(
+                shape, dtype=jnp.float32
+            )  # initialize(rng_key_map[node_name], shape, latent_init)
             z_latent_dtype = (
                 jnp.asarray(clamps[node_name]).dtype
                 if node_name in clamps

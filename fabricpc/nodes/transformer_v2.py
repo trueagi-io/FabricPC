@@ -3,7 +3,7 @@ Transformer components for JAX predictive coding networks.
 
 Decomposed transformer pipeline — each stage is a separate PC node:
 
-  tokens → Embedding → MhaResidual(+) → LnMlp1 → Mlp2Residual(+) → VocabProjection → logits
+  tokens → Embedding → MhaResidual(+) → Mlp1 → Mlp2Residual(+) → VocabProjection → logits
                         │ (skip)   ↑              │ (skip)    ↑
                         └──────────┘              └───────────┘
 """
@@ -21,8 +21,8 @@ from fabricpc.core.initializers import (
     XavierInitializer,
     KaimingInitializer,
 )
+from fabricpc.graph_initialization import FeedforwardStateInit
 from fabricpc.core.positional import precompute_freqs_cis, apply_rotary_emb
-from fabricpc.utils.helpers import layernorm
 
 # Builder Imports
 from fabricpc.nodes.linear import Linear
@@ -33,8 +33,9 @@ from fabricpc.core.activations import (
     IdentityActivation,
     SoftmaxActivation,
 )
-from fabricpc.core.energy import KLDivergenceEnergy, GaussianEnergy
+from fabricpc.core.energy import CrossEntropyEnergy, GaussianEnergy
 from fabricpc.core.inference import InferenceBase
+from fabricpc.core.mupc import MuPCConfig
 
 # ==============================================================================
 # EMBEDDING NODE
@@ -129,7 +130,7 @@ class EmbeddingNode(NodeBase):
 
 
 # ==============================================================================
-# MULTI-HEAD ATTENTION + RESIDUAL NODE
+# MULTI-HEAD ATTENTION + RESIDUAL NODE (NO LAYERNORM)
 # ==============================================================================
 
 
@@ -169,26 +170,27 @@ class MhaResidualNode(NodeBase):
     def get_slots():
         return {
             "in": SlotSpec("in", False),
+            "skip": SlotSpec(
+                "skip", False, is_variance_scalable=False, is_skip_connection=True
+            ),
             "mask": SlotSpec("mask", False, is_variance_scalable=False),
         }
 
     @staticmethod
     def initialize_params(key, node_shape, input_shapes, weight_init, config):
         dim = config["embed_dim"]
-        keys = jax.random.split(key, 6)
+        keys = jax.random.split(key, 4)
 
         def init_w(k, s):
             return initialize(k, s, weight_init)
 
         weights = {
-            "ln_gamma": jnp.ones((dim,)),
             "W_q": init_w(keys[0], (dim, dim)),
             "W_k": init_w(keys[1], (dim, dim)),
             "W_v": init_w(keys[2], (dim, dim)),
             "W_o": init_w(keys[3], (dim, dim)),
         }
         biases = {
-            "ln_beta": jnp.zeros((dim,)),
             "b_q": jnp.zeros((dim,)),
             "b_k": jnp.zeros((dim,)),
             "b_v": jnp.zeros((dim,)),
@@ -199,6 +201,8 @@ class MhaResidualNode(NodeBase):
     @staticmethod
     def forward(params, inputs, state, node_info):
         x = inputs[next(k for k in inputs if k.endswith(":in"))]
+        skip_key = next((k for k in inputs if k.endswith(":skip")), None)
+        skip = inputs[skip_key] if skip_key else x
         mask_key = next((k for k in inputs if k.endswith(":mask")), None)
         external_mask = inputs[mask_key] if mask_key else None
 
@@ -207,14 +211,13 @@ class MhaResidualNode(NodeBase):
         num_heads = cfg["num_heads"]
         head_dim = D // num_heads
 
-        x_norm = layernorm(x, params.weights["ln_gamma"], params.biases["ln_beta"])
-
+        # No layernorm - use raw input directly
         def proj(h, w_name, b_name):
             return jnp.dot(h, params.weights[w_name]) + params.biases[b_name]
 
-        Q = proj(x_norm, "W_q", "b_q").reshape(B, L, num_heads, head_dim)
-        K = proj(x_norm, "W_k", "b_k").reshape(B, L, num_heads, head_dim)
-        V = proj(x_norm, "W_v", "b_v").reshape(B, L, num_heads, head_dim)
+        Q = proj(x, "W_q", "b_q").reshape(B, L, num_heads, head_dim)
+        K = proj(x, "W_k", "b_k").reshape(B, L, num_heads, head_dim)
+        V = proj(x, "W_v", "b_v").reshape(B, L, num_heads, head_dim)
 
         if cfg.get("use_rope"):
             freqs_cis = precompute_freqs_cis(
@@ -240,7 +243,7 @@ class MhaResidualNode(NodeBase):
         mha = jnp.matmul(attn, V).transpose(0, 2, 1, 3).reshape(B, L, D)
         mha = proj(mha, "W_o", "b_o")
 
-        z_mu = x + mha
+        z_mu = skip + mha
         error = state.z_latent - z_mu
 
         state = state._replace(z_mu=z_mu, error=error)
@@ -249,11 +252,11 @@ class MhaResidualNode(NodeBase):
 
 
 # ==============================================================================
-# LAYERNORM + MLP1 NODE
+# MLP1 NODE (NO LAYERNORM)
 # ==============================================================================
 
 
-class LnMlp1Node(NodeBase):
+class Mlp1Node(NodeBase):
     DEFAULT_ENERGY = GaussianEnergy
     DEFAULT_ACTIVATION = GeluActivation
 
@@ -288,20 +291,20 @@ class LnMlp1Node(NodeBase):
     @staticmethod
     def initialize_params(key, node_shape, input_shapes, weight_init, config):
         embed_dim, ff_dim = config["embed_dim"], config["ff_dim"]
-        keys = jax.random.split(key, 2)
+        keys = jax.random.split(key, 1)
 
         weights = {
-            "ln_gamma": jnp.ones((embed_dim,)),
             "W_ff1": initialize(keys[0], (embed_dim, ff_dim), weight_init),
         }
-        biases = {"ln_beta": jnp.zeros((embed_dim,)), "b_ff1": jnp.zeros((ff_dim,))}
+        biases = {"b_ff1": jnp.zeros((ff_dim,))}
         return NodeParams(weights, biases)
 
     @staticmethod
     def forward(params, inputs, state, node_info):
         x = inputs[list(inputs.keys())[0]]
-        x_norm = layernorm(x, params.weights["ln_gamma"], params.biases["ln_beta"])
-        h = jnp.dot(x_norm, params.weights["W_ff1"]) + params.biases["b_ff1"]
+
+        # No layernorm - use raw input directly
+        h = jnp.dot(x, params.weights["W_ff1"]) + params.biases["b_ff1"]
 
         act_obj = node_info.activation
         z_mu = type(act_obj).forward(h, act_obj.config)
@@ -378,7 +381,7 @@ class Mlp2ResidualNode(NodeBase):
 
 
 class VocabProjectionNode(NodeBase):
-    DEFAULT_ENERGY = KLDivergenceEnergy
+    DEFAULT_ENERGY = CrossEntropyEnergy
     DEFAULT_ACTIVATION = SoftmaxActivation
 
     def __init__(
@@ -401,7 +404,7 @@ class VocabProjectionNode(NodeBase):
             activation=activation or SoftmaxActivation(),
             weight_init=weight_init or XavierInitializer(),
             latent_init=latent_init or NormalInitializer(),
-            energy=energy or KLDivergenceEnergy(),
+            energy=energy or CrossEntropyEnergy(),
             **kwargs,
         )
 
@@ -471,12 +474,17 @@ def create_deep_transformer(
         shape=(seq_len, embed_dim),
         vocab_size=vocab_size,
         embed_dim=embed_dim,
-        weight_init=w_init_obj,
+        weight_init=NormalInitializer(std=1.0),
     )
     nodes.append(embed_node)
     edges.append(Edge(source=input_node, target=embed_node.slot("in")))
 
     previous_residual = embed_node
+
+    mask_node = Linear(
+        shape=(1, seq_len, seq_len), activation=IdentityActivation(), name="causal_mask"
+    )
+    nodes.append(mask_node)
 
     for i in range(depth):
         mha = MhaResidualNode(
@@ -488,8 +496,10 @@ def create_deep_transformer(
         )
         nodes.append(mha)
         edges.append(Edge(source=previous_residual, target=mha.slot("in")))
+        edges.append(Edge(source=previous_residual, target=mha.slot("skip")))
+        edges.append(Edge(source=mask_node, target=mha.slot("mask")))
 
-        mlp1 = LnMlp1Node(
+        mlp1 = Mlp1Node(
             name=f"L{i}_mlp1",
             shape=(seq_len, mlp_dim),
             embed_dim=embed_dim,
@@ -518,7 +528,7 @@ def create_deep_transformer(
         shape=(seq_len, vocab_size),
         vocab_size=vocab_size,
         embed_dim=embed_dim,
-        weight_init=w_init_obj,
+        weight_init=NormalInitializer(std=float(jnp.sqrt(1.0 / embed_dim))),
     )
     nodes.append(logits)
     edges.append(Edge(source=previous_residual, target=logits.slot("in")))
@@ -526,6 +536,8 @@ def create_deep_transformer(
     return graph(
         nodes=nodes,
         edges=edges,
-        task_map=TaskMap(x=input_node, y=logits),
+        task_map=TaskMap(x=input_node, y=logits, causal_mask=mask_node),
         inference=inference,
+        scaling=MuPCConfig(include_output=False),
+        graph_state_initializer=FeedforwardStateInit(),
     )

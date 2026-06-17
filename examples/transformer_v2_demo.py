@@ -31,17 +31,45 @@ import jax
 import jax.numpy as jnp
 from fabricpc.graph_initialization import initialize_params
 from fabricpc.training import (
-    train_pcn,
-    evaluate_transformer,
-    train_backprop,
-    evaluate_backprop,
+    train_autoregressive,
+    evaluate_autoregressive,
+    train_backprop_autoregressive,
+    evaluate_backprop_autoregressive,
+    generate_autoregressive,
 )
-from fabricpc.core.inference import run_inference, InferenceSGD
-from fabricpc.graph_initialization.state_initializer import initialize_graph_state
+from fabricpc.core.inference import InferenceSGDNormClip
 from fabricpc.nodes.transformer_v2 import create_deep_transformer
-from fabricpc.utils.data import CharDataLoader
+from fabricpc.utils.data import CharDataLoader, BpeDataLoader
 import optax
 import time
+
+BPE_DEFAULTS = {
+    "embed_dim": 128,
+    "num_heads": 8,
+    "mlp_dim": 512,
+    "depth": 4,
+    "seq_len": 32,
+    "batch_size": 8,
+    "num_epochs": 5,
+    "infer_steps": 26,
+    "lr": 4.8336867874408474e-05,
+    "eta_infer": 0.087354491301969,
+    "weight_init_std": 0.019440512955251017,
+}
+
+CHAR_DEFAULTS = {
+    "embed_dim": 64,
+    "num_heads": 4,
+    "mlp_dim": 512,
+    "depth": 3,
+    "seq_len": 64,
+    "batch_size": 8,
+    "num_epochs": 5,
+    "infer_steps": 18,
+    "lr": 6.710357156410781e-05,
+    "eta_infer": 0.08895631378177452,
+    "weight_init_std": 0.043898823650793964,
+}
 
 
 def parse_args():
@@ -57,122 +85,99 @@ def parse_args():
     parser.add_argument(
         "--depth", type=int, default=4, help="Number of transformer layers"
     )
-    parser.add_argument("--embed_dim", type=int, default=64, help="Embedding dimension")
+    parser.add_argument("--embed_dim", type=int, default=128, help="Embedding dimension")
     parser.add_argument(
-        "--num_heads", type=int, default=4, help="Number of attention heads"
+        "--num_heads", type=int, default=8, help="Number of attention heads"
     )
-    parser.add_argument("--mlp_dim", type=int, default=128, help="MLP hidden dimension")
+    parser.add_argument("--mlp_dim", type=int, default=512, help="MLP hidden dimension")
     parser.add_argument("--seq_len", type=int, default=32, help="Sequence length")
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=32,
+        default=8,
         help="Batch size (per-device for PC mode, total for backprop)",
     )
     parser.add_argument(
         "--num_epochs", type=int, default=5, help="Number of training epochs"
     )
-    parser.add_argument("--lr", type=float, default=1e-5, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=4.8336867874408474e-05, help="Learning rate")
     parser.add_argument(
-        "--infer_steps", type=int, default=17, help="PC inference steps"
+        "--infer_steps", type=int, default=26, help="PC inference steps"
     )
     parser.add_argument(
         "--eta_infer",
         type=float,
-        default=0.033195052120243505,
+        default=0.087354491301969,
         help="PC inference step size",
     )
     parser.add_argument(
         "--weight_init_std",
         type=float,
-        default=0.04402197307582635,
+        default=0.019,
         help="Weight init std",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
-    return parser.parse_args()
-
-
-def generate(
-    trained_params,
-    structure,
-    char_to_ix,
-    ix_to_char,
-    seq_len,
-    start_text="ROMEO: ",
-    length=50,
-    temperature=0.8,
-    use_inference=True,
-):
-    seed_indices = [char_to_ix.get(c, 0) for c in start_text]
-    if len(seed_indices) < seq_len:
-        current_indices = [0] * (seq_len - len(seed_indices)) + seed_indices
-    else:
-        current_indices = seed_indices[-seq_len:]
-
-    result_text = start_text
-    gen_key = jax.random.PRNGKey(99)
-
-    print(f"--- Generating ---")
-    for _ in range(length):
-        input_batch = jnp.array([current_indices], dtype=jnp.int32)
-        inputs = {"input_ids": input_batch}
-        batch_size = input_batch.shape[0]
-
-        state = initialize_graph_state(
-            structure, batch_size, gen_key, clamps=inputs, params=trained_params
-        )
-
-        if use_inference:
-            final_state = run_inference(trained_params, state, inputs, structure)
-        else:
-            final_state = state
-
-        logits_node_state = final_state.nodes["logits"]
-        last_step_logits = logits_node_state.z_latent[0, -1, :]
-
-        gen_key, sample_key = jax.random.split(gen_key)
-        scaled_logits = last_step_logits / temperature
-        next_idx = int(jax.random.categorical(sample_key, scaled_logits))
-
-        next_char = ix_to_char[next_idx]
-        result_text += next_char
-        current_indices = current_indices[1:] + [next_idx]
-
-    print(result_text)
+    parser.add_argument(
+        "--tokenizer",
+        choices=["char", "bpe"],
+        default="bpe",
+        help="Tokenizer to use",
+    )
+    return parser.parse_args(), parser
 
 
 def main(args=None):
     if args is None:
-        args = parse_args()
+        args, parser = parse_args()
 
     use_pc = args.mode == "pc"
 
     # --- Batch size ---
     if use_pc:
         n_devices = jax.device_count()
-        batch_size = args.batch_size * n_devices
+        batch_size = args.batch_size
         print(f"PC mode: {n_devices} device(s), total batch_size={batch_size}")
     else:
         batch_size = args.batch_size
         print(f"Backprop mode: single device, batch_size={batch_size}")
 
     # --- Data ---
-    train_loader = CharDataLoader(
-        "train",
-        seq_len=args.seq_len,
-        batch_size=batch_size,
-        shuffle=True,
-        seed=args.seed,
-    )
-    val_loader = CharDataLoader(
-        "validation", seq_len=args.seq_len, batch_size=batch_size, shuffle=False
-    )
-    test_loader = CharDataLoader(
-        "test", seq_len=args.seq_len, batch_size=batch_size, shuffle=False
-    )
+    use_bpe = args.tokenizer == "bpe"
+    defaults = BPE_DEFAULTS if use_bpe else CHAR_DEFAULTS
+
+    for key, val in defaults.items():
+        if getattr(args, key) == parser.get_default(key):
+            setattr(args, key, val)
+
+    if use_bpe:
+        train_loader = BpeDataLoader(
+            split="train",
+            seq_len=32,
+            batch_size=8,
+            tokenizer_type="tokenizers",
+            tiktoken_encoding="cl100k_base",  # OpenAI's GPT-4 encoding
+            shuffle=True,
+            seed=42,
+            vocab_size=11711
+        )
+        test_loader = BpeDataLoader(
+            "test", seq_len=args.seq_len, batch_size=8, shuffle=False,vocab_size=11711, 
+        )
+    else:
+        train_loader = CharDataLoader(
+            "train",
+            seq_len=args.seq_len,
+            batch_size=batch_size,
+            shuffle=True,
+            seed=args.seed,
+        )
+        test_loader = CharDataLoader(
+            "test", seq_len=args.seq_len, batch_size=batch_size, shuffle=False
+        )
+
     vocab_size = train_loader.vocab_size
-    char_to_ix = train_loader.char_to_idx
-    ix_to_char = train_loader.idx_to_char
+    char_to_ix = train_loader.token_to_idx if use_bpe else train_loader.char_to_idx
+    ix_to_char = train_loader.idx_to_token if use_bpe else train_loader.idx_to_char
 
     # --- Model ---
     structure = create_deep_transformer(
@@ -182,7 +187,12 @@ def main(args=None):
         mlp_dim=args.mlp_dim,
         seq_len=args.seq_len,
         vocab_size=vocab_size,
-        inference=InferenceSGD(eta_infer=args.eta_infer, infer_steps=args.infer_steps),
+        inference=InferenceSGDNormClip(
+            eta_infer=args.eta_infer,
+            infer_steps=args.infer_steps,
+            max_norm=5.0,
+            latent_decay=0.0,
+        ),
         weight_init={"type": "normal", "std": args.weight_init_std},
     )
 
@@ -191,17 +201,33 @@ def main(args=None):
     graph_key, train_key, eval_key = jax.random.split(master_rng_key, 3)
 
     params = initialize_params(structure, graph_key)
+    n_params = sum(x.size for x in jax.tree_util.tree_leaves(params))
+    print(f"Model parameters: {n_params:,}")
 
     train_config = {
         "num_epochs": args.num_epochs,
+        "use_causal_mask": True,
     }
-    optimizer = optax.adam(args.lr)
+    steps_per_epoch = train_loader.num_sequences // batch_size
+    schedule = optax.cosine_decay_schedule(
+        init_value=args.lr,
+        decay_steps=args.num_epochs * steps_per_epoch,
+        alpha=0.1,
+    )
+    optimizer = optax.adam(schedule)
 
     print(f"Vocab Size: {vocab_size}")
     start = time.time()
 
+    def iter_callback(epoch_idx, batch_idx, energy):
+        if (batch_idx + 1) % 10 == 0:
+            print(
+                f"Epoch {epoch_idx + 1} | Batch {batch_idx + 1} | Energy: {energy:.4f}"
+            )
+        return energy
+
     if use_pc:
-        trained_params, _, _ = train_pcn(
+        trained_params, _, _ = train_autoregressive(
             params,
             structure,
             train_loader,
@@ -209,9 +235,10 @@ def main(args=None):
             train_config,
             train_key,
             verbose=True,
+            iter_callback=iter_callback,
         )
     else:
-        trained_params, _, _ = train_backprop(
+        trained_params, _, _ = train_backprop_autoregressive(
             params,
             structure,
             train_loader,
@@ -224,36 +251,51 @@ def main(args=None):
     print(f"Training completed in {time.time() - start:.1f}s")
 
     # --- Evaluate ---
+    eval_start = time.time()
     if use_pc:
-        metrics = evaluate_transformer(
+        metrics = evaluate_autoregressive(
             trained_params, structure, test_loader, train_config, eval_key
         )
-        print(f"Test Accuracy:   {metrics['accuracy'] * 100:.2f}%")
-        print(f"Test CE Loss:    {metrics['cross_entropy']:.4f}")
-        print(f"Test Perplexity: {metrics['perplexity']:.2f}")
-        print(f"Test Energy:     {metrics['energy']:.4f}")
     else:
-        metrics = evaluate_backprop(
+        metrics = evaluate_backprop_autoregressive(
             trained_params, structure, test_loader, train_config, eval_key
         )
-        print(f"Test Accuracy:   {metrics['accuracy'] * 100:.2f}%")
-        print(f"Test CE Loss:    {metrics['loss']:.4f}")
-        print(f"Test Perplexity: {metrics['perplexity']:.2f}")
+    print(f"Evaluation completed in {time.time() - eval_start:.1f}s")
 
-    # --- Text Generation ---
-    generate(
+    print(f"Test Accuracy:   {metrics['accuracy'] * 100:.2f}%")
+    print(f"Test CE Loss:    {metrics['loss']:.4f}")
+    print(f"Test Perplexity: {metrics['perplexity']:.2f}")
+
+    # --- Text Generation (without prompt prefix) ---
+    gen_key = jax.random.PRNGKey(99)
+    prompt_text = "ROMEO: "
+    if use_bpe:
+        seed_indices = train_loader._tok.encode(prompt_text).ids
+    else:
+        seed_indices = [char_to_ix.get(c, 0) for c in prompt_text]
+
+    current_indices = ([0] * (args.seq_len - len(seed_indices)) + seed_indices)[
+        -args.seq_len :
+    ]
+    prompt = jnp.array(current_indices, dtype=jnp.int32)
+
+    print("--- Generating ---")
+    generated = generate_autoregressive(
         trained_params,
         structure,
-        char_to_ix,
-        ix_to_char,
-        args.seq_len,
-        start_text="ROMEO: ",
-        length=100,
+        prompt,
+        max_new_tokens=200,
+        rng_key=gen_key,
         temperature=0.8,
-        use_inference=use_pc,
     )
+
+    # Decode ONLY the generated tokens (skip the prompt part)
+    generated_ids = generated[args.seq_len:]  # Skip the prompt tokens
+    generated_text = train_loader.decode(generated_ids)
+    
+    # Print only the generated text without the prompt prefix
+    print(generated_text)
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    main(args)
+    main()
