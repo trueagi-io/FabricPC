@@ -164,8 +164,18 @@ class ConvNode(NodeBase):
         # signature, and flow in via node_info.weight_init / config. They are
         # not re-defaulted here — the single source of truth is the constructor.
         bias_init = config.get("bias_init")
+        # Fail fast rather than passing None to initialize() below. Normal graph
+        # construction never hits this (the constructor defaults bias_init to
+        # ZerosInitializer); it only guards a hand-built config or an explicit
+        # bias_init=None paired with use_bias=True.
+        if use_bias and bias_init is None:
+            raise ValueError(
+                "ConvNode: use_bias=True but bias_init is None. Pass a bias "
+                "initializer (e.g. ZerosInitializer()) or set use_bias=False."
+            )
 
-        keys = jax.random.split(key, len(input_shapes) + 1)
+        # One key per weight edge, plus one for the bias only when needed.
+        keys = jax.random.split(key, len(input_shapes) + (1 if use_bias else 0))
 
         stride = config.get("stride")
         padding = config.get("padding")

@@ -242,6 +242,16 @@ class TestConvNodeInitializeParams:
         )
         assert params.biases == {}
 
+    def test_use_bias_without_bias_init_raises(self):
+        """use_bias=True with bias_init=None fails fast rather than passing None
+        into the initializer (only reachable via a hand-built config)."""
+        key = jax.random.PRNGKey(0)
+        config = {"kernel_size": (3,), "use_bias": True, "bias_init": None}
+        with pytest.raises(ValueError, match="bias_init is None"):
+            ConvNode.initialize_params(
+                key, (10, 8), {"e:in": (10, 4)}, KaimingInitializer(), config
+            )
+
     def test_xavier_init_accepted(self):
         """Non-Kaiming initializers should be forwarded directly."""
         node = ConvNode(

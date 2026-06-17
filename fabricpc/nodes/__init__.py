@@ -31,10 +31,6 @@ from fabricpc.nodes.linear_residual import LinearResidual
 from fabricpc.nodes.convolutional import ConvNode
 from fabricpc.nodes.pooling import MaxPool, AvgPool
 
-# Convenience aliases matching the target API
-Linear = Linear
-TransformerBlock = TransformerBlock
-
 __all__ = [
     # Base classes and mixins
     "SlotSpec",
