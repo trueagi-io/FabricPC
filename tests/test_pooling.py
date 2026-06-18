@@ -19,17 +19,53 @@ jax.config.update("jax_default_prng_impl", "threefry2x32")
 
 
 class TestMaxPoolValidation:
+    """Windowed validation is deferred to initialize_params (input shapes are
+    only known there), so these construct then trigger it."""
+
+    @staticmethod
+    def _init(node, in_shape):
+        return MaxPool.initialize_params(
+            jax.random.PRNGKey(0),
+            node._shape,
+            {"e:in": in_shape},
+            None,
+            node._extra_config,
+        )
+
     def test_bad_spatial_rank_raises(self):
+        node = MaxPool(shape=(10,), name="bad", window_shape=(2,), stride=(2,))
         with pytest.raises(ValueError, match="spatial_rank"):
-            MaxPool(shape=(10,), name="bad", window_shape=(2,), stride=(2,))
+            self._init(node, (10,))
 
     def test_window_shape_mismatch_raises(self):
-        with pytest.raises(ValueError, match="window_shape"):
-            MaxPool(shape=(14, 14, 16), name="bad", window_shape=(2,), stride=(2, 2))
+        node = MaxPool(shape=(14, 14, 16), name="bad", window_shape=(2,), stride=(2, 2))
+        with pytest.raises(ValueError, match="length"):
+            self._init(node, (28, 28, 16))
 
     def test_stride_mismatch_raises(self):
+        node = MaxPool(shape=(14, 14, 16), name="bad", window_shape=(2, 2), stride=(2,))
         with pytest.raises(ValueError, match="stride"):
-            MaxPool(shape=(14, 14, 16), name="bad", window_shape=(2, 2), stride=(2,))
+            self._init(node, (28, 28, 16))
+
+    def test_channel_mismatch_raises(self):
+        """Pooling preserves channels: declared C must match the input's C."""
+        node = MaxPool(
+            shape=(14, 14, 8), name="bad", window_shape=(2, 2), stride=(2, 2)
+        )
+        with pytest.raises(ValueError, match="channels|preserves channels"):
+            self._init(node, (28, 28, 16))  # 16 in, 8 declared
+
+    def test_explicit_padding_ge_window_raises(self):
+        """Explicit padding >= window would let a max window fill with -inf."""
+        node = MaxPool(
+            shape=(8, 8, 4),
+            name="bad",
+            window_shape=(2, 2),
+            stride=(2, 2),
+            padding=((2, 2), (0, 0)),  # lo=hi=2 >= window 2
+        )
+        with pytest.raises(ValueError, match="window"):
+            self._init(node, (14, 14, 4))
 
     def test_valid_2d_construction(self):
         node = MaxPool(
@@ -112,10 +148,14 @@ class TestMaxPoolParams:
 
     def test_no_weights_or_biases(self):
         key = jax.random.PRNGKey(0)
+        # A valid windowed config (28x28 -> 14x14) so validation passes; the
+        # point of the test is that pooling allocates no params.
+        config = {"window_shape": (2, 2), "stride": (2, 2), "padding": "VALID"}
         params = MaxPool.initialize_params(
             key,
             node_shape=(14, 14, 16),
             input_shapes={"src→pool:in": (28, 28, 16)},
+            config=config,
         )
         assert params.weights == {}
         assert params.biases == {}

@@ -72,21 +72,37 @@ def _make_state(key, batch_size, node_shape):
 
 
 class TestConvNodeValidation:
-    """Tests for __init__ argument validation."""
+    """Tests for argument validation.
+
+    Structural/shape validation is deferred to ``initialize_params`` (the only
+    place input shapes are known), so these construct the node and then trigger
+    the shared ``validate_windowed_output`` check via ``initialize_params``.
+    """
+
+    @staticmethod
+    def _init(node, in_shape):
+        return ConvNode.initialize_params(
+            jax.random.PRNGKey(0),
+            node._shape,
+            {"e:in": in_shape},
+            node._weight_init,
+            node._extra_config,
+        )
 
     def test_bad_spatial_rank_raises(self):
+        node = ConvNode(shape=(32,), name="x", kernel_size=(3,))  # 0-D spatial
         with pytest.raises(ValueError, match="spatial_rank"):
-            ConvNode(shape=(32,), name="x", kernel_size=(3,))  # 0-D spatial
+            self._init(node, (32,))
 
     def test_shape_5d_raises(self):
+        node = ConvNode(shape=(4, 4, 4, 4, 16), name="x", kernel_size=(3, 3, 3, 3))
         with pytest.raises(ValueError, match="spatial_rank"):
-            ConvNode(shape=(4, 4, 4, 4, 16), name="x", kernel_size=(3, 3, 3, 3))
+            self._init(node, (4, 4, 4, 4, 3))
 
     def test_kernel_size_rank_mismatch_raises(self):
-        with pytest.raises(ValueError, match="kernel_size length"):
-            ConvNode(
-                shape=(28, 28, 16), name="x", kernel_size=(3,)
-            )  # 2D shape, 1D kernel
+        node = ConvNode(shape=(28, 28, 16), name="x", kernel_size=(3,))  # 2D, 1D kernel
+        with pytest.raises(ValueError, match="length"):
+            self._init(node, (28, 28, 3))
 
     def test_stride_auto_filled(self):
         node = ConvNode(shape=(28, 28, 16), name="x", kernel_size=(3, 3))
@@ -309,6 +325,42 @@ class TestConvNodeInitializeParams:
 
 class TestConvNodeForward:
     """Shape and value tests for the forward pass."""
+
+    def test_2d_known_value_cross_correlation(self):
+        """Hand-computed cross-correlation on a *rectangular* input with an
+        asymmetric kernel. Shape/energy-only tests pass even with transposed
+        dimension numbers; this pins the actual arithmetic and H/W ordering.
+
+        Input is 3x4 with values 0..11 row-major; kernel (kH=2, kW=1) = [1, -1]
+        computes out[h, w] = x[h, w] - x[h+1, w]. Each row is +4 over the one
+        below, so every output element is -4, on a (2, 4) grid. A transposed
+        layout would instead produce a (3, 3) grid and fail the shape assert.
+        """
+        from fabricpc.core.activations import IdentityActivation
+
+        x = jnp.arange(12.0).reshape(1, 3, 4, 1)
+        kernel = jnp.array([1.0, -1.0]).reshape(2, 1, 1, 1)  # (kH, kW, C_in, C_out)
+        config = {
+            "kernel_size": (2, 1),
+            "stride": (1, 1),
+            "padding": "VALID",
+            "use_bias": False,
+        }
+        node_info = _make_node_info(
+            ConvNode,
+            (2, 4, 1),
+            config,
+            IdentityActivation(),
+            GaussianEnergy(),
+            NormalInitializer(),
+            KaimingInitializer(),
+            in_edges=("e:in",),
+        )
+        params = NodeParams(weights={"e:in": kernel}, biases={})
+        state = _make_state(jax.random.PRNGKey(0), 1, (2, 4, 1))
+        _, new_state = ConvNode.forward(params, {"e:in": x}, state, node_info)
+        assert new_state.z_mu.shape == (1, 2, 4, 1)
+        assert jnp.allclose(new_state.z_mu, -4.0)
 
     @pytest.fixture(params=["SAME", "VALID"])
     def setup_1d(self, request):

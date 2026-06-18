@@ -12,6 +12,7 @@ from fabricpc.nodes.base import (
     Slot,
     NodeBase,
     FlattenInputMixin,
+    compute_windowed_output_shape,
 )
 
 from fabricpc.nodes.linear import Linear
@@ -37,6 +38,7 @@ __all__ = [
     "Slot",
     "NodeBase",
     "FlattenInputMixin",
+    "compute_windowed_output_shape",
     # Built-in nodes (full names)
     "Linear",
     "LinearExplicitGrad",

@@ -590,5 +590,94 @@ def compute_windowed_output_shape(
         else:
             lo, hi = padding[axis]
             o = (n + lo + hi - k) // s + 1
+        if o <= 0:
+            raise ValueError(
+                f"Windowed op produces a non-positive output size ({o}) on "
+                f"spatial axis {axis}: input={n}, kernel/window={k}, stride={s}, "
+                f"padding={padding!r}. The kernel/window is larger than the "
+                f"(padded) input along this axis."
+            )
         out.append(o)
     return tuple(out)
+
+
+def validate_windowed_output(
+    node_shape: Tuple[int, ...],
+    input_shapes: Dict[str, Tuple[int, ...]],
+    window: Optional[Tuple[int, ...]],
+    stride: Optional[Tuple[int, ...]],
+    padding: Any,
+    *,
+    op_name: str,
+    channels_preserved: bool,
+    reject_pad_ge_window: bool = False,
+) -> None:
+    """Validate a windowed op's declared output shape against its inputs.
+
+    Single source of truth for ConvNode and the pooling nodes — called from
+    ``initialize_params`` (the only place input shapes are known), so windowed
+    validation fires there rather than at construction. Raises ``ValueError``
+    with a message naming both shapes and the offending edge on any
+    disagreement. Checks, in order:
+
+      * spatial rank ``len(node_shape) - 1`` is 1/2/3;
+      * ``window`` and ``stride`` are both present — a missing key raises rather
+        than silently skipping validation — and their lengths equal the rank;
+      * with ``reject_pad_ge_window`` (max pooling), explicit ``(low, high)``
+        padding stays below the window on every axis, since a fully-padded
+        window fills with ``-inf``;
+      * channels match the input when ``channels_preserved`` (pooling keeps the
+        channel count; conv sets it from the kernel, so it passes False);
+      * the computed spatial output equals the declared spatial shape.
+    """
+    spatial_rank = len(node_shape) - 1
+    if spatial_rank not in (1, 2, 3):
+        raise ValueError(
+            f"{op_name} shape must have 2-4 elements (spatial_rank 1/2/3). "
+            f"Got shape={node_shape}."
+        )
+    if window is None or stride is None:
+        raise ValueError(
+            f"{op_name}: both window/kernel and stride are required for output "
+            f"shape validation; got window={window!r}, stride={stride!r}."
+        )
+    if len(window) != spatial_rank:
+        raise ValueError(
+            f"{op_name}: window/kernel length {len(window)} must equal "
+            f"spatial_rank {spatial_rank} inferred from shape={node_shape}."
+        )
+    if len(stride) != spatial_rank:
+        raise ValueError(
+            f"{op_name}: stride length {len(stride)} must equal "
+            f"spatial_rank {spatial_rank} inferred from shape={node_shape}."
+        )
+    if reject_pad_ge_window and not isinstance(padding, str):
+        for axis, ((lo, hi), k) in enumerate(zip(padding, window)):
+            if lo >= k or hi >= k:
+                raise ValueError(
+                    f"{op_name}: explicit padding {(lo, hi)} on spatial axis "
+                    f"{axis} is >= the window size {k}. A fully-padded max-pool "
+                    f"window would output -inf; reduce the padding below the "
+                    f"window size."
+                )
+
+    declared_spatial = tuple(node_shape[:-1])
+    declared_channels = node_shape[-1]
+    for edge_key, in_shape in input_shapes.items():
+        if channels_preserved and in_shape[-1] != declared_channels:
+            raise ValueError(
+                f"{op_name} preserves channels but declares {declared_channels} "
+                f"while edge '{edge_key}' supplies {in_shape[-1]} (input shape "
+                f"{tuple(in_shape)}). Pooling cannot change the channel count; "
+                f"set the node's channel dimension to match its input."
+            )
+        expected_spatial = compute_windowed_output_shape(
+            in_shape[:-1], window, stride, padding
+        )
+        if expected_spatial != declared_spatial:
+            raise ValueError(
+                f"{op_name} declared output spatial shape {declared_spatial} but "
+                f"edge '{edge_key}' (input spatial {tuple(in_shape[:-1])}, window "
+                f"{tuple(window)}, stride {tuple(stride)}, padding {padding!r}) "
+                f"produces {expected_spatial}."
+            )

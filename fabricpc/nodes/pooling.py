@@ -7,6 +7,12 @@ parameter-free graph elements: you wire them in like any other operation, but
 the dropped ``Node`` suffix signals that they carry no learnable weights and
 exist only to reduce spatial dimensions — not to learn a representation.
 
+Windowed shape validation (rank, window/stride length, channel count,
+declared-vs-computed output) fires in ``initialize_params`` via the shared
+``validate_windowed_output`` helper — not at construction — because the input
+shapes it checks against are only known once the graph is wired. Global
+``AvgPool``'s rank-1 shape check is not windowed and stays at construction.
+
 muPC scaling note
 -----------------
 Pooling is a weightless *transformation*, not an identity skip-connection
@@ -37,7 +43,7 @@ import jax
 import jax.lax as lax
 import jax.numpy as jnp
 
-from fabricpc.nodes.base import NodeBase, SlotSpec, compute_windowed_output_shape
+from fabricpc.nodes.base import NodeBase, SlotSpec, validate_windowed_output
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.activations import IdentityActivation
 from fabricpc.core.energy import GaussianEnergy
@@ -59,38 +65,7 @@ class _PoolBase(NodeBase):
     ``MaxPool`` or ``AvgPool``.
     """
 
-    # -- shared validation for windowed pooling ----------------------------
-
-    @staticmethod
-    def _validate_windowed(
-        shape: Tuple[int, ...],
-        window_shape: Tuple[int, ...],
-        stride: Optional[Tuple[int, ...]],
-        node_name: str,
-    ) -> Tuple[int, Tuple[int, ...]]:
-        """Validate windowed-pool args; return (spatial_rank, resolved_stride).
-
-        ``stride`` defaults to ``window_shape`` (non-overlapping pooling).
-        """
-        spatial_rank = len(shape) - 1
-        if spatial_rank not in (1, 2, 3):
-            raise ValueError(
-                f"{node_name} shape must have 2-4 elements (spatial_rank 1/2/3). "
-                f"Got shape={shape}."
-            )
-        if len(window_shape) != spatial_rank:
-            raise ValueError(
-                f"window_shape length {len(window_shape)} must equal "
-                f"spatial_rank {spatial_rank} inferred from shape={shape}."
-            )
-        if stride is None:
-            stride = window_shape
-        if len(stride) != spatial_rank:
-            raise ValueError(
-                f"stride length {len(stride)} must equal "
-                f"spatial_rank {spatial_rank} inferred from shape={shape}."
-            )
-        return spatial_rank, stride
+    # -- shared helpers -----------------------------------------------------
 
     @staticmethod
     def _format_pool_padding(
@@ -134,36 +109,26 @@ class _PoolBase(NodeBase):
     ) -> NodeParams:
         """Pooling has no learnable parameters.
 
-        Windowed mode still validates here (the only place input shapes are
-        available) that the declared output spatial shape matches what the
-        window/stride/padding will produce, failing fast instead of late in
-        forward. Global mode has no spatial output, so it is skipped (its
-        rank-1 shape is checked at construction).
+        Windowed mode validates here (the only place input shapes are known)
+        that rank, window/stride length, channel count, and the declared output
+        spatial shape all agree with what the window/stride/padding will
+        produce — failing fast instead of late in forward. Global mode has no
+        spatial output, so it is skipped (its rank-1 shape is checked at
+        construction).
         """
         config = config or {}
-        window_shape = config.get("window_shape")
-        stride = config.get("stride")
-        padding = config.get("padding")
-        # Validate only when the windowed-pool params are present (they always
-        # are via the constructor; a hand-built config may omit them).
-        if not config.get("global_pool", False) and None not in (
-            window_shape,
-            stride,
-            padding,
-        ):
-            declared_spatial = tuple(node_shape[:-1])
-            for edge_key, in_shape in input_shapes.items():
-                expected_spatial = compute_windowed_output_shape(
-                    in_shape[:-1], window_shape, stride, padding
-                )
-                if expected_spatial != declared_spatial:
-                    raise ValueError(
-                        f"Pooling declared output spatial shape "
-                        f"{declared_spatial} but edge '{edge_key}' "
-                        f"(input spatial {tuple(in_shape[:-1])}, window "
-                        f"{tuple(window_shape)}, stride {tuple(stride)}, "
-                        f"padding {padding!r}) produces {expected_spatial}."
-                    )
+        if not config.get("global_pool", False):
+            # channels_preserved=True: pooling cannot change the channel count.
+            validate_windowed_output(
+                node_shape,
+                input_shapes,
+                window=config.get("window_shape"),
+                stride=config.get("stride"),
+                padding=config.get("padding"),
+                op_name=config.get("pool_op_name", "Pooling"),
+                channels_preserved=True,
+                reject_pad_ge_window=config.get("reject_pad_ge_window", False),
+            )
         return NodeParams(weights={}, biases={})
 
     @staticmethod
@@ -223,18 +188,14 @@ class MaxPool(_PoolBase):
         window_shape: Tuple[int, ...],
         stride: Optional[Tuple[int, ...]] = None,
         padding: Union[str, Sequence[Tuple[int, int]]] = "VALID",
-        activation: Optional["ActivationBase"] = None,
-        energy: Optional["EnergyFunctional"] = None,
-        latent_init: Optional["InitializerBase"] = None,
+        activation: "ActivationBase" = IdentityActivation(),
+        energy: "EnergyFunctional" = GaussianEnergy(),
+        latent_init: "InitializerBase" = NormalInitializer(),
     ):
-        _, stride = self._validate_windowed(shape, window_shape, stride, "MaxPool")
-
-        if activation is None:
-            activation = IdentityActivation()
-        if energy is None:
-            energy = GaussianEnergy()
-        if latent_init is None:
-            latent_init = NormalInitializer()
+        # Stride defaults to the window (non-overlapping pooling). Structural
+        # validation is deferred to initialize_params (see module docstring).
+        if stride is None:
+            stride = window_shape
 
         super().__init__(
             shape=shape,
@@ -247,6 +208,10 @@ class MaxPool(_PoolBase):
             window_shape=window_shape,
             stride=stride,
             padding=padding,
+            pool_op_name="MaxPool",
+            # Max pooling fills with -inf, so a window fully covered by explicit
+            # padding would output -inf; validate_windowed_output rejects it.
+            reject_pad_ge_window=True,
         )
 
     @staticmethod
@@ -306,14 +271,15 @@ class AvgPool(_PoolBase):
         padding: Union[str, Sequence[Tuple[int, int]]] = "VALID",
         global_pool: bool = False,
         count_include_pad: bool = True,
-        activation: Optional["ActivationBase"] = None,
-        energy: Optional["EnergyFunctional"] = None,
-        latent_init: Optional["InitializerBase"] = None,
+        activation: "ActivationBase" = IdentityActivation(),
+        energy: "EnergyFunctional" = GaussianEnergy(),
+        latent_init: "InitializerBase" = NormalInitializer(),
     ):
         if global_pool:
             # Global mode collapses all spatial dims -> (B, C), so the declared
-            # output shape (batch excluded) must be rank-1: (C,). Fail fast here
-            # rather than at the first forward with an opaque shape mismatch.
+            # output shape (batch excluded) must be rank-1: (C,). This is not a
+            # windowed check, so it stays at construction. Fail fast here rather
+            # than at the first forward with an opaque shape mismatch.
             if len(shape) != 1:
                 raise ValueError(
                     f"AvgPool global_pool=True requires a rank-1 shape (C,), "
@@ -327,14 +293,10 @@ class AvgPool(_PoolBase):
                 raise ValueError(
                     "AvgPool: window_shape is required when global_pool=False."
                 )
-            _, stride = self._validate_windowed(shape, window_shape, stride, "AvgPool")
-
-        if activation is None:
-            activation = IdentityActivation()
-        if energy is None:
-            energy = GaussianEnergy()
-        if latent_init is None:
-            latent_init = NormalInitializer()
+            # Stride defaults to the window (non-overlapping pooling). Windowed
+            # validation is deferred to initialize_params (module docstring).
+            if stride is None:
+                stride = window_shape
 
         super().__init__(
             shape=shape,
@@ -349,6 +311,7 @@ class AvgPool(_PoolBase):
             padding=padding,
             global_pool=global_pool,
             count_include_pad=count_include_pad,
+            pool_op_name="AvgPool",
         )
 
     @staticmethod

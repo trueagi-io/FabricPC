@@ -15,6 +15,12 @@ fan-in / fan-out from that shape on their own. The conv node does not
 inspect the activation or rewrite the initializer — pairing an
 appropriate initializer config (e.g. ``nonlinearity="leaky_relu"``) with
 the chosen activation is the caller's responsibility.
+
+Shape validation (rank, kernel/stride length, declared-vs-computed output)
+fires in ``initialize_params`` via the shared ``validate_windowed_output``
+helper — not at construction — because the input shapes it checks against are
+only known once the graph is wired. Dilation is not supported (the underlying
+``lax.conv_general_dilated`` is always called with the default dilation of 1).
 """
 
 from __future__ import annotations
@@ -25,7 +31,7 @@ import jax
 import jax.lax as lax
 import jax.numpy as jnp
 
-from fabricpc.nodes.base import NodeBase, SlotSpec, compute_windowed_output_shape
+from fabricpc.nodes.base import NodeBase, SlotSpec, validate_windowed_output
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.activations import ReLUActivation
 from fabricpc.core.energy import GaussianEnergy
@@ -101,23 +107,14 @@ class ConvNode(NodeBase):
             bias_init: Initializer for bias. Default: ZerosInitializer.
             latent_init: Initializer for latent states. Default: NormalInitializer.
         """
-        spatial_rank = len(shape) - 1
-        if spatial_rank not in (1, 2, 3):
-            raise ValueError(
-                f"ConvNode shape must have 2-4 elements (spatial_rank 1/2/3). Got shape={shape}."
-            )
-        if len(kernel_size) != spatial_rank:
-            raise ValueError(
-                f"kernel_size length {len(kernel_size)} must equal "
-                f"spatial_rank {spatial_rank} inferred from shape={shape}."
-            )
-
         # Stride default depends on spatial_rank, so it stays in the body.
         # Other defaults moved to signature: framework guarantees init class
         # configs are MappingProxyType (immutable), so sharing the singleton
-        # default across nodes is safe.
+        # default across nodes is safe. Structural validation (rank,
+        # kernel/stride length, declared-vs-computed output) is deferred to
+        # initialize_params via validate_windowed_output — see module docstring.
         if stride is None:
-            stride = (1,) * spatial_rank
+            stride = (1,) * (len(shape) - 1)
 
         super().__init__(
             shape=shape,
@@ -177,30 +174,21 @@ class ConvNode(NodeBase):
         # One key per weight edge, plus one for the bias only when needed.
         keys = jax.random.split(key, len(input_shapes) + (1 if use_bias else 0))
 
-        stride = config.get("stride")
-        padding = config.get("padding")
-        declared_spatial = tuple(node_shape[:-1])
-        # Validate the declared output shape only when stride/padding are
-        # present (always so via the constructor; a hand-built config may omit
-        # them, in which case we skip rather than crash).
-        check_shape = stride is not None and padding is not None
+        # Fail fast (here, not late inside JIT) if rank, kernel/stride length, or
+        # the declared output shape disagree with what the conv will produce.
+        # channels_preserved=False: a conv sets its own C_out via the kernel.
+        validate_windowed_output(
+            node_shape,
+            input_shapes,
+            window=kernel_size,
+            stride=config.get("stride"),
+            padding=config.get("padding"),
+            op_name="ConvNode",
+            channels_preserved=False,
+        )
 
         weights_dict = {}
         for i, (edge_key, in_shape) in enumerate(input_shapes.items()):
-            # Fail fast if the declared output shape disagrees with what the
-            # conv will actually produce (else it surfaces late inside JIT).
-            if check_shape:
-                expected_spatial = compute_windowed_output_shape(
-                    in_shape[:-1], kernel_size, stride, padding
-                )
-                if expected_spatial != declared_spatial:
-                    raise ValueError(
-                        f"ConvNode declared output spatial shape "
-                        f"{declared_spatial} but edge '{edge_key}' (input "
-                        f"spatial {tuple(in_shape[:-1])}, kernel "
-                        f"{tuple(kernel_size)}, stride {tuple(stride)}, "
-                        f"padding {padding!r}) produces {expected_spatial}."
-                    )
             in_channels = in_shape[-1]
             kernel_shape = (*kernel_size, in_channels, out_channels)
             weights_dict[edge_key] = initialize(keys[i], kernel_shape, weight_init)
