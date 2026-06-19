@@ -65,15 +65,32 @@ class MnistLoader:
         self.num_examples = info.splits[split].num_examples
         self._num_batches = (self.num_examples + batch_size - 1) // batch_size
 
-        # Build pipeline
-        if shuffle:
-            ds = ds.shuffle(
-                buffer_size=self.num_examples, seed=buffer_seed
-            )  # mnist fits in memory (~60MB) so the buffer is the full dataset
-        ds = ds.batch(batch_size, drop_remainder=False)
-        ds = ds.prefetch(tf.data.AUTOTUNE)
+        # Cache the unshuffled/unbatched dataset and the shuffle seed so
+        # reset() can replay the identical epoch-shuffle stream without paying
+        # for another tfds.load.
+        self._raw_ds = ds
+        self._buffer_seed = buffer_seed
+        self._build_pipeline()
 
+    def _build_pipeline(self):
+        """(Re)build the shuffle/batch/prefetch pipeline on top of the cached
+        raw dataset. Called from __init__ and from reset()."""
+        import tensorflow as tf
+
+        ds = self._raw_ds
+        if self.shuffle:
+            ds = ds.shuffle(
+                buffer_size=self.num_examples, seed=self._buffer_seed
+            )  # mnist fits in memory (~60MB) so the buffer is the full dataset
+        ds = ds.batch(self.batch_size, drop_remainder=False)
+        ds = ds.prefetch(tf.data.AUTOTUNE)
         self.ds = ds
+
+    def reset(self):
+        """Reset the iteration state so subsequent iteration replays the
+        identical batch stream from epoch 0. Required for paired multi-arm
+        experiments where every arm must see the same minibatch order."""
+        self._build_pipeline()
 
     def __iter__(self):
         for images, labels in self.ds:
@@ -150,12 +167,29 @@ class Cifar100Loader:
         self.num_examples = info.splits[split].num_examples
         self._num_batches = (self.num_examples + batch_size - 1) // batch_size
 
-        if shuffle:
-            ds = ds.shuffle(buffer_size=self.num_examples, seed=buffer_seed)
-        ds = ds.batch(batch_size, drop_remainder=False)
-        ds = ds.prefetch(tf.data.AUTOTUNE)
+        # Cache the raw dataset + shuffle seed so reset() can replay the
+        # identical batch stream from epoch 0 without re-loading from disk.
+        self._raw_ds = ds
+        self._buffer_seed = buffer_seed
+        self._build_pipeline()
 
+    def _build_pipeline(self):
+        """(Re)build the shuffle/batch/prefetch pipeline on top of the cached
+        raw dataset. Called from __init__ and from reset()."""
+        import tensorflow as tf
+
+        ds = self._raw_ds
+        if self.shuffle:
+            ds = ds.shuffle(buffer_size=self.num_examples, seed=self._buffer_seed)
+        ds = ds.batch(self.batch_size, drop_remainder=False)
+        ds = ds.prefetch(tf.data.AUTOTUNE)
         self.ds = ds
+
+    def reset(self):
+        """Reset iteration state so subsequent iteration replays the identical
+        batch stream from epoch 0. Required for paired multi-arm experiments
+        where every arm must see the same minibatch order."""
+        self._build_pipeline()
 
     def __iter__(self):
         for images, labels in self.ds:
@@ -230,12 +264,29 @@ class Cifar10Loader:
         self.num_examples = info.splits[split].num_examples
         self._num_batches = (self.num_examples + batch_size - 1) // batch_size
 
-        if shuffle:
-            ds = ds.shuffle(buffer_size=self.num_examples, seed=buffer_seed)
-        ds = ds.batch(batch_size, drop_remainder=False)
-        ds = ds.prefetch(tf.data.AUTOTUNE)
+        # Cache the raw dataset + shuffle seed so reset() can replay the
+        # identical batch stream from epoch 0 without re-loading from disk.
+        self._raw_ds = ds
+        self._buffer_seed = buffer_seed
+        self._build_pipeline()
 
+    def _build_pipeline(self):
+        """(Re)build the shuffle/batch/prefetch pipeline on top of the cached
+        raw dataset. Called from __init__ and from reset()."""
+        import tensorflow as tf
+
+        ds = self._raw_ds
+        if self.shuffle:
+            ds = ds.shuffle(buffer_size=self.num_examples, seed=self._buffer_seed)
+        ds = ds.batch(self.batch_size, drop_remainder=False)
+        ds = ds.prefetch(tf.data.AUTOTUNE)
         self.ds = ds
+
+    def reset(self):
+        """Reset iteration state so subsequent iteration replays the identical
+        batch stream from epoch 0. Required for paired multi-arm experiments
+        where every arm must see the same minibatch order."""
+        self._build_pipeline()
 
     def __iter__(self):
         for images, labels in self.ds:
@@ -324,6 +375,11 @@ class CharDataLoader:
             self.num_sequences = min(self.num_sequences, max_samples)
         self._num_batches = self.num_sequences // batch_size
 
+    def reset(self):
+        """Reset epoch counter so iteration replays the identical epoch-shuffle
+        stream from epoch 0 (parallel to FewShotLoader.reset())."""
+        self._epoch = 0
+
     def __iter__(self):
         indices = np.arange(self.num_sequences)
         if self.shuffle:
@@ -411,12 +467,29 @@ class FashionMnistLoader:
         self.num_examples = info.splits[split].num_examples
         self._num_batches = (self.num_examples + batch_size - 1) // batch_size
 
-        if shuffle:
-            ds = ds.shuffle(buffer_size=self.num_examples, seed=buffer_seed)
-        ds = ds.batch(batch_size, drop_remainder=False)
-        ds = ds.prefetch(tf.data.AUTOTUNE)
+        # Cache the raw dataset + shuffle seed so reset() can replay the
+        # identical batch stream from scratch without a fresh tfds.load.
+        self._raw_ds = ds
+        self._buffer_seed = buffer_seed
+        self._build_pipeline()
 
+    def _build_pipeline(self):
+        """(Re)build the shuffle/batch/prefetch pipeline. Called from __init__
+        and from reset()."""
+        import tensorflow as tf
+
+        ds = self._raw_ds
+        if self.shuffle:
+            ds = ds.shuffle(buffer_size=self.num_examples, seed=self._buffer_seed)
+        ds = ds.batch(self.batch_size, drop_remainder=False)
+        ds = ds.prefetch(tf.data.AUTOTUNE)
         self.ds = ds
+
+    def reset(self):
+        """Reset iteration state so subsequent iteration replays the identical
+        batch stream from epoch 0. Required for paired multi-arm experiments
+        where every arm must see the same minibatch order."""
+        self._build_pipeline()
 
     def __iter__(self):
         for images, labels in self.ds:
@@ -511,6 +584,13 @@ class FewShotLoader:
         self.num_samples = len(selected_indices)
         self._num_batches = self.num_samples // batch_size
 
+    def reset(self):
+        """Reset the epoch counter so subsequent iteration replays the
+        identical epoch-shuffle stream from epoch 0. Required for paired
+        multi-arm experiments: each arm must see the same minibatch order,
+        otherwise the per-arm accuracies depend on arm position in the list."""
+        self._epoch = 0
+
     def __iter__(self):
         indices = np.arange(self.num_samples)
         if self.shuffle:
@@ -551,6 +631,14 @@ class NoisyTestLoader:
         self.base_loader = base_loader
         self.noise_std = noise_std
         self.seed = seed
+
+    def reset(self):
+        """No-op for this wrapper (noise RNG is reseeded inside __iter__ from
+        self.seed each pass, so it is already idempotent). Forwards to the
+        wrapped base loader's reset() if it has one, so multi-arm runners can
+        call reset() uniformly across train and test loaders."""
+        if hasattr(self.base_loader, "reset"):
+            self.base_loader.reset()
 
     def __iter__(self):
         rng = np.random.default_rng(self.seed)

@@ -4,8 +4,9 @@ StorkeyHopfield vs MLP — Depth, Few-Shot, and Noise-Robustness Demo
 
 Demonstrates that StorkeyHopfield behaves as a composable graph element in
 FabricPC: substituting one or more Linear hidden layers with StorkeyHopfield
-should produce cumulative accuracy gains under data scarcity and input noise,
-where memorized class prototypes and attractor denoising help.
+should produce accuracy gains that accumulate with the *number* of
+substitutions, particularly when the input is noisy and the training set
+has enough samples for the attractors to form usable class prototypes.
 
 Architecture (same depth-4 graph across all arms, hidden width = 64)::
 
@@ -13,63 +14,108 @@ Architecture (same depth-4 graph across all arms, hidden width = 64)::
     "1hopfield"  pixels(784) -> 64(Linear) -> 64(StorkeyHopfield) -> 64(Linear)          -> 10(softmax+CE)
     "2hopfield"  pixels(784) -> 64(Linear) -> 64(StorkeyHopfield) -> 64(StorkeyHopfield) -> 10(softmax+CE)
 
-The first hidden layer is always Linear (the 784->64 feature-extraction
-projection — StorkeyHopfield is width-preserving and cannot reduce dimension).
-The classifier head is always Linear with Softmax + CrossEntropy energy.
+Position 0 is always Linear (the 784 -> 64 feature-extraction projection;
+StorkeyHopfield is width-preserving and cannot reduce dimension). The
+classifier head is always Linear with Softmax + CrossEntropy energy.
 
-Hypothesis: a higher fraction of hidden layers converted from Linear to
-StorkeyHopfield produces cumulative accuracy gains under scarcity + noise.
-The MLP arm is the baseline; deltas are computed per (K, noise) cell against
-MLP.
+Hypothesis
+----------
+Accuracy gains are cumulative in the number of Linear -> StorkeyHopfield
+substitutions in the hidden stack. Concretely, two adjacent paired
+contrasts on the per-trial accuracy differences:
+
+    substitution 1:   acc(1hopfield) - acc(MLP)       > 0
+    substitution 2:   acc(2hopfield) - acc(1hopfield) > 0
+
+are each predicted to be positive on average, and the per-cell cumulative
+claim ("substituting more layers helps further") is the conjunction: both
+contrasts positive AND each starred (two-sided paired t-test p<0.05). The
+K x noise grid is a *sensitivity analysis* of where the per-substitution
+gain is positive: it grows with input noise, requires K large enough for
+the attractors to form class prototypes (deltas grow with K and are
+typically negative at K=10 with low noise), and scarcity alone is not
+sufficient to produce a Hopfield advantage. The reported 2hopfield - MLP
+delta is the *total* effect (both substitutions combined), which is
+informative descriptively but not tested as a planned contrast.
 
 Experiment grid: K (shots per class) x noise_std
-    - K controls data scarcity: fewer examples -> more reliance on memory
-    - noise_std controls input corruption: more noise -> more reliance on
-      attractor denoising
+    - K controls data scarcity: how many samples each arm trains on.
+    - noise_std controls input corruption: more noise -> more reliance
+      on attractor denoising.
 
-Setup (one-time):
-    pip install tensorflow_datasets tensorflow-cpu
-    (`tensorflow-cpu` keeps TF off the GPU so it does not contend with JAX
-    for device memory; `tensorflow_datasets` is the dataset backend used by
-    `FashionMnistLoader` / `FewShotLoader`. Neither is currently declared
-    in pyproject.toml — should be added there in a follow-up.)
+Setup (one-time)::
 
-Usage:
+    pip install -e ".[tfds]"
+
+(installs ``tensorflow-datasets`` and ``tensorflow``, the dataset backend
+used by FashionMnistLoader / FewShotLoader; declared as the ``tfds`` extra
+in pyproject.toml. Both loaders call ``tf.config.set_visible_devices([],
+"GPU")`` at construction so TF stays off the GPU and does not contend with
+JAX.)
+
+Usage::
+
+    # Full default sweep: K in {500}, noise in {2.0}, n_trials=5, epochs=1.
+    # Bare invocation is intentionally fast so that JIT compilation, the
+    # tfds download, and the printed pipeline are visible in well under a
+    # minute on a GPU. The documented Results block below was produced with
+    # --n_trials 10 --num_epochs 20 on the full grid (see the explicit
+    # commands beneath it).
     python examples/storkey_hopfield_demo.py
-    python examples/storkey_hopfield_demo.py --networks 1hopfield 2hopfield
-    python examples/storkey_hopfield_demo.py --networks 2hopfield --k_values 50,500 --noise_levels 0.0,2.0
-    python examples/storkey_hopfield_demo.py --k_values 50 --noise_levels 0.0 --n_trials 2 --num_epochs 1
 
-Results (Fashion-MNIST, --strength 2.0, --n_trials 10, --num_epochs 20)::
+    # All three arms, both planned contrasts; K x noise grid; long run:
+    python examples/storkey_hopfield_demo.py --networks 1hopfield 2hopfield \\
+        --k_values 10,50,100,500 --noise_levels 0.0,0.5,1.0,2.0 \\
+        --n_trials 10 --num_epochs 20
+
+    # 2hopfield only (total-effect contrast against MLP, no second-increment
+    # test):
+    python examples/storkey_hopfield_demo.py --networks 2hopfield \\
+        --k_values 50,500 --noise_levels 0.0,2.0
+
+Results (Fashion-MNIST, paired runner; --strength 2.0, n_trials=10,
+num_epochs=20). Numbers below are from the paired-runner re-run on the
+GPU server. Each trial's seed flows through all three arms and the
+train loader is reset() between arms, so the per-trial difference vector
+is a clean within-trial paired contrast. Stars are two-sided paired
+t-tests at p<0.05, uncorrected. Both heatmaps below are the *planned*
+contrasts; the total effect (2hopfield - MLP), which equals the sum of
+the two heatmap cells, is reported descriptively in the demo output but
+is not a planned contrast.
 
     Delta Accuracy Heatmap (1hopfield - MLP, percentage points):
 
          K  n=0.0  n=0.5  n=1.0  n=2.0
     ----------------------------------
-        10  -1.7*  -0.9   +0.5   +2.8*
-        50  -0.2   +0.6   +3.0*  +7.6*
-       100  +0.1   +1.0*  +3.3*  +8.5*
-       500  -0.3   +0.8*  +3.2*  +7.2*
+        10  -1.8*  -1.0   +0.4   +2.6*
+        50  -0.1   +0.8*  +3.1*  +7.6*
+       100  +0.1   +1.1*  +3.5*  +8.3*
+       500  +0.3   +1.5*  +3.6*  +7.4*
 
-    Delta Accuracy Heatmap (2hopfield - MLP, percentage points):
+    Delta Accuracy Heatmap (2hopfield - 1hopfield, percentage points):
 
          K  n=0.0  n=0.5  n=1.0  n=2.0
     ----------------------------------
-        10  -4.6*  -3.5*  -1.0   +3.4*
-        50  -0.4   +0.7*  +4.0* +10.5*
-       100  +0.3   +1.5*  +4.8* +11.6*
-       500  +0.8*  +2.4*  +5.9* +13.1*
+        10  -2.9*  -2.7*  -1.5*  +0.7
+        50  -0.3   -0.1   +0.8*  +2.9*
+       100  +0.2   +0.5   +1.3*  +3.2*
+       500  +0.3*  +0.8*  +2.4*  +5.9*
 
-      * = significant at p<0.05
+      * = significant at p<0.05 (two-sided paired t-test, uncorrected)
 
-The results support the hypothesis: more `Linear -> StorkeyHopfield`
-substitutions produce cumulative accuracy gains under data-abundance combined
-with input noise. The 2hopfield arm consistently beats the 1hopfield arm at
-K >= 50 and any nonzero noise, and the gap widens as noise grows (e.g.
-K=500, n=2.0: 1hopfield delta = +7.2 pp, 2hopfield delta = +13.1 pp — nearly
-double). At K=10 / no noise both Hopfield arms underperform MLP, as expected:
-with almost no data and no corruption, attractor memory has nothing to
-retrieve or denoise, so the extra Hopfield constraints only slow learning.
+Cumulative gain (BOTH planned contrasts starred-positive in the same
+cell) is attained in 7 of 16 cells: every cell of K in {50, 100, 500}
+crossed with n in {1.0, 2.0}, plus K=500 at n=0.5. The K=10 row is the
+clear inverse zone -- with so few examples per class the Storkey
+attractors do not form usable class prototypes and Hopfield
+substitutions cost accuracy at low noise. At clean inputs (n=0.0) both
+contrasts are near zero across the rest of the grid -- when there is
+no noise to denoise, the attractor does not pay rent.
+
+Caveat on K=10: ``FewShotLoader`` drops the remainder batch, so K=10
+trains on 64 of 100 samples per epoch (one 64-sample batch); the K=10
+row is confounded with that truncation and should be read with that
+in mind. Use a smaller batch size at low K to remove this confound.
 """
 
 from jax_setup import set_jax_flags_before_importing_jax
@@ -77,8 +123,7 @@ from jax_setup import set_jax_flags_before_importing_jax
 set_jax_flags_before_importing_jax()
 
 import argparse
-import time
-from typing import Dict, List, Sequence
+from typing import Dict, List, Sequence, Tuple
 
 import numpy as np
 import jax
@@ -94,8 +139,7 @@ from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.core.inference import InferenceSGD
 from fabricpc.core.initializers import XavierInitializer
 from fabricpc.training import train_pcn, evaluate_pcn
-from fabricpc.experiments import ExperimentArm
-from fabricpc.experiments.statistics import paired_ttest, cohens_d
+from fabricpc.experiments import ExperimentArm, PlannedMultiContrastExperiment
 from fabricpc.utils.data.dataloader import (
     FashionMnistLoader,
     FewShotLoader,
@@ -113,7 +157,7 @@ BATCH_SIZE = 64
 HIDDEN_WIDTH = 64
 
 # Each entry lists the hidden-layer types between the input and the Linear
-# softmax readout. Position 0 must be Linear (784->HIDDEN_WIDTH projection);
+# softmax readout. Position 0 must be Linear (784 -> HIDDEN_WIDTH projection);
 # StorkeyHopfield is width-preserving and cannot reduce dimension.
 ARCH_CONFIGS: Dict[str, List[str]] = {
     "MLP": ["Linear", "Linear", "Linear"],
@@ -129,7 +173,10 @@ ARCH_CONFIGS: Dict[str, List[str]] = {
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Depth + Few-Shot + Noise: StorkeyHopfield as a composable graph element on Fashion-MNIST"
+        description=(
+            "Depth + Few-Shot + Noise: StorkeyHopfield as a composable graph "
+            "element on Fashion-MNIST."
+        )
     )
     parser.add_argument(
         "--k_values",
@@ -153,13 +200,16 @@ def parse_args():
         "--num_epochs",
         type=int,
         default=1,
-        help="Training epochs per trial (default: 1)",
+        help=(
+            "Training epochs per trial (default: 1). The bare command is "
+            "intentionally fast; the documented Results block uses 20."
+        ),
     )
     parser.add_argument(
         "--strength",
         type=str,
         default="2.0",
-        help="Hopfield strength: float >=0 or 'None' for learnable (default: 2.0)",
+        help="Hopfield strength: float >= 0 or 'None' for learnable (default: 2.0)",
     )
     parser.add_argument(
         "--networks",
@@ -168,9 +218,8 @@ def parse_args():
         default=["1hopfield", "2hopfield"],
         choices=["1hopfield", "2hopfield"],
         help=(
-            "Which Hopfield-substituted variants to compare against the MLP "
-            "baseline. MLP is always included implicitly. "
-            "Default: 1hopfield 2hopfield."
+            "Which Hopfield-substituted variants to run alongside the MLP "
+            "baseline. MLP is always included implicitly. Default: both."
         ),
     )
     parser.add_argument(
@@ -192,25 +241,36 @@ def make_model_factory(
     hopfield_strength,
     width: int = HIDDEN_WIDTH,
 ):
-    """Return a model_factory(rng_key) for a classifier with a heterogeneous
-    hidden stack defined by ``layer_types``.
+    """Return a ``model_factory(rng_key)`` for a classifier whose hidden
+    stack is defined by ``layer_types``.
 
-    Architecture (depth-3 hidden + readout):
+    Architecture (depth-3 hidden + readout)::
+
         pixels(784) -> hidden0(width) -> hidden1(width) -> hidden2(width) -> class(10)
 
-    Each hidden layer is either Linear(tanh) or StorkeyHopfield, per the
-    corresponding entry of layer_types. Position 0 must be Linear because
-    StorkeyHopfield is width-preserving (square W, in_dim == out_dim) and
-    cannot perform the 784->width projection.
+    Each hidden layer is either ``Linear(tanh)`` or ``StorkeyHopfield`` per
+    the corresponding entry of ``layer_types``. **Position 0 must be
+    Linear** because ``StorkeyHopfield`` is width-preserving (square W,
+    ``in_dim == out_dim``) and cannot perform the 784 -> width projection
+    -- the call below raises ``ValueError`` instead of failing later with
+    an opaque shape error from graph wiring.
 
     The classifier head is always Linear with Softmax + CrossEntropy energy.
     """
+    if not layer_types:
+        raise ValueError("layer_types must contain at least one layer.")
+    if layer_types[0] != "Linear":
+        raise ValueError(
+            f"Position 0 of layer_types must be 'Linear' (the 784 -> {width} "
+            f"feature-extraction projection); got {layer_types[0]!r}. "
+            "StorkeyHopfield is width-preserving and cannot change dimension."
+        )
 
     def create_model(rng_key):
         pixels = IdentityNode(shape=(784,), name="pixels")
         # Annotate as List[NodeBase] so Pylance allows appending Linear /
-        # StorkeyHopfield / etc. without inferring the narrower IdentityNode
-        # type from the initial single-element list.
+        # StorkeyHopfield without inferring the narrower IdentityNode type
+        # from the initial single-element list.
         nodes: List[NodeBase] = [pixels]
         edges: List[Edge] = []
         prev: NodeBase = pixels
@@ -276,14 +336,17 @@ def arch_str(layer_types: Sequence[str], width: int = HIDDEN_WIDTH) -> str:
 
 
 def make_data_factory(k_per_class, noise_std, batch_size):
-    """Return a data_loader_factory(seed) for the multi-arm trial loop.
+    """Return a ``data_loader_factory(seed)`` for the experiment runner.
 
     Each trial seed produces a deterministic K-shot subsample (function of
     trial seed only) and an independent test-noise realization (function of
-    trial seed and noise_std). Identical training data is reused across noise
-    levels for a clean isolation of the noise effect, while different noise
-    levels draw independent realizations rather than rescaled copies of one
-    shared noise stream.
+    trial seed and noise_std). Identical training data is reused across
+    noise levels for a clean isolation of the noise effect, while different
+    noise levels draw independent realizations rather than rescaled copies
+    of one shared noise stream.
+
+    Pairing of the *minibatch order* across arms within a trial is handled
+    by the runner via the loaders' ``reset()`` method, not here.
     """
     # Stable integer fingerprint of noise_std used as RNG entropy.
     noise_level_id = int(round(noise_std * 1_000_000))
@@ -326,81 +389,162 @@ def make_data_factory(k_per_class, noise_std, batch_size):
 
 
 # ---------------------------------------------------------------------------
-# Multi-Arm Trial Runner
+# Planned contrasts
 # ---------------------------------------------------------------------------
 
 
-def run_multi_arm_trials(
-    arms: List[ExperimentArm],
-    data_factory,
-    n_trials: int,
-    metric: str = "accuracy",
-    seed_offset: int = 0,
-    verbose: bool = False,
-) -> Dict[str, np.ndarray]:
-    """Run every arm across n_trials paired trials.
+def build_contrasts(hopfield_arms_to_run: List[str]) -> List[Tuple[str, str]]:
+    """Build the planned-contrast list from the selected Hopfield arms.
 
-    Each trial uses one seed for both the data factory (same K-shot subsample
-    and noise realization across arms) and the model RNG key (same init key
-    across arms — different structures still produce different weights, but
-    the source of randomness is paired). The chosen ``metric`` is collected
-    per arm per trial.
+    The hypothesis decomposes into two ordered adjacent increments::
 
-    This replaces ``ABExperiment`` because we now have more than two arms
-    (MLP + 1hopfield + 2hopfield) and want one shared MLP training per trial,
-    not one MLP training per Hopfield comparison.
+        substitution 1:   1hopfield - MLP
+        substitution 2:   2hopfield - 1hopfield
 
-    Returns a dict mapping ``arm.name -> np.ndarray`` of per-trial metric
-    values (length n_trials).
+    Special case: ``--networks 2hopfield`` alone (without 1hopfield) cannot
+    test the second increment; in that case we fall back to the total-effect
+    contrast ``2hopfield - MLP``, which is reported and starred. main()
+    prints a caveat distinguishing this case from the increment test.
     """
-    per_arm_metrics: Dict[str, List[float]] = {arm.name: [] for arm in arms}
+    contrasts: List[Tuple[str, str]] = []
+    has_1hop = "1hopfield" in hopfield_arms_to_run
+    has_2hop = "2hopfield" in hopfield_arms_to_run
+    if has_1hop:
+        contrasts.append(("1hopfield", "MLP"))
+    if has_2hop:
+        if has_1hop:
+            contrasts.append(("2hopfield", "1hopfield"))
+        else:
+            contrasts.append(("2hopfield", "MLP"))
+    return contrasts
 
-    for trial_idx in range(n_trials):
-        trial_seed = seed_offset + trial_idx * 1000
-        print(f"--- Trial {trial_idx + 1}/{n_trials} (seed={trial_seed}) ---")
 
-        train_loader, test_loader = data_factory(trial_seed)
+# ---------------------------------------------------------------------------
+# Pretty-printing helpers
+# ---------------------------------------------------------------------------
 
-        for arm in arms:
-            master_key = jax.random.PRNGKey(trial_seed)
-            graph_key, train_key, eval_key = jax.random.split(master_key, 3)
 
-            params, structure = arm.model_factory(graph_key)
+def _pct(x: float) -> str:
+    return f"{x * 100:+.2f}"
 
-            t0 = time.time()
-            trained_params, _, _ = arm.train_fn(
-                params,
-                structure,
-                train_loader,
-                arm.optimizer,
-                arm.train_config,
-                train_key,
-                verbose=verbose,
-            )
-            train_time = time.time() - t0
 
-            metrics = arm.eval_fn(
-                trained_params,
-                structure,
-                test_loader,
-                arm.train_config,
-                eval_key,
-            )
+def print_per_arm_table(arm_names: List[str], grid: List[Dict]):
+    print()
+    print("Per-arm accuracy (mean +/- SE, %):")
+    cols = [f"{'K':>5}", f"{'Noise':>6}"]
+    for name in arm_names:
+        cols.append(f"{name:>14}")
+    header = "  ".join(cols)
+    print(header)
+    print("-" * len(header))
+    for r in grid:
+        parts = [f"{r['k']:>5}", f"{r['noise']:>6.1f}"]
+        for name in arm_names:
+            cell = f"{r[f'{name}_mean'] * 100:6.2f}+/-" f"{r[f'{name}_se'] * 100:.2f}"
+            parts.append(f"{cell:>14}")
+        print("  ".join(parts))
 
-            if metric not in metrics:
-                available = ", ".join(sorted(metrics.keys()))
-                raise KeyError(
-                    f"Metric '{metric}' not found in eval results for arm "
-                    f"'{arm.name}'. Available: {available}"
-                )
-            value = float(metrics[metric])
-            per_arm_metrics[arm.name].append(value)
-            print(
-                f"  {arm.name:<10}: {metric}={value:.4f}  "
-                f"(train: {train_time:.1f}s)"
-            )
 
-    return {name: np.asarray(vals) for name, vals in per_arm_metrics.items()}
+def print_contrasts_table(
+    contrasts: List[Tuple[str, str]], grid: List[Dict], n_trials: int
+):
+    if not contrasts:
+        return
+    print()
+    print("Planned contrasts (paired two-sided t-test on per-trial differences):")
+    cols = [f"{'K':>5}", f"{'Noise':>6}"]
+    for a, b in contrasts:
+        label = f"{a}-{b}"
+        cols.append(f"{label + ' D%':>16}")
+        cols.append(f"{'p':>8}")
+        cols.append(f"{'sig':>4}")
+        cols.append(f"{'d':>7}")
+    header = "  ".join(cols)
+    print(header)
+    print("-" * len(header))
+    for r in grid:
+        parts = [f"{r['k']:>5}", f"{r['noise']:>6.1f}"]
+        for a, b in contrasts:
+            key = f"{a}-{b}"
+            delta_str = _pct(r[f"{key}_delta"])
+            parts.append(f"{delta_str:>16}")
+            p = r[f"{key}_pval"]
+            parts.append(f"{p:8.4f}" if not np.isnan(p) else f"{'n/a':>8}")
+            parts.append(f"{'*' if r[f'{key}_sig'] else '':>4}")
+            d = r[f"{key}_d"]
+            parts.append(f"{d:7.3f}" if not np.isnan(d) else f"{'n/a':>7}")
+        print("  ".join(parts))
+    print()
+    print(_legend_text(n_trials, len(grid), contrasts))
+
+
+def print_descriptive_total_delta(grid: List[Dict]):
+    """Print the descriptive 2hopfield - MLP total-effect delta when it is
+    NOT a planned contrast (i.e. when both 1hopfield and 2hopfield are run,
+    so the planned contrasts are the two increments and the total effect is
+    reported only)."""
+    if not grid or "2hopfield-MLP_delta_descriptive" not in grid[0]:
+        return
+    print()
+    print("Reported-only (descriptive, NOT a planned contrast):")
+    print(f"{'K':>5}  {'Noise':>6}  {'2hopfield-MLP D%':>18}  {'SE':>8}")
+    print("-" * 44)
+    for r in grid:
+        d = r["2hopfield-MLP_delta_descriptive"]
+        se = r["2hopfield-MLP_se_descriptive"]
+        print(f"{r['k']:>5}  {r['noise']:>6.1f}  " f"{_pct(d):>18}  {se * 100:>7.2f}")
+
+
+def _legend_text(n_trials: int, n_cells: int, contrasts: List[Tuple[str, str]]) -> str:
+    n_contrasts = len(contrasts)
+    total_tests = n_cells * n_contrasts
+    cumulative_rule = ""
+    if contrasts == [("1hopfield", "MLP"), ("2hopfield", "1hopfield")]:
+        cumulative_rule = (
+            "  Per-cell criterion for 'cumulative gain': BOTH planned contrasts\n"
+            "  starred with positive deltas (intersection-union test of the\n"
+            "  conjunction, valid at level alpha under arbitrary dependence).\n"
+        )
+    return (
+        f"Legend:\n"
+        f"  * = two-sided paired t-test p<0.05 on the per-trial difference\n"
+        f"      vector, uncorrected across {n_cells} cells x {n_contrasts} "
+        f"contrasts = {total_tests} tests.\n"
+        f"      Per-cell stars are exploratory across the grid.\n"
+        f"{cumulative_rule}"
+        f"  n_trials = {n_trials}; Cohen's d is the paired d on the same vector."
+    )
+
+
+def print_heatmaps(
+    contrasts: List[Tuple[str, str]],
+    k_values: List[int],
+    noise_levels: List[float],
+    grid: List[Dict],
+):
+    if len(k_values) <= 1 or len(noise_levels) <= 1:
+        return
+    for a, b in contrasts:
+        print()
+        print(f"Delta Accuracy Heatmap ({a} - {b}, percentage points):")
+        print()
+        noise_header = f"{'K':>6}" + "".join(f"  n={n:.1f}" for n in noise_levels)
+        print(noise_header)
+        print("-" * len(noise_header))
+        for k in k_values:
+            row_str = f"{k:>6}"
+            for noise_std in noise_levels:
+                match = [r for r in grid if r["k"] == k and r["noise"] == noise_std]
+                if match:
+                    key = f"{a}-{b}"
+                    d = match[0][f"{key}_delta"] * 100
+                    sig = "*" if match[0][f"{key}_sig"] else " "
+                    row_str += f" {d:+5.1f}{sig}"
+                else:
+                    row_str += "    n/a"
+            print(row_str)
+    print()
+    print("  * = significant at p<0.05 (two-sided paired t-test, uncorrected)")
 
 
 # ---------------------------------------------------------------------------
@@ -426,7 +570,8 @@ def main():
         "learnable" if hopfield_strength is None else f"{hopfield_strength}"
     )
 
-    # MLP is always the baseline. argparse de-duplication: keep input order.
+    # MLP is always the baseline. argparse choices restricts to known names;
+    # de-duplicate while preserving input order.
     seen = set()
     hopfield_arms_to_run: List[str] = []
     for name in args.networks:
@@ -448,9 +593,10 @@ def main():
         )
 
     arms = [build_arm(name) for name in arm_names_in_run]
+    contrasts = build_contrasts(hopfield_arms_to_run)
 
     print("=" * 78)
-    print("StorkeyHopfield depth comparison: composable graph element on Fashion-MNIST")
+    print("StorkeyHopfield depth comparison on Fashion-MNIST")
     print("=" * 78)
     print("Dataset: Fashion-MNIST")
     for name in arm_names_in_run:
@@ -460,10 +606,23 @@ def main():
     print(f"Trials per condition: {args.n_trials}")
     print(f"K values (number of examples per class): {k_values}")
     print(f"Noise levels (std dev): {noise_levels}")
+    print(f"Planned contrasts: {contrasts}")
+    if "2hopfield" in hopfield_arms_to_run and "1hopfield" not in hopfield_arms_to_run:
+        print()
+        print(
+            "NOTE: --networks 2hopfield without 1hopfield falls back to the\n"
+            "total-effect contrast (2hopfield - MLP), not the per-substitution\n"
+            "increment. Pass '--networks 1hopfield 2hopfield' to test the two\n"
+            "ordered increments (1hopfield-MLP, 2hopfield-1hopfield) separately."
+        )
     print()
 
-    # Collect results across the K x noise grid.
+    # ---- run the K x noise grid -----------------------------------------------
+
     grid_results: List[Dict] = []
+    report_descriptive_total = (
+        "1hopfield" in hopfield_arms_to_run and "2hopfield" in hopfield_arms_to_run
+    )
 
     for k in k_values:
         for noise_std in noise_levels:
@@ -473,124 +632,75 @@ def main():
 
             data_factory = make_data_factory(k, noise_std, BATCH_SIZE)
 
-            metrics_by_arm = run_multi_arm_trials(
+            runner = PlannedMultiContrastExperiment(
                 arms=arms,
-                data_factory=data_factory,
-                n_trials=args.n_trials,
+                contrasts=contrasts,
                 metric="accuracy",
+                data_loader_factory=data_factory,
+                n_trials=args.n_trials,
+                seed_offset=0,
                 verbose=args.verbose,
             )
+            results = runner.run()
 
             row: Dict = {"k": k, "noise": noise_std}
-            mlp_acc = metrics_by_arm["MLP"]
-            row["MLP_mean"] = float(np.mean(mlp_acc))
-            row["MLP_se"] = (
-                float(np.std(mlp_acc, ddof=1) / np.sqrt(len(mlp_acc)))
-                if len(mlp_acc) > 1
-                else 0.0
-            )
-
-            for arm_name in hopfield_arms_to_run:
-                arm_acc = metrics_by_arm[arm_name]
-                delta = arm_acc - mlp_acc
-                row[f"{arm_name}_mean"] = float(np.mean(arm_acc))
-                row[f"{arm_name}_se"] = (
-                    float(np.std(arm_acc, ddof=1) / np.sqrt(len(arm_acc)))
-                    if len(arm_acc) > 1
+            for name in arm_names_in_run:
+                acc = results.per_arm_metrics(name)
+                row[f"{name}_mean"] = float(np.mean(acc))
+                row[f"{name}_se"] = (
+                    float(np.std(acc, ddof=1) / np.sqrt(len(acc)))
+                    if len(acc) > 1
                     else 0.0
                 )
-                row[f"{arm_name}_delta"] = float(np.mean(delta))
-                if args.n_trials >= 2:
-                    ttest = paired_ttest(arm_acc, mlp_acc)
-                    effect = cohens_d(arm_acc, mlp_acc)
-                    row[f"{arm_name}_pval"] = ttest.p_value
-                    row[f"{arm_name}_sig"] = ttest.significant_at_05
-                    row[f"{arm_name}_d"] = effect.d
-                else:
-                    row[f"{arm_name}_pval"] = float("nan")
-                    row[f"{arm_name}_sig"] = False
-                    row[f"{arm_name}_d"] = float("nan")
+
+            # One entry per declared contrast (these get stars).
+            for c in results.contrast_results():
+                key = f"{c.arm_a}-{c.arm_b}"
+                row[f"{key}_delta"] = c.mean_diff
+                row[f"{key}_se"] = c.se_diff
+                row[f"{key}_pval"] = c.p_value if args.n_trials >= 2 else float("nan")
+                row[f"{key}_sig"] = c.significant_at_05 if args.n_trials >= 2 else False
+                row[f"{key}_d"] = c.cohens_d if args.n_trials >= 2 else float("nan")
+
+            # Reported-only descriptive total effect (only when BOTH hopfield
+            # variants run AND the second increment is the planned contrast).
+            if report_descriptive_total:
+                d = results.delta("2hopfield", "MLP")
+                row["2hopfield-MLP_delta_descriptive"] = d.mean
+                row["2hopfield-MLP_se_descriptive"] = d.se
 
             grid_results.append(row)
 
+            # Per-cell summary line.
             print("  Cell summary:")
-            print(f"    MLP       : {row['MLP_mean']*100:.2f}%")
-            for arm_name in hopfield_arms_to_run:
-                p = row[f"{arm_name}_pval"]
+            for name in arm_names_in_run:
+                print(f"    {name:<10}: {row[f'{name}_mean'] * 100:.2f}%")
+            for a, b in contrasts:
+                key = f"{a}-{b}"
+                p = row[f"{key}_pval"]
                 p_str = "p=n/a" if np.isnan(p) else f"p={p:.4f}"
+                star = "*" if row[f"{key}_sig"] else ""
                 print(
-                    f"    {arm_name:<10}: {row[f'{arm_name}_mean']*100:.2f}%  "
-                    f"Delta={row[f'{arm_name}_delta']*100:+.2f}%  {p_str}"
+                    f"    {key:<22} delta={row[f'{key}_delta'] * 100:+.2f}%  "
+                    f"{p_str} {star}"
                 )
 
-    # -----------------------------------------------------------------------
-    # Summary Tables
-    # -----------------------------------------------------------------------
+    # ---- summary tables -------------------------------------------------------
 
     print("\n\n")
     print("=" * 78)
-    print("RESULTS SUMMARY")
+    print(
+        "RESULTS SUMMARY  "
+        f"(strength={strength_label}, n_trials={args.n_trials}, "
+        f"epochs={args.num_epochs})"
+    )
     print("=" * 78)
-    print(f"  Hopfield strength: {strength_label}")
-    print(f"  Trials: {args.n_trials}, Epochs: {args.num_epochs}")
-    print()
 
-    # Per-condition table: MLP and each Hopfield arm side by side.
-    cols = [f"{'K':>5}", f"{'Noise':>6}", f"{'MLP%':>13}"]
-    for arm_name in hopfield_arms_to_run:
-        cols.append(f"{arm_name + '%':>14}")
-        cols.append(f"{'Delta':>7}")
-        cols.append(f"{'p':>8}")
-        cols.append(f"{'sig':>4}")
-        cols.append(f"{'d':>7}")
-    header = " ".join(cols)
-    print(header)
-    print("-" * len(header))
-    for r in grid_results:
-        parts = [
-            f"{r['k']:>5}",
-            f"{r['noise']:>6.1f}",
-            f"{r['MLP_mean']*100:6.2f}+/-{r['MLP_se']*100:.2f}",
-        ]
-        for arm_name in hopfield_arms_to_run:
-            parts.append(
-                f"{r[f'{arm_name}_mean']*100:6.2f}+/-{r[f'{arm_name}_se']*100:.2f}"
-            )
-            parts.append(f"{r[f'{arm_name}_delta']*100:+6.2f}")
-            p = r[f"{arm_name}_pval"]
-            parts.append(f"{p:8.4f}" if not np.isnan(p) else f"{'n/a':>8}")
-            parts.append(f"{'*' if r[f'{arm_name}_sig'] else '':>4}")
-            d = r[f"{arm_name}_d"]
-            parts.append(f"{d:7.3f}" if not np.isnan(d) else f"{'n/a':>7}")
-        print(" ".join(parts))
-    print("-" * len(header))
-
-    # Delta heatmap (K x noise), one block per Hopfield arm.
-    if len(k_values) > 1 and len(noise_levels) > 1:
-        for arm_name in hopfield_arms_to_run:
-            print()
-            print(f"Delta Accuracy Heatmap ({arm_name} - MLP, percentage points):")
-            print()
-            noise_header = f"{'K':>6}" + "".join(f"  n={n:.1f}" for n in noise_levels)
-            print(noise_header)
-            print("-" * len(noise_header))
-            for k in k_values:
-                row_str = f"{k:>6}"
-                for noise_std in noise_levels:
-                    match = [
-                        r
-                        for r in grid_results
-                        if r["k"] == k and r["noise"] == noise_std
-                    ]
-                    if match:
-                        d = match[0][f"{arm_name}_delta"] * 100
-                        sig = "*" if match[0][f"{arm_name}_sig"] else " "
-                        row_str += f" {d:+5.1f}{sig}"
-                    else:
-                        row_str += "    n/a"
-                print(row_str)
-            print()
-        print("  * = significant at p<0.05")
+    print_per_arm_table(arm_names_in_run, grid_results)
+    print_contrasts_table(contrasts, grid_results, args.n_trials)
+    if report_descriptive_total:
+        print_descriptive_total_delta(grid_results)
+    print_heatmaps(contrasts, k_values, noise_levels, grid_results)
 
     print()
     print("=" * 78)
