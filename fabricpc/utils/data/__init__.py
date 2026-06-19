@@ -3,6 +3,7 @@ from fabricpc.utils.data.data_utils import split_np_seed, OneHotWrapper
 from fabricpc.utils.data.dataloader import (
     MnistLoader,
     CharDataLoader,
+    BpeDataLoader,
     Cifar10Loader,
     Cifar100Loader,
     FashionMnistLoader,
@@ -15,6 +16,7 @@ __all__ = [
     "OneHotWrapper",
     "MnistLoader",
     "CharDataLoader",
+    "BpeDataLoader",
     "Cifar10Loader",
     "Cifar100Loader",
     "FashionMnistLoader",

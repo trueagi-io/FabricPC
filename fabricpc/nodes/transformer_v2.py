@@ -21,6 +21,7 @@ from fabricpc.core.initializers import (
     XavierInitializer,
     KaimingInitializer,
 )
+from fabricpc.graph_initialization import FeedforwardStateInit
 from fabricpc.core.positional import precompute_freqs_cis, apply_rotary_emb
 from fabricpc.utils.helpers import layernorm
 
@@ -33,8 +34,9 @@ from fabricpc.core.activations import (
     IdentityActivation,
     SoftmaxActivation,
 )
-from fabricpc.core.energy import KLDivergenceEnergy, GaussianEnergy
+from fabricpc.core.energy import CrossEntropyEnergy, GaussianEnergy
 from fabricpc.core.inference import InferenceBase
+from fabricpc.core.mupc import MuPCConfig
 
 # ==============================================================================
 # EMBEDDING NODE
@@ -169,6 +171,9 @@ class MhaResidualNode(NodeBase):
     def get_slots():
         return {
             "in": SlotSpec("in", False),
+            "skip": SlotSpec(
+                "skip", False, is_variance_scalable=False, is_skip_connection=True
+            ),
             "mask": SlotSpec("mask", False, is_variance_scalable=False),
         }
 
@@ -199,6 +204,8 @@ class MhaResidualNode(NodeBase):
     @staticmethod
     def forward(params, inputs, state, node_info):
         x = inputs[next(k for k in inputs if k.endswith(":in"))]
+        skip_key = next((k for k in inputs if k.endswith(":skip")), None)
+        skip = inputs[skip_key] if skip_key else x
         mask_key = next((k for k in inputs if k.endswith(":mask")), None)
         external_mask = inputs[mask_key] if mask_key else None
 
@@ -240,7 +247,7 @@ class MhaResidualNode(NodeBase):
         mha = jnp.matmul(attn, V).transpose(0, 2, 1, 3).reshape(B, L, D)
         mha = proj(mha, "W_o", "b_o")
 
-        z_mu = x + mha
+        z_mu = skip + mha
         error = state.z_latent - z_mu
 
         state = state._replace(z_mu=z_mu, error=error)
@@ -378,7 +385,7 @@ class Mlp2ResidualNode(NodeBase):
 
 
 class VocabProjectionNode(NodeBase):
-    DEFAULT_ENERGY = KLDivergenceEnergy
+    DEFAULT_ENERGY = CrossEntropyEnergy
     DEFAULT_ACTIVATION = SoftmaxActivation
 
     def __init__(
@@ -401,7 +408,7 @@ class VocabProjectionNode(NodeBase):
             activation=activation or SoftmaxActivation(),
             weight_init=weight_init or XavierInitializer(),
             latent_init=latent_init or NormalInitializer(),
-            energy=energy or KLDivergenceEnergy(),
+            energy=energy or CrossEntropyEnergy(),
             **kwargs,
         )
 
@@ -471,12 +478,17 @@ def create_deep_transformer(
         shape=(seq_len, embed_dim),
         vocab_size=vocab_size,
         embed_dim=embed_dim,
-        weight_init=w_init_obj,
+        weight_init=NormalInitializer(std=1.0),
     )
     nodes.append(embed_node)
     edges.append(Edge(source=input_node, target=embed_node.slot("in")))
 
     previous_residual = embed_node
+
+    mask_node = Linear(
+        shape=(1, seq_len, seq_len), activation=IdentityActivation(), name="causal_mask"
+    )
+    nodes.append(mask_node)
 
     for i in range(depth):
         mha = MhaResidualNode(
@@ -488,6 +500,8 @@ def create_deep_transformer(
         )
         nodes.append(mha)
         edges.append(Edge(source=previous_residual, target=mha.slot("in")))
+        edges.append(Edge(source=previous_residual, target=mha.slot("skip")))
+        edges.append(Edge(source=mask_node, target=mha.slot("mask")))
 
         mlp1 = LnMlp1Node(
             name=f"L{i}_mlp1",
@@ -518,7 +532,7 @@ def create_deep_transformer(
         shape=(seq_len, vocab_size),
         vocab_size=vocab_size,
         embed_dim=embed_dim,
-        weight_init=w_init_obj,
+        weight_init=NormalInitializer(std=float(jnp.sqrt(1.0 / embed_dim))),
     )
     nodes.append(logits)
     edges.append(Edge(source=previous_residual, target=logits.slot("in")))
@@ -526,6 +540,8 @@ def create_deep_transformer(
     return graph(
         nodes=nodes,
         edges=edges,
-        task_map=TaskMap(x=input_node, y=logits),
+        task_map=TaskMap(x=input_node, y=logits, causal_mask=mask_node),
         inference=inference,
+        scaling=MuPCConfig(include_output=False),
+        graph_state_initializer=FeedforwardStateInit(),
     )
