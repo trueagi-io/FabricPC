@@ -185,7 +185,7 @@ class XavierInitializer(InitializerBase):
     Shape-aware over any rank: Linear ``(in, out)`` or an ND conv kernel
     ``(*spatial, C_in, C_out)``. fan_in = prod(shape[:-1]),
     fan_out = prod(shape[:-2]) * shape[-1]. A rank-1 shape uses fan_in = fan_out.
-    
+
     Args:
         distribution: "normal" or "uniform" (default: "normal")
     """
@@ -234,7 +234,7 @@ class KaimingInitializer(InitializerBase):
     Shape-aware over any rank: Linear ``(in, out)`` or an ND conv kernel
     ``(*spatial, C_in, C_out)``. fan_in = prod(shape[:-1]),
     fan_out = prod(shape[:-2]) * shape[-1]. A rank-1 shape uses fan_in = fan_out.
-    
+
     Args:
         mode: "fan_in" or "fan_out" (default: "fan_in")
         nonlinearity: "relu" or "leaky_relu" (default: "relu")
