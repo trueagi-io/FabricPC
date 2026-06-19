@@ -182,8 +182,10 @@ class XavierInitializer(InitializerBase):
     For uniform: U(-limit, limit) where limit = sqrt(6 / (fan_in + fan_out))
     For normal: N(0, std^2) where std = sqrt(2 / (fan_in + fan_out))
 
-    Assumes shape is (fan_in, fan_out) or (fan_in,).
-
+    Shape-aware over any rank: Linear ``(in, out)`` or an ND conv kernel
+    ``(*spatial, C_in, C_out)``. fan_in = prod(shape[:-1]),
+    fan_out = prod(shape[:-2]) * shape[-1]. A rank-1 shape uses fan_in = fan_out.
+    
     Args:
         distribution: "normal" or "uniform" (default: "normal")
     """
@@ -229,8 +231,10 @@ class KaimingInitializer(InitializerBase):
     For uniform: U(-limit, limit) where limit = gain * sqrt(3 / fan)
     For normal: N(0, std^2) where std = gain / sqrt(fan)
 
-    Assumes shape is (fan_in, fan_out) or (fan_in,).
-
+    Shape-aware over any rank: Linear ``(in, out)`` or an ND conv kernel
+    ``(*spatial, C_in, C_out)``. fan_in = prod(shape[:-1]),
+    fan_out = prod(shape[:-2]) * shape[-1]. A rank-1 shape uses fan_in = fan_out.
+    
     Args:
         mode: "fan_in" or "fan_out" (default: "fan_in")
         nonlinearity: "relu" or "leaky_relu" (default: "relu")
