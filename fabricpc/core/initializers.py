@@ -35,6 +35,7 @@ import types
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Tuple
 
+import numpy as np
 import jax
 import jax.numpy as jnp
 
@@ -181,7 +182,9 @@ class XavierInitializer(InitializerBase):
     For uniform: U(-limit, limit) where limit = sqrt(6 / (fan_in + fan_out))
     For normal: N(0, std^2) where std = sqrt(2 / (fan_in + fan_out))
 
-    Assumes shape is (fan_in, fan_out) or (fan_in,).
+    Shape-aware over any rank: Linear ``(in, out)`` or an ND conv kernel
+    ``(*spatial, C_in, C_out)``. fan_in = prod(shape[:-1]),
+    fan_out = prod(shape[:-2]) * shape[-1]. A rank-1 shape uses fan_in = fan_out.
 
     Args:
         distribution: "normal" or "uniform" (default: "normal")
@@ -198,8 +201,15 @@ class XavierInitializer(InitializerBase):
         config = config or {}
         distribution = config.get("distribution", "normal")
         gain = config.get("gain", 1.0)
-        fan_in = shape[0]
-        fan_out = shape[1] if len(shape) > 1 else shape[0]
+        # Shape-aware: works for Linear (in, out) and conv kernels
+        # (kH..., C_in, C_out). PyTorch convention adapted to FabricPC's
+        # HWIO/LIO/DHWIO layout: fan_in = prod(shape[:-1]),
+        # fan_out = prod(shape[:-2]) * shape[-1].
+        if len(shape) >= 2:
+            fan_in = int(np.prod(shape[:-1]))
+            fan_out = int(np.prod(shape[:-2])) * shape[-1]
+        else:
+            fan_in = fan_out = shape[0]
 
         if distribution == "uniform":
             limit = gain * jnp.sqrt(6.0 / (fan_in + fan_out))
@@ -221,7 +231,9 @@ class KaimingInitializer(InitializerBase):
     For uniform: U(-limit, limit) where limit = gain * sqrt(3 / fan)
     For normal: N(0, std^2) where std = gain / sqrt(fan)
 
-    Assumes shape is (fan_in, fan_out) or (fan_in,).
+    Shape-aware over any rank: Linear ``(in, out)`` or an ND conv kernel
+    ``(*spatial, C_in, C_out)``. fan_in = prod(shape[:-1]),
+    fan_out = prod(shape[:-2]) * shape[-1]. A rank-1 shape uses fan_in = fan_out.
 
     Args:
         mode: "fan_in" or "fan_out" (default: "fan_in")
@@ -257,10 +269,16 @@ class KaimingInitializer(InitializerBase):
         distribution = config.get("distribution", "normal")
         gain_scaling = config.get("gain", 1.0)
 
-        if mode == "fan_out":
-            fan = shape[1] if len(shape) > 1 else shape[0]
-        else:  # fan_in
-            fan = shape[0]
+        # Shape-aware fan: works for Linear (in, out) and conv kernels
+        # (kH..., C_in, C_out). Linear shape (in, out) recovers fan_in=in
+        # / fan_out=out; Conv2D shape (kH, kW, C_in, C_out) gives
+        # fan_in=kH*kW*C_in, fan_out=kH*kW*C_out.
+        if len(shape) >= 2:
+            fan_in = int(np.prod(shape[:-1]))
+            fan_out = int(np.prod(shape[:-2])) * shape[-1]
+        else:
+            fan_in = fan_out = shape[0]
+        fan = fan_out if mode == "fan_out" else fan_in
 
         if nonlinearity == "leaky_relu":
             a = config.get("a", 0.01)
