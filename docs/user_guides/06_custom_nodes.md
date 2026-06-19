@@ -33,7 +33,7 @@ These methods are static because FabricPC uses a functional JAX-based design. No
 
 ## Step-by-Step: Conv2D Node
 
-Let's build a 2D convolutional node from scratch. This example is adapted from `examples/custom_node.py`.
+Let's build a 2D convolutional node from scratch, to illustrate the node contract. (FabricPC now ships a production `ConvNode` in `fabricpc.nodes`; this from-scratch version is for teaching, not for use.)
 
 ### Step 1: Define the Class and Constructor
 
