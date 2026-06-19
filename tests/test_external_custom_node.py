@@ -385,7 +385,10 @@ class TestExternalCustomNode:
         assert new_state.z_mu.shape == custom_state.z_latent.shape
         assert set(params_grad.weights.keys()) == set(custom_params.weights.keys())
         for edge_key in custom_params.weights:
-            assert params_grad.weights[edge_key].shape == custom_params.weights[edge_key].shape
+            assert (
+                params_grad.weights[edge_key].shape
+                == custom_params.weights[edge_key].shape
+            )
             assert jnp.isfinite(params_grad.weights[edge_key]).all()
         assert params_grad.biases["b"].shape == custom_params.biases["b"].shape
         assert jnp.isfinite(params_grad.biases["b"]).all()
@@ -409,6 +412,7 @@ class TestExternalCustomNode:
 
         assert jnp.allclose(final_state.nodes["input"].z_latent, clamps["input"])
         assert jnp.allclose(final_state.nodes["output"].z_latent, clamps["output"])
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
