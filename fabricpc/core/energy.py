@@ -148,8 +148,10 @@ class GaussianEnergy(EnergyFunctional):
         precision: 1/sigma^2 (default: 1.0). Higher values = sharper distributions.
     """
 
-    def __init__(self, precision=1.0):
-        super().__init__(precision=precision)
+    def __init__(self, precision=1.0, include_log_precision=False):
+        super().__init__(
+            precision=precision, include_log_precision=include_log_precision
+        )
 
     @staticmethod
     def energy(
@@ -160,11 +162,19 @@ class GaussianEnergy(EnergyFunctional):
 
         Sums over all non-batch dimensions.
         """
-        precision = config.get("precision", 1.0) if config else 1.0
+        cfg = config or {}
+        precision = cfg.get("precision", 1.0)
         diff = z_latent - z_mu
-        # Sum over all non-batch dimensions
+        # Precision is applied INSIDE the sum so a per-feature (diagonal) precision vector
+        # broadcasts over the feature/channel axis. Identical to the scalar form for a scalar.
         axes_to_sum = tuple(range(1, len(diff.shape)))
-        return 0.5 * precision * jnp.sum(diff**2, axis=axes_to_sum)
+        e = 0.5 * jnp.sum(precision * diff**2, axis=axes_to_sum)
+        if cfg.get("include_log_precision", False):
+            # +0.5*sum(ln(2*pi) - ln Pi): Gaussian NLL normalizer. CONSTANT in z and W, so it
+            # does not affect inference/weight gradients; reported for the true free energy.
+            normalizer = 0.5 * (jnp.log(2.0 * jnp.pi) - jnp.log(jnp.asarray(precision)))
+            e = e + jnp.sum(jnp.broadcast_to(normalizer, diff.shape[1:]))
+        return e
 
     @staticmethod
     def grad_latent(

@@ -28,17 +28,31 @@ Includes cosine LR schedule with warmup and optional data augmentation
 (random horizontal flip + random crop with padding).
 
 Usage:
-    python examples/resnet18_cifar10_demo.py --quick              # 2-epoch smoke test
-    python examples/resnet18_cifar10_demo.py --activation tanh    # with tanh instead of relu
-    python examples/resnet18_cifar10_demo.py --num_epochs 100 --activation tanh --eval_every 10
+    python examples/resnet18_cifar10_demo.py --quick                 # 2-epoch smoke test
+    python examples/resnet18_cifar10_demo.py --num_epochs 30 --activation tanh --eval_every 5
 
+    Precision (--precision): none (Pi=1, baseline) | diag_probe (frozen per-channel Pi=1/Var
+        from a one-pass residual probe) | online (Pi learned each step via EMA -- the NGD scheme).
+    Optimizer (--optimizer): adamw (default) | ngd (plain SGD, so precision acts as the
+        per-channel adaptive LR). --momentum M (ngd only; ~10x's the effective step, use lower lr).
+    --seed S (independent run, for error bars); --probe_latents (per-node latent/error/move RMS).
 
-python examples/resnet18_cifar10_demo.py --quick
-Model: 31 nodes, 38 edges
-Total parameters: 2,795,210
-Train energy: 0.1020
-Test Accuracy: 40.89%
-Training time: 623.3s (311.6s per epoch)
+    # NGD arm (precision as the adaptive LR): online precision + SGD + momentum.
+    python examples/resnet18_cifar10_demo.py --precision online --optimizer ngd \\
+        --momentum 0.9 --lr 0.02 --activation tanh --num_epochs 30
+
+Multi-seed paired sweeps + significance stats: examples/precision_experiment.py.
+
+Results (CIFAR-10, muPC, tanh; diag_probe vs none Pi=1 baseline, AdamW):
+    - Early training (2 epochs): diag_probe CONSISTENTLY beats the baseline across seeds
+      (+1.6 / +2.8 / +3.1 pts, lower train energy) -- a convergence-speed / conditioning gain.
+    - At convergence (30 epochs, 3 seeds): the gap WASHES OUT -- none 42.03 +/- 0.23% vs
+      diag_probe 42.01 +/- 1.15%; paired Delta_acc = -0.02 pts (p=0.98, not significant);
+      energy marginally lower for diag_probe. Precision speeds early convergence but does NOT
+      change the converged accuracy ceiling.
+    - NGD (online precision + plain SGD) trains far slower than AdamW and does not reach the
+      AdamW baseline in this setup.
+    Precision weighting is a conditioning/robustness lever, not a path to backprop accuracy.
 """
 
 from jax_setup import set_jax_flags_before_importing_jax
@@ -50,6 +64,7 @@ import jax.numpy as jnp
 import numpy as np
 import optax
 import argparse
+import json
 import time
 from fabricpc.nodes import ConvNode, Linear, IdentityNode, SkipConnection, AvgPool
 from fabricpc.core.topology import Edge
@@ -72,6 +87,9 @@ from fabricpc.core.initializers import (
 )
 from fabricpc.core.mupc import MuPCConfig
 from fabricpc.training import train_pcn, evaluate_pcn
+from fabricpc.training.train import _convert_batch
+from fabricpc.training.ngd_trainer import train_ngd, probe_latent_propagation
+from fabricpc.core.precision import probe_residual_precision
 from fabricpc.utils.data.dataloader import Cifar10Loader
 
 jax.config.update("jax_default_prng_impl", "threefry2x32")
@@ -147,6 +165,13 @@ class AugmentedCifar10Loader:
 # =============================================================================
 
 
+def _gauss_energy(name, precision_map):
+    """GaussianEnergy for `name`, with diagonal precision from the probe if present."""
+    if precision_map is not None and name in precision_map:
+        return GaussianEnergy(precision=precision_map[name])
+    return GaussianEnergy()
+
+
 def make_residual_block(
     prev_node,
     channels,
@@ -154,6 +179,7 @@ def make_residual_block(
     block_name,
     weight_init,
     activation=None,
+    precision_map=None,
 ):
     """
     Create one residual block: conv_a -> conv_b(act) -> skip(sum).
@@ -184,6 +210,7 @@ def make_residual_block(
         padding="SAME",
         activation=activation,
         weight_init=weight_init,
+        energy=_gauss_energy(f"{block_name}_conv_a", precision_map),
         name=f"{block_name}_conv_a",
     )
 
@@ -194,11 +221,13 @@ def make_residual_block(
         padding="SAME",
         activation=activation,
         weight_init=weight_init,
+        energy=_gauss_energy(f"{block_name}_conv_b", precision_map),
         name=f"{block_name}_conv_b",
     )
 
     skip_node = SkipConnection(
         shape=(out_h, out_w, channels),
+        energy=_gauss_energy(f"{block_name}_skip_sum", precision_map),
         name=f"{block_name}_skip_sum",
     )
 
@@ -219,6 +248,7 @@ def make_residual_block(
             padding="SAME",
             activation=IdentityActivation(),
             weight_init=weight_init,
+            energy=_gauss_energy(f"{block_name}_skip", precision_map),
             name=f"{block_name}_skip",
         )
         nodes.append(conv_skip)
@@ -235,6 +265,7 @@ def build_resnet18(
     scaling=None,
     output_weight_init=None,
     activation=None,
+    precision_map=None,
     *,
     infer_steps,
     eta_infer,
@@ -269,6 +300,7 @@ def build_resnet18(
         padding="SAME",
         activation=activation,
         weight_init=weight_init,
+        energy=_gauss_energy("stem", precision_map),
         name="stem",
     )
 
@@ -296,13 +328,19 @@ def build_resnet18(
                 block_name=block_name,
                 weight_init=weight_init,
                 activation=activation,
+                precision_map=precision_map,
             )
             all_nodes.extend(nodes)
             all_edges.extend(edges)
             prev = add_node
 
     # Global average pooling: (B, 4, 4, 256) -> (B, 256)
-    avg_pool = AvgPool(shape=(256,), name="avgpool", global_pool=True)
+    avg_pool = AvgPool(
+        shape=(256,),
+        name="avgpool",
+        global_pool=True,
+        energy=_gauss_energy("avgpool", precision_map),
+    )
     all_nodes.append(avg_pool)
     all_edges.append(Edge(source=prev, target=avg_pool.slot("in")))
 
@@ -337,17 +375,43 @@ def build_resnet18(
 # =============================================================================
 
 
-def _create_mupc_model(rng_key, *, infer_steps, eta_infer, activation=None):
-    """Create ResNet-18 with muPC parameterization."""
-    structure = build_resnet18(
+def _create_mupc_model(
+    rng_key,
+    *,
+    infer_steps,
+    eta_infer,
+    activation=None,
+    precision_mode="none",
+    probe_batch=None,
+    probe_key=None,
+):
+    """Create ResNet-18 with muPC parameterization.
+
+    precision_mode: "none" (Pi=1) | "diag_probe" (frozen per-channel Pi=1/Var from one
+    clamped inference pass) | "online" (built as none; Pi learned in the NGD trainer).
+    """
+    build = lambda precision_map=None: build_resnet18(
         weight_init=MuPCInitializer(),
         scaling=MuPCConfig(include_output=False),
         output_weight_init=XavierInitializer(),
         activation=activation,
+        precision_map=precision_map,
         infer_steps=infer_steps,
         eta_infer=eta_infer,
     )
+    structure = build()
     params = initialize_params(structure, rng_key)
+    if precision_mode == "diag_probe":
+        if probe_batch is None or probe_key is None:
+            raise ValueError("diag_probe requires probe_batch and probe_key")
+        precision_map = probe_residual_precision(
+            params, structure, probe_batch, probe_key
+        )
+        structure = build(precision_map)
+        print(
+            f"Precision probe: diagonal Pi estimated for {len(precision_map)} "
+            f"Gaussian-energy nodes (per-channel 1/Var, mean-normalized)."
+        )
     return params, structure
 
 
@@ -368,15 +432,34 @@ def run_single_mupc(args):
         f"LR: {args.lr}  |  Augment: {not args.no_augment}"
     )
 
-    master_rng_key = jax.random.PRNGKey(42)
-    graph_key, train_key, eval_key = jax.random.split(master_rng_key, 3)
+    master_rng_key = jax.random.PRNGKey(args.seed)
+    graph_key, train_key, eval_key, probe_key = jax.random.split(master_rng_key, 4)
+
+    # Data (built before the model so the precision probe can use a real batch); the
+    # train-shuffle seed is tied to --seed so each seed is a fully independent run.
+    base_train_loader = Cifar10Loader(
+        "train", batch_size=args.batch_size, shuffle=True, seed=args.seed
+    )
+    if args.no_augment:
+        train_loader = base_train_loader
+    else:
+        train_loader = AugmentedCifar10Loader(base_train_loader, seed=args.seed)
+    test_loader = Cifar10Loader("test", batch_size=args.batch_size, shuffle=False)
+
+    probe_batch = None
+    if args.precision == "diag_probe":
+        probe_batch = _convert_batch(next(iter(train_loader)))
 
     # Build model
+    print(f"Precision weighting: {args.precision}")
     params, structure = _create_mupc_model(
         graph_key,
         infer_steps=args.infer_steps,
         eta_infer=args.eta_infer,
         activation=activation,
+        precision_mode=args.precision,
+        probe_batch=probe_batch,
+        probe_key=probe_key,
     )
 
     # Print model summary
@@ -384,16 +467,6 @@ def run_single_mupc(args):
 
     total_params = sum(p.size for p in jax.tree_util.tree_leaves(params))
     print(f"Total parameters: {total_params:,}")
-
-    # Data
-    base_train_loader = Cifar10Loader(
-        "train", batch_size=args.batch_size, shuffle=True, seed=42
-    )
-    if args.no_augment:
-        train_loader = base_train_loader
-    else:
-        train_loader = AugmentedCifar10Loader(base_train_loader, seed=42)
-    test_loader = Cifar10Loader("test", batch_size=args.batch_size, shuffle=False)
 
     # Cosine LR schedule with warmup
     steps_per_epoch = len(train_loader)
@@ -407,7 +480,15 @@ def run_single_mupc(args):
         decay_steps=total_steps,
         end_value=args.lr * 0.01,
     )
-    optimizer = optax.adamw(schedule, weight_decay=args.weight_decay)
+    if args.optimizer == "ngd":
+        # plain SGD so the per-channel precision acts as the adaptive LR; momentum (0.0 ->
+        # None = plain SGD) makes the narrow stable-LR regime trainable.
+        optimizer = optax.sgd(schedule, momentum=(args.momentum or None))
+        if args.momentum:
+            print(f"  ngd: SGD with momentum={args.momentum}")
+    else:
+        optimizer = optax.adamw(schedule, weight_decay=args.weight_decay)
+    print(f"Optimizer: {args.optimizer}")
     train_config = {"num_epochs": args.num_epochs}
 
     # Periodic evaluation callback
@@ -418,7 +499,9 @@ def run_single_mupc(args):
         if eval_every > 0 and (
             epoch_num % eval_every == 0 or epoch_num == args.num_epochs
         ):
-            metrics = evaluate_pcn(params, structure, test_loader, config, eval_key)
+            metrics = evaluate_pcn(
+                params, structure, test_loader, train_config, eval_key
+            )
             print(f"  Epoch {epoch_num}: accuracy={metrics['accuracy'] * 100:.2f}%")
             return metrics
         return None
@@ -429,16 +512,30 @@ def run_single_mupc(args):
     )
     start_time = time.time()
 
-    trained_params, energy_history, _ = train_pcn(
-        params=params,
-        structure=structure,
-        train_loader=train_loader,
-        optimizer=optimizer,
-        config=train_config,
-        rng_key=train_key,
-        verbose=False,
-        epoch_callback=epoch_callback,
-    )
+    learned_precision = None
+    if args.precision == "online":
+        trained_params, learned_precision, energy_history = train_ngd(
+            params=params,
+            structure=structure,
+            train_loader=train_loader,
+            optimizer=optimizer,
+            num_epochs=args.num_epochs,
+            rng_key=train_key,
+            lam=args.precision_lam,
+            epoch_callback=epoch_callback,
+            verbose=False,
+        )
+    else:
+        trained_params, energy_history, _ = train_pcn(
+            params=params,
+            structure=structure,
+            train_loader=train_loader,
+            optimizer=optimizer,
+            config=train_config,
+            rng_key=train_key,
+            verbose=False,
+            epoch_callback=epoch_callback,
+        )
 
     elapsed = time.time() - start_time
     print(
@@ -451,6 +548,44 @@ def run_single_mupc(args):
         trained_params, structure, test_loader, train_config, eval_key
     )
     print(f"Test Accuracy: {metrics['accuracy'] * 100:.2f}%")
+
+    if args.probe_latents:
+        probe_b = _convert_batch(next(iter(test_loader)))
+        report = probe_latent_propagation(
+            trained_params,
+            structure,
+            probe_b,
+            eval_key,
+            precision_map=learned_precision,
+        )
+        print("\nLatent propagation (per node, topological order):")
+        print(
+            f"  {'node':<18}{'in_deg':>7}{'z_rms':>10}{'err_rms':>10}{'move_rms':>10}"
+        )
+        for name, m in report.items():
+            print(
+                f"  {name:<18}{m['in_degree']:>7}{m['z_rms']:>10.4f}"
+                f"{m['err_rms']:>10.4f}{m['move_rms']:>10.4f}"
+            )
+
+    final_energy = float("nan")
+    if energy_history and energy_history[-1]:
+        last_epoch = energy_history[-1]
+        final_energy = float(sum(last_epoch) / len(last_epoch))
+    result = {
+        "seed": args.seed,
+        "precision": args.precision,
+        "optimizer": args.optimizer,
+        "momentum": args.momentum,
+        "activation": args.activation,
+        "num_epochs": args.num_epochs,
+        "batch_size": args.batch_size,
+        "accuracy": float(metrics["accuracy"]),
+        "final_train_energy": final_energy,
+        "train_time_s": float(elapsed),
+    }
+    print("[RESULT] " + json.dumps(result))
+    return result
 
 
 # =============================================================================
@@ -475,7 +610,7 @@ def parse_args():
         "--eta_infer", type=float, default=0.1, help="Inference rate (default: 0.1)"
     )
     parser.add_argument(
-        "--lr", type=float, default=0.01, help="Learning rate (default: 0.001)"
+        "--lr", type=float, default=0.01, help="Learning rate (default: 0.01)"
     )
     parser.add_argument(
         "--weight_decay", type=float, default=0.01, help="Weight decay (default: 0.01)"
@@ -486,6 +621,44 @@ def parse_args():
         default="relu",
         choices=["relu", "tanh", "gelu", "leaky_relu"],
         help="Activation function for hidden layers (default: relu)",
+    )
+    parser.add_argument(
+        "--precision",
+        type=str,
+        default="none",
+        choices=["none", "diag_probe", "online"],
+        help="Precision weighting: none (Pi=1) | diag_probe (frozen per-channel 1/Var) | "
+        "online (per-step EMA, the NGD scheme). Default none",
+    )
+    parser.add_argument(
+        "--optimizer",
+        type=str,
+        default="adamw",
+        choices=["adamw", "ngd"],
+        help="adamw (default) | ngd (plain SGD; precision acts as the adaptive LR)",
+    )
+    parser.add_argument(
+        "--momentum",
+        type=float,
+        default=0.0,
+        help="SGD momentum for --optimizer ngd (0.0=plain SGD; try 0.9). Ignored for adamw.",
+    )
+    parser.add_argument(
+        "--precision_lam",
+        type=float,
+        default=0.05,
+        help="EMA rate for online precision (only with --precision online; default 0.05)",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Master seed for model init AND train-shuffle order (default: 42)",
+    )
+    parser.add_argument(
+        "--probe_latents",
+        action="store_true",
+        help="After training, print a per-node latent-propagation table.",
     )
     parser.add_argument(
         "--no_augment",
@@ -509,6 +682,8 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if not (0.0 <= args.momentum < 1.0):
+        raise SystemExit(f"--momentum must be in [0.0, 1.0); got {args.momentum}")
     if args.quick:
         args.num_epochs = 2
         args.no_augment = True

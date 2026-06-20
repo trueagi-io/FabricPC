@@ -38,6 +38,7 @@ from fabricpc.core.energy import (
     compute_energy_gradient,
     get_energy_and_gradient,
 )
+from fabricpc.core.precision import probe_residual_precision
 
 # Inference functions and classes
 from fabricpc.core.inference import (
@@ -92,6 +93,7 @@ __all__ = [
     "compute_energy",
     "compute_energy_gradient",
     "get_energy_and_gradient",
+    "probe_residual_precision",
     # Inference
     "InferenceBase",
     "InferenceSGD",
