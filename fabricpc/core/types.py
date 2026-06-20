@@ -127,6 +127,12 @@ class NodeState(NamedTuple):
     energy: jnp.ndarray  # per-sample energy, shape (batch_size,)
     pre_activation: jnp.ndarray
     latent_grad: jnp.ndarray  # For local gradient accumulation
+    # Optional per-node DIAGONAL precision (inverse error variance), broadcast over the
+    # feature/channel axis. None (default) -> energy uses the static config precision
+    # (standard behavior, no extra pytree leaves -> backward-compatible). When set (online
+    # NGD trainer), energy_functional uses it, so a dynamic precision reaches both inference
+    # and weight grads without recompiling.
+    precision: Optional[jnp.ndarray] = None
 
 
 class GraphState(NamedTuple):
@@ -197,6 +203,7 @@ tree_util.register_pytree_node(
             ns.energy,
             ns.pre_activation,
             ns.latent_grad,
+            ns.precision,  # None -> empty subtree (no extra leaves); array -> traced leaf
         ),
         None,
     ),

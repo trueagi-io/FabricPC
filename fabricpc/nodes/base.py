@@ -550,6 +550,12 @@ class NodeBase(ABC):
         energy_cls = type(energy_obj)
         config = energy_obj.config
 
+        # Dynamic-precision override: a per-node precision carried in the state (set by the
+        # online-precision NGD trainer) takes priority over the static config precision, so it
+        # flows through both inference and the autodiffed weight grads. None -> unchanged.
+        if state.precision is not None:
+            config = {**config, "precision": state.precision}
+
         energy = energy_cls.energy(state.z_latent, state.z_mu, config)
         return state._replace(energy=energy)
 
