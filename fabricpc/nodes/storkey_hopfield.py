@@ -131,6 +131,7 @@ class StorkeyHopfield(NodeBase):
         enforce_symmetry: Symmetrize W via 0.5*(W+W.T) in forward (default: True).
         zero_diagonal: Zero W diagonal in forward (default: False).
         weight_init: Initializer for weights (default: XavierInitializer()).
+        bias_init: Initializer for biases (default: ZerosInitializer()).
         latent_init: Initializer for latent states (default: NormalInitializer()).
     """
 
@@ -146,6 +147,7 @@ class StorkeyHopfield(NodeBase):
         zero_diagonal: bool = False,
         latent_init: Optional[InitializerBase] = NormalInitializer(),
         weight_init: Optional[InitializerBase] = XavierInitializer(),
+        bias_init: Optional[InitializerBase] = ZerosInitializer(),
     ):
         super().__init__(
             shape=shape,
@@ -154,6 +156,7 @@ class StorkeyHopfield(NodeBase):
             energy=energy,
             latent_init=latent_init,
             weight_init=weight_init,
+            bias_init=bias_init,
             hopfield_strength=hopfield_strength,
             use_bias=use_bias,
             enforce_symmetry=enforce_symmetry,
@@ -170,8 +173,8 @@ class StorkeyHopfield(NodeBase):
         key: jax.Array,
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
-        weight_init: Optional[InitializerBase] = None,
-        config: Optional[Dict[str, Any]] = None,
+        weight_init: Optional[InitializerBase],
+        config: Dict[str, Any],
     ) -> NodeParams:
         """
         Initialize Hopfield W matrix and biases.
@@ -183,25 +186,19 @@ class StorkeyHopfield(NodeBase):
             - "b": bias vector if use_bias
             - "hopfield_strength": learnable scalar if hopfield_strength is None
         """
-        if config is None:
-            config = {}
-
         if weight_init is None:
-            weight_init = ZerosInitializer()
+            raise TypeError(
+                "StorkeyHopfield.initialize_params: weight_init is required."
+            )
 
-        # Weights
         weights_dict = {}
         D = node_shape[-1]
-        key_hop, key_b = jax.random.split(
-            key,
-        )
+        key_hop, key_b = jax.random.split(key)
 
-        # Hopfield W: (D, D)
         W = initialize(key_hop, (D, D), weight_init)
-        # Apply symmetry/diagonal constraints at init time too
         W = StorkeyHopfield._prepare_W(W, config)
 
-        # get the first dictionary key and shape (there should only be one input edge for this node)
+        # This node takes a single input edge.
         edge_key, in_shape = next(iter(input_shapes.items()))
         if in_shape[-1] != D:
             raise ValueError(
@@ -211,20 +208,15 @@ class StorkeyHopfield(NodeBase):
             W  # Store W under the input edge key for gradient flow to presynaptic node.
         )
 
-        # Biases
+        # Bias shape broadcasts over the batch dim: (1, ..., 1, out_features).
         biases = {}
-        # Initialize bias (usually zeros)
-        # Bias shape for proper broadcasting, prepending batch dimension: (1, ..., 1, out_features)
-        use_bias = config.get("use_bias", True)
-        if use_bias:
+        if config["use_bias"]:
             bias_shape = (1,) * len(node_shape) + (node_shape[-1],)
-            biases["b"] = jnp.zeros(bias_shape)
+            biases["b"] = initialize(key_b, bias_shape, config["bias_init"])
 
-        # Learnable hopfield_strength if not fixed.
-        # Stored as an unconstrained raw parameter; jax.nn.softplus is applied
-        # in forward() to guarantee effective strength >= 0. Init raw so that
-        # softplus(raw) = 1.0.
-        hopfield_strength = config.get("hopfield_strength", None)
+        # Learnable hopfield_strength: stored as a raw param, softplus'd in forward()
+        # to keep effective strength >= 0. Init raw so softplus(raw) = 1.0.
+        hopfield_strength = config["hopfield_strength"]
         if hopfield_strength is None:
             biases["hopfield_strength"] = inverse_softplus(jnp.array(1.0))
 
@@ -296,49 +288,37 @@ class StorkeyHopfield(NodeBase):
         (s/D)(W^2 - W)z accumulated to latent_grad.
         """
         config = node_info.node_config
-        batch_size = state.z_latent.shape[0]
-        out_shape = node_info.shape
 
         edge_key, input_probe_state = next(iter(inputs.items()))
 
-        # Prepare Hopfield W
         W = StorkeyHopfield._prepare_W(params.weights[edge_key], config)
 
-        # Resolve hopfield_strength: learnable (softplus-constrained) or fixed.
-        # The learnable raw parameter is unconstrained; softplus ensures the
-        # effective strength is always >= 0.
+        # Learnable strength is stored raw; softplus keeps the effective value >= 0.
         if "hopfield_strength" in params.biases:
             strength = jax.nn.softplus(params.biases["hopfield_strength"])
         else:
-            strength = config.get("hopfield_strength", 1.0)
+            strength = config["hopfield_strength"]
 
-        # Strength-weighted blend: probe/(1+s) + (probe @ W)*s/(1+s).
-        # Residual (probe) provides the information pathway; W specializes
-        # in attractor corrections. At strength=0 this is pure pass-through.
+        # Strength-weighted blend: the probe residual carries the information
+        # pathway while W specializes in attractor corrections. At s=0 it is a
+        # pure pass-through; the learned projection dominates as s grows.
         blend = 1.0 / (1.0 + strength)
         pre_activation = input_probe_state * blend + (input_probe_state @ W) * (
             1.0 - blend
         )
 
-        # Add bias
         if "b" in params.biases and params.biases["b"].size > 0:
             pre_activation = pre_activation + params.biases["b"]
 
-        # Apply activation (tanh by default)
         activation = node_info.activation
         z_mu = type(activation).forward(pre_activation, activation.config)
 
-        # Prediction error
         error = state.z_latent - z_mu
-
-        # Update state
         state = state._replace(pre_activation=pre_activation, z_mu=z_mu, error=error)
 
-        # Standard PC energy via energy_functional
+        # Standard PC energy, then the Hopfield attractor energy on top.
         node_class = node_info.node_class
         state = node_class.energy_functional(state, node_info)
-
-        # Add Hopfield attractor energy scaled by strength
         state = StorkeyHopfield.accumulate_hopfield_energy(state, W, strength)
 
         total_energy = jnp.sum(state.energy)
