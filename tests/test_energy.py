@@ -16,11 +16,12 @@ from fabricpc.core.energy import (
     CrossEntropyEnergy,
     LaplacianEnergy,
     KLDivergenceEnergy,
+    total_graph_energy,
 )
+from fabricpc.core.types import GraphState, NodeState
 from fabricpc.nodes import Linear
 from fabricpc.core.topology import Edge
 from fabricpc.graph_assembly import TaskMap, graph
-from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.inference import InferenceSGD
 
 
@@ -159,6 +160,85 @@ class TestCustomEnergy:
 
         grad = L1Energy.grad_latent(z_latent, z_mu)
         assert jnp.allclose(grad, jnp.array([[1.0, -1.0, 1.0]]))
+
+
+class TestTotalGraphEnergy:
+    """Test the graph-level energy reducer."""
+
+    def _build_chain(self):
+        """Tiny input -> hidden -> output chain (in_degree: 0, 1, 1)."""
+        input_node = Linear(shape=(8,), name="input")
+        hidden_node = Linear(shape=(4,), name="hidden")
+        output_node = Linear(shape=(2,), name="output")
+
+        structure = graph(
+            nodes=[input_node, hidden_node, output_node],
+            edges=[
+                Edge(source=input_node, target=hidden_node.slot("in")),
+                Edge(source=hidden_node, target=output_node.slot("in")),
+            ],
+            task_map=TaskMap(x=input_node, y=output_node),
+            inference=InferenceSGD(),
+        )
+        return structure
+
+    def _state_with_energies(self, energies):
+        """GraphState whose nodes carry the given per-sample energy arrays."""
+        nodes = {}
+        for name, energy in energies.items():
+            dummy = jnp.zeros_like(energy)
+            nodes[name] = NodeState(
+                z_latent=dummy,
+                z_mu=dummy,
+                error=dummy,
+                energy=energy,
+                pre_activation=dummy,
+                latent_grad=dummy,
+            )
+        batch_size = next(iter(energies.values())).shape[0]
+        return GraphState(nodes=nodes, batch_size=batch_size)
+
+    def test_internal_only_skips_input_nodes(self):
+        """internal_only=True skips in_degree==0 nodes (the input node)."""
+        structure = self._build_chain()
+        state = self._state_with_energies(
+            {
+                "input": jnp.array([1.0, 1.0, 1.0]),  # in_degree 0, skipped
+                "hidden": jnp.array([2.0, 2.0, 2.0]),  # sum 6
+                "output": jnp.array([3.0, 3.0, 3.0]),  # sum 9
+            }
+        )
+
+        total = total_graph_energy(state, structure, internal_only=True)
+        assert jnp.allclose(total, 15.0)  # 6 + 9, input excluded
+
+    def test_all_nodes_summed_when_not_internal_only(self):
+        """internal_only=False sums every node, including inputs."""
+        structure = self._build_chain()
+        state = self._state_with_energies(
+            {
+                "input": jnp.array([1.0, 1.0, 1.0]),  # sum 3
+                "hidden": jnp.array([2.0, 2.0, 2.0]),  # sum 6
+                "output": jnp.array([3.0, 3.0, 3.0]),  # sum 9
+            }
+        )
+
+        total = total_graph_energy(state, structure, internal_only=False)
+        assert jnp.allclose(total, 18.0)  # 3 + 6 + 9
+
+    def test_returns_unnormalized_sum(self):
+        """The reducer returns the summed energy without batch normalization."""
+        structure = self._build_chain()
+        state = self._state_with_energies(
+            {
+                "input": jnp.zeros(4),
+                "hidden": jnp.array([1.0, 1.0, 1.0, 1.0]),  # sum 4
+                "output": jnp.array([2.0, 2.0, 2.0, 2.0]),  # sum 8
+            }
+        )
+
+        total = total_graph_energy(state, structure, internal_only=True)
+        assert jnp.allclose(total, 12.0)  # not divided by batch_size (4)
 
 
 class TestIntegration:

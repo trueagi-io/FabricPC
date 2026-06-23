@@ -21,6 +21,7 @@ import jax.numpy as jnp
 import optax
 
 from fabricpc.core.types import GraphParams, GraphState, GraphStructure
+from fabricpc.core.energy import total_graph_energy
 from fabricpc.core.inference import run_inference
 from fabricpc.core.learning import compute_local_weight_gradients
 from fabricpc.graph_initialization.state_initializer import initialize_graph_state
@@ -144,12 +145,9 @@ def train_step_autoregressive(
     final_state = run_inference(params, init_state, clamps, structure)
 
     # Compute total energy (sum over nodes with in_degree>0)
-    energy = jnp.array(0.0)
-    for node_name, node in structure.nodes.items():
-        if node.node_info.in_degree > 0:
-            energy = energy + jnp.sum(final_state.nodes[node_name].energy)
-
-    avg_energy = energy / batch_size
+    avg_energy = (
+        total_graph_energy(final_state, structure, internal_only=True) / batch_size
+    )
 
     # Compute local gradients
     grads = compute_local_weight_gradients(params, final_state, structure)

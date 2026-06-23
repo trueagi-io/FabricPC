@@ -29,7 +29,7 @@ from fabricpc.core.activations import (
     SigmoidActivation,
 )
 from fabricpc.core.initializers import XavierInitializer
-from fabricpc.core.energy import GaussianEnergy
+from fabricpc.core.energy import GaussianEnergy, total_graph_energy
 from conftest import with_inference
 
 
@@ -196,16 +196,10 @@ class TestInference:
         assert "latent_grad" in final_state.nodes["hidden1"]._fields
         assert final_state.nodes["hidden1"].latent_grad.shape == (batch_size, 20)
 
-        initial_energy = sum(
-            jnp.sum(state_after_1_step.nodes[name].energy)
-            for name in structure.nodes
-            if structure.nodes[name].node_info.in_degree > 0
+        initial_energy = total_graph_energy(
+            state_after_1_step, structure, internal_only=True
         )
-        final_energy = sum(
-            jnp.sum(final_state.nodes[name].energy)
-            for name in structure.nodes
-            if structure.nodes[name].node_info.in_degree > 0
-        )
+        final_energy = total_graph_energy(final_state, structure, internal_only=True)
 
         assert final_energy < initial_energy
 
