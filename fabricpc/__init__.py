@@ -60,6 +60,9 @@ from fabricpc import (
 from fabricpc.graph_initialization import initialize_params
 from fabricpc.training import train_pcn, evaluate_pcn
 
+# Checkpointing
+from fabricpc.serialization import save_checkpoint, load_checkpoint, Checkpoint
+
 # Types - for type hints
 from fabricpc.core.types import GraphParams, GraphState, GraphStructure
 
@@ -68,6 +71,10 @@ __all__ = [
     "initialize_params",
     "train_pcn",
     "evaluate_pcn",
+    # Checkpointing
+    "save_checkpoint",
+    "load_checkpoint",
+    "Checkpoint",
     # Types (for type hints)
     "GraphParams",
     "GraphState",
