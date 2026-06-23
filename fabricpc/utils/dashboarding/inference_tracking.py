@@ -15,6 +15,7 @@ from fabricpc.core.types import (
     GraphStructure,
     NodeState,
 )
+from fabricpc.core.energy import total_graph_energy
 from fabricpc.core.learning import compute_local_weight_gradients
 from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 
@@ -222,9 +223,7 @@ def train_step_with_history(
     )
 
     # Compute energy
-    energy = sum(
-        [jnp.sum(final_state.nodes[node_name].energy) for node_name in structure.nodes]
-    )
+    energy = total_graph_energy(final_state, structure, internal_only=False)
 
     # Compute gradients and update
     grads = compute_local_weight_gradients(params, final_state, structure)

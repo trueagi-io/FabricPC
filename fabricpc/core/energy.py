@@ -41,6 +41,8 @@ from typing import Dict, Any, Tuple
 
 import jax.numpy as jnp
 
+from fabricpc.core.types import GraphState, GraphStructure
+
 # =============================================================================
 # Energy Functional Base Class
 # =============================================================================
@@ -518,3 +520,34 @@ def get_energy_and_gradient(
     g = energy_cls.grad_latent(z_latent, z_mu, config)
 
     return e, g
+
+
+def total_graph_energy(
+    state: GraphState,
+    structure: GraphStructure,
+    *,
+    internal_only: bool,
+) -> jnp.ndarray:
+    """
+    Sum the per-node energies stored in state over the graph's nodes.
+
+    Each node's per-sample energy (state.nodes[name].energy, shape (batch,)) is
+    summed to a scalar. Iterates structure.nodes in insertion order; the order is
+    preserved deliberately because float summation is not associative.
+
+    Args:
+        state: Graph state holding each node's per-sample energy.
+        structure: Graph structure providing node in_degree metadata.
+        internal_only: If True, skip terminal input nodes (in_degree == 0), the
+            PC training objective. If False, sum all nodes (evaluation).
+
+    Returns:
+        Scalar total energy, summed over the selected nodes without batch
+        normalization. Callers divide by batch_size for a per-sample mean.
+    """
+    energy = jnp.array(0.0)
+    for name in structure.nodes:
+        if internal_only and structure.nodes[name].node_info.in_degree == 0:
+            continue
+        energy = energy + jnp.sum(state.nodes[name].energy)
+    return energy

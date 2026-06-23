@@ -37,6 +37,7 @@ from fabricpc.core.energy import (
     compute_energy,
     compute_energy_gradient,
     get_energy_and_gradient,
+    total_graph_energy,
 )
 
 # Inference functions and classes
@@ -92,6 +93,7 @@ __all__ = [
     "compute_energy",
     "compute_energy_gradient",
     "get_energy_and_gradient",
+    "total_graph_energy",
     # Inference
     "InferenceBase",
     "InferenceSGD",

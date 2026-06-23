@@ -15,6 +15,7 @@ import optax
 from tqdm.auto import tqdm as _tqdm_cls
 
 from fabricpc.core.types import GraphParams, GraphState, GraphStructure
+from fabricpc.core.energy import total_graph_energy
 from fabricpc.core.inference import run_inference
 from fabricpc.core.learning import compute_local_weight_gradients
 from fabricpc.graph_initialization.state_initializer import initialize_graph_state
@@ -152,14 +153,7 @@ def get_graph_param_gradient(
     final_state = run_inference(params, init_state, clamps, structure)
 
     # Compute energy (ignore terminal input nodes), normalized per sample
-    energy = sum(
-        [
-            sum(final_state.nodes[node_name].energy)
-            for node_name in structure.nodes
-            if structure.nodes[node_name].node_info.in_degree > 0
-        ]
-    )
-    energy = energy / batch_size
+    energy = total_graph_energy(final_state, structure, internal_only=True) / batch_size
 
     # Compute LOCAL gradients for each node
     grads = compute_local_weight_gradients(params, final_state, structure)
@@ -516,11 +510,9 @@ def eval_step(
     final_state = run_inference(params, state, clamps, structure)
 
     # Compute total network energy
-    total_energy = jnp.array(0.0)
-    for node_name in structure.nodes:
-        total_energy = total_energy + jnp.sum(final_state.nodes[node_name].energy)
-
-    avg_energy = total_energy / batch_size
+    avg_energy = (
+        total_graph_energy(final_state, structure, internal_only=False) / batch_size
+    )
     # Note: In evaluation mode, the output node won't be clamped to a label and doesn't contribute to energy. Evaluation energy is only from internal nodes.
     # Use a proper metric to assess task performance, not energy.
 
@@ -768,11 +760,8 @@ def evaluate_transformer(
 
         # Calculate energy per device (internal + external/output error)
         def get_device_energy(fs, batch_y):
-            e = 0.0
             # Internal energy
-            for node_name in structure.nodes:
-                if structure.nodes[node_name].node_info.in_degree > 0:
-                    e += jnp.sum(fs.nodes[node_name].energy)
+            e = total_graph_energy(fs, structure, internal_only=True)
 
             # External energy (Output prediction error)
             if "y" in structure.task_map:

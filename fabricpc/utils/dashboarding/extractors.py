@@ -10,6 +10,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from fabricpc.core.types import GraphState, GraphParams, GraphStructure
+from fabricpc.core.energy import total_graph_energy
 
 
 def extract_node_energies(state: GraphState) -> Dict[str, np.ndarray]:
@@ -40,11 +41,7 @@ def extract_total_energy(
     Returns:
         Total energy as float.
     """
-    total = 0.0
-    for node_name, node_info in structure.nodes.items():
-        if node_info.in_degree > 0:
-            total += float(jnp.sum(state.nodes[node_name].energy))
-    return total
+    return float(total_graph_energy(state, structure, internal_only=True))
 
 
 def extract_latent_statistics(

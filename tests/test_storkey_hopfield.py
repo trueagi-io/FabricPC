@@ -12,7 +12,7 @@ from fabricpc.graph_initialization.state_initializer import initialize_graph_sta
 from fabricpc.core.learning import compute_local_weight_gradients
 from fabricpc.core.inference import InferenceSGD, run_inference
 from fabricpc.core.activations import SigmoidActivation, SoftmaxActivation
-from fabricpc.core.energy import CrossEntropyEnergy
+from fabricpc.core.energy import CrossEntropyEnergy, total_graph_energy
 from fabricpc.core.initializers import XavierInitializer, NormalInitializer
 from fabricpc.training import train_step
 from conftest import with_inference
@@ -123,11 +123,7 @@ class TestEnergy:
             params=params,
         )
         state_few = run_inference(params, state_init, clamps, struct_few)
-        energy_few = sum(
-            float(jnp.sum(state_few.nodes[n].energy))
-            for n in structure.nodes
-            if structure.nodes[n].node_info.in_degree > 0
-        )
+        energy_few = float(total_graph_energy(state_few, structure, internal_only=True))
 
         # More steps
         struct_many = with_inference(structure, infer_steps=50, eta_infer=0.05)
@@ -139,10 +135,8 @@ class TestEnergy:
             params=params,
         )
         state_many = run_inference(params, state_init, clamps, struct_many)
-        energy_many = sum(
-            float(jnp.sum(state_many.nodes[n].energy))
-            for n in structure.nodes
-            if structure.nodes[n].node_info.in_degree > 0
+        energy_many = float(
+            total_graph_energy(state_many, structure, internal_only=True)
         )
 
         assert (
