@@ -29,6 +29,11 @@ Users can create custom nodes by extending NodeBase:
         @staticmethod
         def forward(params, inputs, state, node_info):
             ...
+
+Place the default activation/energy/initializer objects directly in the
+``__init__`` signature, as above. Those objects are immutable — their base
+classes block mutation after construction — so the single default instance is
+safe to share across every node that does not override it.
 """
 
 from __future__ import annotations
@@ -163,7 +168,9 @@ class NodeBase(ABC):
     steps every implementation must perform are documented in its docstring.
 
     Subclasses set concrete default instances for activation, energy, latent_init,
-    and weight_init in their ``__init__`` parameter defaults.
+    and weight_init directly in their ``__init__`` parameter defaults. Those
+    default objects are immutable, so a single shared default instance cannot
+    leak state across nodes.
     """
 
     def __init__(

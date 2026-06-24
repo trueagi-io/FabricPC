@@ -216,7 +216,6 @@ def train_autoregressive(
         config: Training configuration:
             - num_epochs: Number of training epochs
             - use_causal_mask: Whether to use causal masking (default True)
-            - gradient_accumulation_steps: Steps to accumulate gradients (default 1)
         rng_key: JAX random key
         verbose: Whether to print progress
         epoch_callback: Optional callback called at each epoch end as
@@ -233,7 +232,6 @@ def train_autoregressive(
     # Training hyperparameters
     num_epochs = config.get("num_epochs", 10)  # supports float (e.g. 1.5)
     use_causal_mask = config.get("use_causal_mask", True)
-    grad_accum_steps = config.get("gradient_accumulation_steps", 1)
 
     # Support fractional epochs: e.g. 1.5 -> 2 loop iterations, last stops at 50%
     total_epochs = math.ceil(num_epochs)

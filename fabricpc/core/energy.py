@@ -35,18 +35,19 @@ Energy functionals are instantiated with their parameters:
     energy = CrossEntropyEnergy(eps=1e-7)
 """
 
-import types
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Tuple
 
 import jax.numpy as jnp
+
+from fabricpc.core._frozen import FrozenConfig
 
 # =============================================================================
 # Energy Functional Base Class
 # =============================================================================
 
 
-class EnergyFunctional(ABC):
+class EnergyFunctional(FrozenConfig, ABC):
     """
     Abstract base class for energy functionals.
 
@@ -55,6 +56,11 @@ class EnergyFunctional(ABC):
     and parameter learning (minimizing E w.r.t. params).
 
     All methods are static for JAX compatibility (pure functions, no state).
+
+    Instances are frozen after construction (see ``FrozenConfig``): attributes
+    cannot be set or deleted and ``config`` keys cannot be added, removed, or
+    reassigned, so one default instance is safe to share as a signature default.
+    The freeze is shallow: construct only with immutable scalar config values.
 
     Required methods:
         - energy(): Compute E(z_latent, z_mu) per sample
@@ -76,9 +82,6 @@ class EnergyFunctional(ABC):
                 temp = config.get("temperature", 1.0) if config else 1.0
                 return (z_latent - z_mu) / temp
     """
-
-    def __init__(self, **config):
-        self.config = types.MappingProxyType(config)  # Immutable dictionary
 
     @staticmethod
     @abstractmethod

@@ -70,7 +70,6 @@ Recurrency comes from the Hopfield energy gradient during inference steps.
 from __future__ import annotations
 
 from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING
-import numpy as np
 import jax
 import jax.numpy as jnp
 
@@ -296,8 +295,6 @@ class StorkeyHopfield(NodeBase):
         (s/D)(W^2 - W)z accumulated to latent_grad.
         """
         config = node_info.node_config
-        batch_size = state.z_latent.shape[0]
-        out_shape = node_info.shape
 
         edge_key, input_probe_state = next(iter(inputs.items()))
 

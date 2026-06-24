@@ -31,7 +31,6 @@ Initializers are instantiated with their parameters:
     init = KaimingInitializer(mode="fan_out", nonlinearity="relu")
 """
 
-import types
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Tuple
 
@@ -39,12 +38,14 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 
+from fabricpc.core._frozen import FrozenConfig
+
 # =============================================================================
 # Initializer Base Class
 # =============================================================================
 
 
-class InitializerBase(ABC):
+class InitializerBase(FrozenConfig, ABC):
     """
     Abstract base class for tensor initializers.
 
@@ -53,12 +54,14 @@ class InitializerBase(ABC):
 
     All initialize() methods are static for JAX compatibility (pure functions, no state).
 
+    Instances are frozen after construction (see ``FrozenConfig``): attributes
+    cannot be set or deleted and ``config`` keys cannot be added, removed, or
+    reassigned, so one default instance is safe to share as a signature default.
+    The freeze is shallow: construct only with immutable scalar config values.
+
     Required methods:
         - initialize(): Generate initialized array
     """
-
-    def __init__(self, **config):
-        self.config = types.MappingProxyType(config)  # Immutable dictionary
 
     @staticmethod
     @abstractmethod
