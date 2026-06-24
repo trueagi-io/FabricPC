@@ -1,10 +1,8 @@
 import jax
-import jax.numpy as jnp
 import optuna
 import os
 import random
 import numpy as np
-import json
 import time
 from typing import Callable, Any, Dict, Tuple, Optional, Union
 from fabricpc.training.train import train_pcn, evaluate_pcn
@@ -97,7 +95,10 @@ class BayesianTuner:
             callbacks: List of Optuna callbacks.
         """
         if isinstance(search_space, dict):
-            search_fn = lambda trial: self._suggest_from_config(trial, search_space)
+
+            def search_fn(trial):
+                return self._suggest_from_config(trial, search_space)
+
         else:
             search_fn = search_space
 

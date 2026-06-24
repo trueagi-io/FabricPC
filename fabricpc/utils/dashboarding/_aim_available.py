@@ -22,12 +22,9 @@ def is_aim_available() -> bool:
     """
     global _aim_available
     if _aim_available is None:
-        try:
-            import aim
+        import importlib.util
 
-            _aim_available = True
-        except ImportError:
-            _aim_available = False
+        _aim_available = importlib.util.find_spec("aim") is not None
     return _aim_available
 
 

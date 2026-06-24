@@ -36,18 +36,19 @@ Activations are instantiated with their parameters:
 """
 
 import math
-import types
 from abc import ABC, abstractmethod
 from typing import Dict, Any
 import jax.numpy as jnp
 from jax import nn
+
+from fabricpc.core._frozen import FrozenConfig
 
 # =============================================================================
 # Activation Base Class
 # =============================================================================
 
 
-class ActivationBase(ABC):
+class ActivationBase(FrozenConfig, ABC):
     """
     Abstract base class for activation functions.
 
@@ -55,6 +56,11 @@ class ActivationBase(ABC):
     Each activation provides both the forward function and its derivative.
 
     All methods are static for JAX compatibility (pure functions, no state).
+
+    Instances are frozen after construction (see ``FrozenConfig``): attributes
+    cannot be set or deleted and ``config`` keys cannot be added, removed, or
+    reassigned, so one default instance is safe to share as a signature default.
+    The freeze is shallow: construct only with immutable scalar config values.
 
     Required methods:
         - forward(): Apply activation function
@@ -76,9 +82,6 @@ class ActivationBase(ABC):
                 t = jnp.tanh(x / temp)
                 return (1 - t**2) / temp
     """
-
-    def __init__(self, **config):
-        self.config = types.MappingProxyType(config)  # Immutable dictionary
 
     @staticmethod
     @abstractmethod

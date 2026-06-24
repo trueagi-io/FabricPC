@@ -29,11 +29,12 @@ from fabricpc.nodes.linear import Linear
 from fabricpc.core.topology import Edge
 from fabricpc.graph_assembly import TaskMap, graph
 from fabricpc.core.activations import (
+    ActivationBase,
     GeluActivation,
     IdentityActivation,
     SoftmaxActivation,
 )
-from fabricpc.core.energy import KLDivergenceEnergy, GaussianEnergy
+from fabricpc.core.energy import EnergyFunctional, KLDivergenceEnergy, GaussianEnergy
 from fabricpc.core.inference import InferenceBase
 
 # ==============================================================================
@@ -51,9 +52,9 @@ class EmbeddingNode(NodeBase):
         name,
         vocab_size,
         embed_dim,
-        weight_init=None,
-        latent_init=None,
-        energy=None,
+        weight_init: Optional[InitializerBase] = NormalInitializer(std=0.02),
+        latent_init: Optional[InitializerBase] = NormalInitializer(),
+        energy: Optional[EnergyFunctional] = GaussianEnergy(),
         **kwargs,
     ):
         super().__init__(
@@ -61,9 +62,9 @@ class EmbeddingNode(NodeBase):
             name=name,
             vocab_size=vocab_size,
             embed_dim=embed_dim,
-            weight_init=weight_init or NormalInitializer(std=0.02),
-            latent_init=latent_init or NormalInitializer(),
-            energy=energy or GaussianEnergy(),
+            weight_init=weight_init,
+            latent_init=latent_init,
+            energy=energy,
             **kwargs,
         )
 
@@ -146,9 +147,9 @@ class MhaResidualNode(NodeBase):
         use_rope=True,
         rope_theta=10000.0,
         is_causal=True,
-        weight_init=None,
-        latent_init=None,
-        energy=None,
+        weight_init: Optional[InitializerBase] = XavierInitializer(),
+        latent_init: Optional[InitializerBase] = NormalInitializer(),
+        energy: Optional[EnergyFunctional] = GaussianEnergy(),
         **kwargs,
     ):
         super().__init__(
@@ -159,9 +160,9 @@ class MhaResidualNode(NodeBase):
             use_rope=use_rope,
             rope_theta=rope_theta,
             is_causal=is_causal,
-            weight_init=weight_init or XavierInitializer(),
-            latent_init=latent_init or NormalInitializer(),
-            energy=energy or GaussianEnergy(),
+            weight_init=weight_init,
+            latent_init=latent_init,
+            energy=energy,
             **kwargs,
         )
 
@@ -263,10 +264,10 @@ class LnMlp1Node(NodeBase):
         name,
         embed_dim,
         ff_dim,
-        activation=None,
-        weight_init=None,
-        latent_init=None,
-        energy=None,
+        activation: Optional[ActivationBase] = GeluActivation(),
+        weight_init: Optional[InitializerBase] = KaimingInitializer(),
+        latent_init: Optional[InitializerBase] = NormalInitializer(),
+        energy: Optional[EnergyFunctional] = GaussianEnergy(),
         **kwargs,
     ):
         super().__init__(
@@ -274,10 +275,10 @@ class LnMlp1Node(NodeBase):
             name=name,
             embed_dim=embed_dim,
             ff_dim=ff_dim,
-            activation=activation or GeluActivation(),
-            weight_init=weight_init or KaimingInitializer(),
-            latent_init=latent_init or NormalInitializer(),
-            energy=energy or GaussianEnergy(),
+            activation=activation,
+            weight_init=weight_init,
+            latent_init=latent_init,
+            energy=energy,
             **kwargs,
         )
 
@@ -327,9 +328,9 @@ class Mlp2ResidualNode(NodeBase):
         name,
         embed_dim,
         ff_dim,
-        weight_init=None,
-        latent_init=None,
-        energy=None,
+        weight_init: Optional[InitializerBase] = XavierInitializer(),
+        latent_init: Optional[InitializerBase] = NormalInitializer(),
+        energy: Optional[EnergyFunctional] = GaussianEnergy(),
         **kwargs,
     ):
         super().__init__(
@@ -337,9 +338,9 @@ class Mlp2ResidualNode(NodeBase):
             name=name,
             embed_dim=embed_dim,
             ff_dim=ff_dim,
-            weight_init=weight_init or XavierInitializer(),
-            latent_init=latent_init or NormalInitializer(),
-            energy=energy or GaussianEnergy(),
+            weight_init=weight_init,
+            latent_init=latent_init,
+            energy=energy,
             **kwargs,
         )
 
@@ -387,10 +388,10 @@ class VocabProjectionNode(NodeBase):
         name,
         vocab_size,
         embed_dim,
-        activation=None,
-        weight_init=None,
-        latent_init=None,
-        energy=None,
+        activation: Optional[ActivationBase] = SoftmaxActivation(),
+        weight_init: Optional[InitializerBase] = XavierInitializer(),
+        latent_init: Optional[InitializerBase] = NormalInitializer(),
+        energy: Optional[EnergyFunctional] = KLDivergenceEnergy(),
         **kwargs,
     ):
         super().__init__(
@@ -398,10 +399,10 @@ class VocabProjectionNode(NodeBase):
             name=name,
             vocab_size=vocab_size,
             embed_dim=embed_dim,
-            activation=activation or SoftmaxActivation(),
-            weight_init=weight_init or XavierInitializer(),
-            latent_init=latent_init or NormalInitializer(),
-            energy=energy or KLDivergenceEnergy(),
+            activation=activation,
+            weight_init=weight_init,
+            latent_init=latent_init,
+            energy=energy,
             **kwargs,
         )
 

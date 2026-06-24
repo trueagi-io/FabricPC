@@ -4,7 +4,7 @@ These functions create callbacks compatible with the train_pcn function's
 iter_callback and epoch_callback parameters.
 """
 
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 import jax
 

@@ -92,7 +92,6 @@ def apply_rotary_emb(
     """
     # x shape: (batch, num_heads, seq_len, head_dim)
     seq_len = x.shape[2]
-    head_dim = x.shape[3]
 
     # Slice frequencies to match sequence length
     cos = cos[:seq_len, :]  # (seq_len, head_dim // 2)
@@ -151,7 +150,7 @@ class TransformerBlock(NodeBase):
         name: str,
         activation: Optional[ActivationBase] = IdentityActivation(),
         energy: Optional[EnergyFunctional] = GaussianEnergy(),
-        internal_activation: Optional[ActivationBase] = None,
+        internal_activation: Optional[ActivationBase] = GeluActivation(),
         num_heads: int = 8,
         ff_dim: Optional[int] = None,
         dropout_rate: float = 0.0,
@@ -168,7 +167,7 @@ class TransformerBlock(NodeBase):
             energy=energy,
             latent_init=latent_init,
             weight_init=weight_init,
-            internal_activation=internal_activation or GeluActivation(),
+            internal_activation=internal_activation,
             num_heads=num_heads,
             ff_dim=ff_dim,
             dropout_rate=dropout_rate,
@@ -294,11 +293,14 @@ class TransformerBlock(NodeBase):
         # Get internal activation from config (stored as ActivationBase instance)
         internal_activation = config.get("internal_activation")
         if internal_activation is not None:
-            activation_fn = lambda x: type(internal_activation).forward(
-                x, internal_activation.config
-            )
+
+            def activation_fn(x):
+                return type(internal_activation).forward(x, internal_activation.config)
+
         else:
-            activation_fn = lambda x: x
+
+            def activation_fn(x):
+                return x
 
         # Get input (self-attention)
         in_edge_key = next(iter(k for k in inputs.keys() if k.endswith(":in")))
