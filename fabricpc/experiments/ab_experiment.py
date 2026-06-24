@@ -39,7 +39,7 @@ Example::
     results.print_summary()
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Tuple, Dict, Any, List
 import time
 
@@ -169,7 +169,7 @@ class ABResults:
         print(f"Metric: {self.metric}")
         print(f"Trials: {self.n_trials}")
         print(f"Epochs per trial: {self.num_epochs}")
-        print(f"Design: Paired (same seed per trial)")
+        print("Design: Paired (same seed per trial)")
         print()
 
         # Per-trial table

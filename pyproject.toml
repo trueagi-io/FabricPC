@@ -101,3 +101,27 @@ extend-exclude = '''
     | dist
 )/
 '''
+
+[tool.ruff]
+target-version = "py310"
+# Lint the shipped package only. examples/ and scripts/ deliberately configure
+# JAX (set_jax_flags_before_importing_jax) before `import jax`, which is E402 by
+# design; tests/ run under pytest and are not shipped. Scoping ruff to fabricpc/
+# enforces B006 + the default pyflakes/pycodestyle rules where they matter,
+# without flagging the intentional import-ordering idiom in demo/diagnostic code.
+extend-exclude = [".git", ".venv", "build", "dist", "examples", "tests", "scripts"]
+
+[tool.ruff.lint]
+# B006 (mutable-argument-default) forbids list/dict/set literal defaults — the
+# genuinely dangerous shared-mutable-state bug. It does NOT flag custom
+# constructor calls such as `= GaussianEnergy()`; those stateless value-object
+# defaults are the convention this package standardizes on, made
+# safe-by-construction by freezing the config base classes (ActivationBase /
+# EnergyFunctional / InitializerBase are immutable after construction).
+#
+# `extend-select` runs B006 on top of ruff's default ruleset (pyflakes F +
+# pycodestyle E4/E7/E9), which the codebase is kept clean against. B008
+# (function-call-in-default-argument) is intentionally NOT enabled — it would
+# flag every `= GaussianEnergy()` / `= KaimingInitializer()` signature default,
+# which is exactly the pattern being standardized on.
+extend-select = ["B006"]

@@ -1,4 +1,10 @@
 repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.19
+    hooks:
+      # Lint only (B006 mutable-argument-default; see [tool.ruff.lint] in
+      # pyproject.toml). Formatting stays with Black below.
+      - id: ruff-check
   - repo: https://github.com/psf/black
     rev: 26.1.0
     hooks:
