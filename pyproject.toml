@@ -48,6 +48,7 @@ dev = [
 tfds = [
     "tensorflow-datasets>=4.9.0",
     "tensorflow>=2.15.0",
+    "tokenizers>=0.15.0",
 ]
 experiments = [
     "scipy>=1.10.0",

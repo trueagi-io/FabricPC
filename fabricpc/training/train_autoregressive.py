@@ -60,7 +60,12 @@ def compute_loss(
     predictions = final_state.nodes[output_node].z_mu
 
     # Compute loss
+    # Targets may arrive as integer token ids (batch, seq_len) — the loaders
+    # yield ints to avoid a large one-hot per batch. One-hot here to match the
+    # prediction shape; already one-hot targets (equal ndim) pass through.
     if loss_type == "cross_entropy":
+        if targets.ndim == predictions.ndim - 1:
+            targets = jax.nn.one_hot(targets, predictions.shape[-1])
         log_preds = jnp.log(predictions + 1e-10)
         loss = -jnp.mean(jnp.sum(targets * log_preds, axis=-1))
 
@@ -87,7 +92,8 @@ def train_step_autoregressive(
 
     This implements the predictive coding training loop for sequence prediction:
     1. Clamp input sequence and target sequence using task_map
-    2. Generate and apply causal masking via task_map["causal_mask"]
+    2. Optionally clamp an external causal mask if task_map defines a
+       "causal_mask" node (v1 only); the v2 node masks internally
     3. Run inference to convergence
     4. Compute local gradients
     5. Update weights
@@ -99,7 +105,8 @@ def train_step_autoregressive(
             x: (batch, seq_len, vocab_size) or (batch, seq_len)
             y: (batch, seq_len, vocab_size) or (batch, seq_len)
         structure: Graph structure with task_map defining input/output nodes.
-            For causal masking, task_map should include "causal_mask" -> node_name
+            An external "causal_mask" -> node_name entry is optional and only
+            used by v1 graphs; v2 masks internally via the node's is_causal flag.
         optimizer: Optax optimizer
         rng_key: JAX random key
         use_causal_mask: Whether to apply causal masking
@@ -117,10 +124,21 @@ def train_step_autoregressive(
             node_name = structure.task_map[task_name]
             clamps[node_name] = task_value
 
-    # Generate and clamp causal mask if enabled and configured in task_map
-    if use_causal_mask:
-        if "causal_mask" not in structure.task_map:
-            raise ValueError("Causal masking enabled but 'causal_mask' not in task_map")
+    # Targets arrive as integer token ids (batch, seq_len) to keep the
+    # host->device transfer int32 (a one-hot is vocab_size x larger). The
+    # CrossEntropy output node is clamped with a one-hot latent, so encode here.
+    y = batch["y"]
+    if y.ndim == 2:
+        y = jax.nn.one_hot(
+            y, structure.nodes[structure.task_map["y"]].node_info.shape[-1]
+        )
+    clamps[structure.task_map["y"]] = y
+
+    # Clamp an external causal mask only if the graph defines one (the v1
+    # monolithic TransformerBlock). The v2 decomposed MhaResidualNode masks
+    # internally via is_causal, so its task_map has no "causal_mask" node and
+    # this branch is skipped.
+    if use_causal_mask and "causal_mask" in structure.task_map:
         # Create causal mask: (seq_len, seq_len) where mask[i,j] = 1 if j <= i
         causal_mask = create_causal_mask(seq_len)
         # Broadcast to (batch, 1, seq_len, seq_len) for attention scores
@@ -160,7 +178,7 @@ def train_step_autoregressive(
 
     # Compute output cross-entropy loss for perplexity metric - not used for gradients
     output_cross_entropy = compute_loss(
-        final_state, batch["y"], structure.task_map["y"], loss_type="cross_entropy"
+        final_state, y, structure.task_map["y"], loss_type="cross_entropy"
     )
 
     return (
@@ -197,7 +215,10 @@ def train_autoregressive(
             - gradient_accumulation_steps: Steps to accumulate gradients (default 1)
         rng_key: JAX random key
         verbose: Whether to print progress
-        epoch_callback: Optional callback (epoch, params, structure, config, rng) -> any
+        epoch_callback: Optional callback called at each epoch end as
+            (epoch, params, structure, config, rng, *, energy, ce_loss) -> any.
+            Receives the epoch's mean training energy and CE loss; should
+            accept **kwargs.
         iter_callback: Optional callback (epoch, batch_idx, loss) -> any
 
     Returns:
@@ -279,10 +300,20 @@ def train_autoregressive(
         avg_energy = epoch_energy / batches_processed
         avg_ce_loss = epoch_ce_loss / batches_processed
 
-        # Epoch callback
+        # Epoch callback. Pass the epoch's training metrics as keyword args so
+        # callers (e.g. the tuner) can report per-epoch progress to a pruner
+        # without recomputing them. Callbacks should accept **kwargs.
         if epoch_callback is not None:
             epoch_results.append(
-                epoch_callback(epoch_idx, params, structure, config, rng_key)
+                epoch_callback(
+                    epoch_idx,
+                    params,
+                    structure,
+                    config,
+                    rng_key,
+                    energy=avg_energy,
+                    ce_loss=avg_ce_loss,
+                )
             )
         else:
             epoch_results.append(None)
@@ -529,8 +560,9 @@ def _eval_step_autoregressive(
     # Create clamps (input only for evaluation)
     clamps = {structure.task_map["x"]: batch["x"]}
 
-    # Add causal mask if enabled
-    if use_causal_mask:
+    # Add an external causal mask only if the graph defines one (v1). v2 masks
+    # internally via the node's is_causal flag, so this is skipped there.
+    if use_causal_mask and "causal_mask" in structure.task_map:
         causal_mask = create_causal_mask(seq_len)
         causal_mask = causal_mask[None, None, :, :]
         causal_mask = jnp.broadcast_to(causal_mask, (batch_size, 1, seq_len, seq_len))
@@ -588,9 +620,6 @@ def evaluate_autoregressive(
     output_node = structure.task_map.get("y")
     if output_node is None:
         raise ValueError("Structure must have 'y' in task_map")
-
-    if use_causal_mask and "causal_mask" not in structure.task_map:
-        raise ValueError("Causal masking enabled but 'causal_mask' not in task_map")
 
     try:
         num_batches_total = len(test_loader)
