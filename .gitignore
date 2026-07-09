@@ -94,3 +94,8 @@ nbproject/
 # !important-file.txt
 
 # End of file
+
+# precision_experiment.py sweep outputs
+precision_*.csv
+precision_*.md
+*.progress.csv

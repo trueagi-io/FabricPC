@@ -356,6 +356,7 @@ def initialize_graph_state(
     clamps: Dict[str, jnp.ndarray] = None,
     state_init: StateInitBase = None,
     params: GraphParams = None,
+    precision_map: Dict[str, jnp.ndarray] = None,
 ) -> GraphState:
     """
     Initialize graph state using the specified strategy.
@@ -384,6 +385,21 @@ def initialize_graph_state(
     if state_init is None:
         state_init = structure.config["graph_state_initializer"]
 
-    return type(state_init).initialize_state(
+    state = type(state_init).initialize_state(
         structure, batch_size, rng_key, clamps, state_init.config, params
     )
+
+    # Attach an optional per-node diagonal precision to each node's state (used by the
+    # online-precision NGD trainer). None -> standard behavior.
+    if precision_map is not None:
+        nodes = {
+            name: (
+                ns._replace(precision=precision_map[name])
+                if name in precision_map
+                else ns
+            )
+            for name, ns in state.nodes.items()
+        }
+        state = state._replace(nodes=nodes)
+
+    return state
