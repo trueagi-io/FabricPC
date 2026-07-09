@@ -504,7 +504,7 @@ class TestIdentityNode:
         )
         params = NodeParams(weights={}, biases={})
 
-        _, new_state = IdentityNode.forward(params, inputs, state, node_info)
+        new_state = IdentityNode.forward(params, inputs, state, node_info)
 
         expected = sum(inputs.values())
         np.testing.assert_allclose(new_state.z_mu, expected, rtol=1e-5)

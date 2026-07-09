@@ -212,7 +212,7 @@ class TestEmbeddingNode:
         node_info = structure.nodes["embed"].node_info
 
         # Should not crash and should squeeze internally
-        _, new_state = EmbeddingNode.forward(node_params, inputs, state, node_info)
+        new_state = EmbeddingNode.forward(node_params, inputs, state, node_info)
 
         assert new_state.z_mu.shape == (2, 5, 8)
 

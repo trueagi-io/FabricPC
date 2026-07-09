@@ -329,7 +329,7 @@ class NodeBase(ABC):
         inputs: Dict[str, jnp.ndarray],  # keyed on EdgeInfo.key -> inputs data
         state: NodeState,
         node_info: NodeInfo,
-    ) -> tuple[jax.Array, NodeState]:
+    ) -> NodeState:
         """
         Predict this node's latent state and report the resulting energy.
 
@@ -360,8 +360,7 @@ class NodeBase(ABC):
            must already be set. Additional energy terms (e.g. the Hopfield
            attractor term in StorkeyHopfield) are added by replacing
            ``state.energy`` after this call.
-        6. Return ``jnp.sum(state.energy), state``: the scalar total energy
-           first, the updated state second.
+        6. Return ``state``: the updated state
 
         muPC scaling is NOT applied here; the inference/learning callsite applies
         it. Do not scale inputs or gradients inside this method.
@@ -377,9 +376,7 @@ class NodeBase(ABC):
             node_info: NodeInfo object (contains activation, energy, etc.)
 
         Returns:
-            Tuple of (total_energy, NodeState)
-                - total_energy: scalar energy value for this node
-                - NodeState: updated node state (z_mu, error, energy)
+            NodeState: updated node state (z_mu, error, energy)
         """
         pass
 
@@ -428,6 +425,18 @@ class NodeBase(ABC):
         inputs (for updating upstream latents), and the self-latent gradient
         (dE/dz_latent).
         Called in the inference phase of predictive coding.
+
+        Contract:
+        1. In-degree-0 nodes are handled specially, without calling
+           ``forward()``: z_mu <- z_latent (cast to z_mu's dtype); error,
+           energy, and all gradients are zero.
+        2. Every node with in-degree > 0 goes through ``node_class.forward()``.
+           For unclamped out-degree-0 nodes this computes z_mu only, with
+           zero gradients.
+        3. The per-sample ``state.energy`` (shape (batch,)) is summed over
+           the batch dimension to a scalar.
+        4. ``jax.value_and_grad`` differentiates that scalar w.r.t. the
+           input tensors and z_latent.
 
         Override this method to implement explicit (non-autodiff) gradient
         computation. When overriding, use ``energy.grad_latent()`` and
@@ -484,9 +493,7 @@ class NodeBase(ABC):
             # No post-synaptic targets and no clamped data!
             # This happens for output nodes when the model is run in inference/evaluation mode (not training)
             # Compute its projection (z_mu) but no gradient since it doesn't contribute to any error.
-            total_energy, new_state = node_class.forward(
-                params, inputs, state, node_info
-            )
+            new_state = node_class.forward(params, inputs, state, node_info)
             # Update keeping the projection, but zero error.
             new_state = new_state._replace(
                 z_latent=new_state.z_mu,
@@ -504,9 +511,10 @@ class NodeBase(ABC):
             # Extract z_latent as a separate differentiable argument via closure.
             def energy_fn(input_args, z_latent):
                 s = state._replace(z_latent=z_latent)
-                total_energy, new_s = node_class.forward(
-                    params, input_args, s, node_info
-                )
+                new_s = node_class.forward(params, input_args, s, node_info)
+                # Sum the per-sample energy over the batch dimension to the
+                # scalar differentiated by autodiff
+                total_energy = jnp.sum(new_s.energy)
                 return total_energy, new_s
 
             (total_energy, new_state), (input_grads, self_grad) = jax.value_and_grad(
@@ -525,6 +533,10 @@ class NodeBase(ABC):
         """
         Forward pass with autodiff: computes the node's local energy gradient w.r.t. weights.
         Called in the learning phase of predictive coding.
+
+        Sums the per-sample ``state.energy`` (shape (batch,)) over the batch
+        dimension to the scalar differentiated by ``jax.value_and_grad``
+        w.r.t. params.
 
         Override this method to implement explicit weight gradient computation
         or apply node-specific post-processing (e.g., LayerNorm compensation).
@@ -546,9 +558,16 @@ class NodeBase(ABC):
         """
         node_class = node_info.node_class
 
+        def energy_fn(p):
+            new_s = node_class.forward(p, inputs, state, node_info)
+            # Sum the per-sample energy over the batch dimension to the
+            # scalar differentiated by autodiff
+            total_energy = jnp.sum(new_s.energy)
+            return total_energy, new_s
+
         (total_energy, new_state), params_grad = jax.value_and_grad(
-            node_class.forward, argnums=0, has_aux=True
-        )(params, inputs, state, node_info)
+            energy_fn, has_aux=True
+        )(params)
 
         return new_state, params_grad
 

@@ -115,7 +115,7 @@ class IdentityNode(NodeBase):
         inputs: Dict[str, jnp.ndarray],
         state: NodeState,
         node_info: NodeInfo,
-    ) -> Tuple[jax.Array, NodeState]:
+    ) -> NodeState:
         """
         Identity forward pass: sum inputs and pass through.
 
@@ -129,7 +129,7 @@ class IdentityNode(NodeBase):
             node_info: NodeInfo object
 
         Returns:
-            Tuple of (total_energy, updated NodeState)
+            NodeState
         """
         # Sum all inputs
         z_mu = None
@@ -156,5 +156,4 @@ class IdentityNode(NodeBase):
         node_class = node_info.node_class
         state = node_class.energy_functional(state, node_info)
 
-        total_energy = jnp.sum(state.energy)
-        return total_energy, state
+        return state

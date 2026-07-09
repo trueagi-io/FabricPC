@@ -191,7 +191,7 @@ def forward(params, inputs, state, node_info):
         node_info: NodeInfo with configuration
 
     Returns:
-        (total_energy, updated_state)
+        Updated NodeState
     """
     # Extract config
     kernel_size = node_info.node_config.get("kernel_size", (1, 1))
@@ -239,9 +239,8 @@ def forward(params, inputs, state, node_info):
     node_class = node_info.node_class
     state = node_class.energy_functional(state, node_info)
 
-    # Return total energy and updated state
-    total_energy = jnp.sum(state.energy)
-    return total_energy, state
+    # Return the updated state
+    return state
 ```
 
 `forward()` is a **pure function**. It must have no side effects and must express its dependence on `params`, `inputs`, and `state.z_latent` entirely through JAX operations, because the framework differentiates it under `jax.value_and_grad` — `forward_and_latent_grads` differentiates it with respect to inputs and `z_latent`, and `forward_and_weight_grads` with respect to `params`. Side effects or Python-level control flow on traced values produce wrong gradients during inference and learning.
@@ -249,11 +248,10 @@ def forward(params, inputs, state, node_info):
 Within that constraint, every `forward()` must perform these six steps in order:
 
 1. **Predict `z_mu`**: produce the node's prediction of its own latent, with shape `(batch,) + node_info.shape`. *How* is up to the node — a convolution here, a matmul in `Linear`, an attention pipeline in `TransformerBlock`.
-2. **Record `pre_activation`**: the value before the activation function. If the node applies no activation, set `pre_activation = z_mu`. `pre_activation` is planned for deprecation as persistent attribute of NodeState; it's actually an ephemeral intermediate to `z_mu`.
-3. **Compute the error**: `error = state.z_latent - z_mu`. The energy functionals assume this sign (latent minus prediction).
-4. **Write the fields back**: `state = state._replace(z_mu=..., pre_activation=..., error=...)`. `NodeState` is a fixed-schema NamedTuple (`z_latent, z_mu, error, energy, pre_activation, latent_grad`); no other fields exist or may be added.
-5. **Populate energy**: `node_class = node_info.node_class; state = node_class.energy_functional(state, node_info)`. This sets `state.energy` from `energy(z_latent, z_mu)`, so `z_mu` must already be set. Extra energy terms (for example the Hopfield attractor term in `StorkeyHopfield`) are added by replacing `state.energy` after this call.
-6. **Return**: `return jnp.sum(state.energy), state` — the scalar total energy first, the updated state second.
+2. **Compute the error**: `error = state.z_latent - z_mu`. The energy functionals assume this sign (latent minus prediction).
+3. **Write the fields back**: `state = state._replace(z_mu=..., error=...)`. `NodeState` is a fixed-schema NamedTuple (`z_latent, z_mu, error, energy, latent_grad`); no other fields exist or may be added.
+4. **Populate energy**: `node_class = node_info.node_class; state = node_class.energy_functional(state, node_info)`. This sets `state.energy` from `energy(z_latent, z_mu)`, so `z_mu` must already be set. Extra energy terms (for example the Hopfield attractor term in `StorkeyHopfield`) are added by replacing `state.energy` after this call.
+5. **Return**: the updated `NodeState`. The `energy` field stays per-sample (shape `(batch,)`); summation over the batch dimension is owned by `forward_and_latent_grads()`/`forward_and_weight_grads()`, which need the resulting scalar for autodiff
 
 The steps *between* predicting `z_mu` and writing it back are free: input aggregation, weights and biases, the choice of activation, and any internal sub-structure are all node-specific.
 
@@ -333,14 +331,24 @@ class MyDenseNode(FlattenInputMixin, NodeBase):
             pre_activation, node_info.activation.config
         )
 
-        # ... then compute error, update state, populate energy, and return
-        #     (the six required steps above)
+        # ... then compute error, update state, populate energy, and return state
 ```
 
 The mixin provides:
 - `flatten_input(x)`: Flattens one input tensor from `(batch, *shape)` to `(batch, numel)`
 - `reshape_output(x_flat, out_shape)`: Reshapes `(batch, numel)` back to `(batch, *out_shape)`
 - `compute_linear(inputs, weights, batch_size, out_shape)`: Sums `flattened_input @ weight` across all input edges and reshapes to `(batch, *out_shape)`. It does not add a bias — add it yourself, as shown above.
+
+### The `forward_and_latent_grads()` contract
+
+`forward_and_latent_grads(params, inputs, state, node_info, is_clamped)` drives the inference phase. The base implementation's responsibilities:
+
+1. **In-degree-0 nodes are handled specially**, without calling `forward()`: `z_mu <- z_latent` (cast to `z_mu`'s dtype); error, energy, and all gradients are zero.
+2. **Every node with in-degree > 0 goes through `forward()`**. For unclamped out-degree-0 nodes this computes `z_mu` only, with zero gradients.
+3. **The per-sample `state.energy` (shape `(batch,)`) is summed over the batch dimension** to a scalar.
+4. **`jax.value_and_grad` differentiates that scalar** w.r.t. the input tensors and `z_latent`.
+
+It returns `(NodeState, input_grads, self_grad)`: the updated state, gradients w.r.t. each input edge (dE/d_input, unscaled), and this node's dE/dz_latent contribution (unscaled). muPC scaling and accumulation into `state.latent_grad` are handled by the callsite (the inference loop).
 
 ### Explicit Gradients
 
@@ -410,7 +418,6 @@ class NodeState(NamedTuple):
     z_mu: jnp.ndarray           # predictions (what the network predicts)
     error: jnp.ndarray          # prediction errors (z_latent - z_mu)
     energy: jnp.ndarray         # per-sample energy, shape (batch,)
-    pre_activation: jnp.ndarray # values before the activation function
     latent_grad: jnp.ndarray    # gradient accumulator for inference updates
 ```
 

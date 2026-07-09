@@ -279,7 +279,7 @@ class FeedforwardStateInit(StateInitBase):
                 # Apply muPC forward scaling (if any) before forward pass,
                 # matching what the inference loop does during training.
                 scaled_inputs = scale_inputs(edge_inputs, node_info.scaling_config)
-                _, projected = node_class.forward(
+                projected = node_class.forward(
                     node_params, scaled_inputs, node_state, node_info
                 )
                 # node forward modifies z_mu, error, and energy

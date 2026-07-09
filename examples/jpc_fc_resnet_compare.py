@@ -267,8 +267,7 @@ class FCInputNode(NodeBase):
 
         node_class = node_info.node_class
         state = node_class.energy_functional(state, node_info)
-        total_energy = jnp.sum(state.energy)
-        return total_energy, state
+        return state
 
 
 class PreActResBlock(NodeBase):
@@ -362,8 +361,7 @@ class PreActResBlock(NodeBase):
 
         node_class = node_info.node_class
         state = node_class.energy_functional(state, node_info)
-        total_energy = jnp.sum(state.energy)
-        return total_energy, state
+        return state
 
 
 class PreActReadout(NodeBase):
@@ -441,8 +439,7 @@ class PreActReadout(NodeBase):
 
         node_class = node_info.node_class
         state = node_class.energy_functional(state, node_info)
-        total_energy = jnp.sum(state.energy)
-        return total_energy, state
+        return state
 
 
 # =============================================================================

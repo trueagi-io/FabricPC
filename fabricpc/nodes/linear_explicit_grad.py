@@ -64,7 +64,7 @@ class LinearExplicitGrad(Linear):
 
         # Single forward computing energy, state, and pre_activation together.
         # pre_activation feeds the explicit gain-modulated error below.
-        _, state, pre_activation = Linear._forward_with_preact(
+        state, pre_activation = Linear._forward_with_preact(
             params, inputs, state, node_info
         )
 
@@ -125,7 +125,7 @@ class LinearExplicitGrad(Linear):
         node_class = node_info.node_class
 
         # Single forward computing energy, state, and pre_activation together.
-        _, state, pre_activation = Linear._forward_with_preact(
+        state, pre_activation = Linear._forward_with_preact(
             params, inputs, state, node_info
         )
         flatten_input = node_info.node_config.get("flatten_input", False)

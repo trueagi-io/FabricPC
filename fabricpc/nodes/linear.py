@@ -92,8 +92,8 @@ class Linear(FlattenInputMixin, NodeBase):
         inputs: Dict[str, jnp.ndarray],
         state: NodeState,
         node_info: NodeInfo,
-    ) -> tuple[jax.Array, NodeState, jnp.ndarray]:
-        """Internal forward returning (energy, state, pre_activation).
+    ) -> tuple[NodeState, jnp.ndarray]:
+        """Internal forward returning (state, pre_activation).
 
         Shared between Linear.forward (which discards pre_activation) and
         LinearExplicitGrad's gradient methods (which thread pre_activation
@@ -126,8 +126,7 @@ class Linear(FlattenInputMixin, NodeBase):
         node_class = node_info.node_class
         state = node_class.energy_functional(state, node_info)
 
-        total_energy = jnp.sum(state.energy)
-        return total_energy, state, pre_activation
+        return state, pre_activation
 
     @staticmethod
     def initialize_params(
@@ -203,13 +202,13 @@ class Linear(FlattenInputMixin, NodeBase):
         inputs: Dict[str, jnp.ndarray],
         state: NodeState,
         node_info: NodeInfo,
-    ) -> tuple[jax.Array, NodeState]:
+    ) -> NodeState:
         """
         Linear transformation with activation.
 
-        Forward pass through the node, returning energy scalar and updated state.
+        Forward pass through the node, returning the updated state.
         Computes:
-            forward pass -> compute error -> compute energy -> total energy
+            forward pass -> compute error -> compute per-sample energy
 
         When flatten_input=False (default): applies matmul on last axis only.
         When flatten_input=True: flattens all dimensions for dense behavior.
@@ -221,9 +220,7 @@ class Linear(FlattenInputMixin, NodeBase):
             node_info: NodeInfo object (contains activation instance, energy instance, etc.)
 
         Returns:
-            Tuple of (total_energy, NodeState)
+            NodeState
         """
-        total_energy, state, _ = Linear._forward_with_preact(
-            params, inputs, state, node_info
-        )
-        return total_energy, state
+        state, _ = Linear._forward_with_preact(params, inputs, state, node_info)
+        return state
