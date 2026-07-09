@@ -109,6 +109,7 @@ def test_bpe_dataloader_from_cache(tmp_path):
         "train", seq_len=4, batch_size=2, shuffle=False, bpe_data_dir=str(bpe_dir)
     )
     assert loader.vocab_size == tok.get_vocab_size()
+    assert loader.num_sequences == ids.size - 4  # len(data) - seq_len
     x, y = next(iter(loader))
     assert x.dtype == np.int32 and x.shape == (2, 4)
     assert y.dtype == np.int32 and y.shape == (2, 4)

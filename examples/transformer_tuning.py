@@ -240,9 +240,15 @@ if __name__ == "__main__":
         print("\n" + "=" * 60)
         print("TUNING COMPLETE")
         print("=" * 60)
-        print(f"Phase 1 Best Perplexity:     {results['phase1_best_ppl']:.4f}")
-        print(f"Phase 2 Best Perplexity: {results['phase2_best_ppl']:.4f}")
-        print(f"\nFinal parameters:")
-        for k, v in results["final_params"].items():
-            print(f"  {k}: {v}")
-        print(f"\nSaved to: {run_dir / 'best_hyperparameters.txt'}")
+        print(f"Phase 1 Best Perplexity: {results['phase1_best_ppl']:.4f}")
+        # tune() returns a phase1-only dict when Phase 2 has no completed trial.
+        if "phase2_best_ppl" in results:
+            print(f"Phase 2 Best Perplexity: {results['phase2_best_ppl']:.4f}")
+            print("\nFinal parameters:")
+            for k, v in results["final_params"].items():
+                print(f"  {k}: {v}")
+            print(f"\nSaved to: {run_dir / 'best_hyperparameters.txt'}")
+        else:
+            print(
+                "Phase 2 produced no successful trials; only Phase 1 results are available."
+            )

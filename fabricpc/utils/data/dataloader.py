@@ -16,6 +16,7 @@ _TOKENIZERS_INSTALL_HINT = (
     "Install the text-data extras with: pip install -e '.[tfds]'"
 )
 
+
 class MnistLoader:
     """JAX-compatible data loader using TensorFlow Datasets.
 
@@ -267,6 +268,7 @@ class Cifar10Loader:
     def __len__(self):
         return self._num_batches
 
+
 class _TokenSequenceLoader:
     """Shared sliding-window next-token batching for token-level loaders.
 
@@ -306,9 +308,7 @@ class _TokenSequenceLoader:
                 continue  # drop incomplete last batch
 
             x = np.stack([self.data[i : i + self.seq_len] for i in batch_idx])
-            y = np.stack(
-                [self.data[i + 1 : i + self.seq_len + 1] for i in batch_idx]
-            )
+            y = np.stack([self.data[i + 1 : i + self.seq_len + 1] for i in batch_idx])
             # Yield integer target ids; one-hot happens in the training/eval step
             # to keep the host->device transfer int32 (see class docstring).
             yield x, y
@@ -316,11 +316,14 @@ class _TokenSequenceLoader:
     def __len__(self):
         return self._num_batches
 
+
 class CharDataLoader(_TokenSequenceLoader):
     """JAX-compatible character-level dataloader using TFDS.
 
     Loads the tiny_shakespeare dataset from TensorFlow Datasets and
-    yields batches of (x_indices, y_onehot) for next-character prediction.
+    yields batches of (x_indices, y_indices) for next-character prediction.
+    Targets are integer ids; one-hot encoding happens in the training/eval
+    step (see _TokenSequenceLoader).
 
     The vocabulary is always built from the train split to ensure consistent
     char-to-index mappings across all splits.
@@ -385,15 +388,18 @@ class CharDataLoader(_TokenSequenceLoader):
         """Convert an array of character indices back to a string."""
         return "".join(self.idx_to_char[int(i)] for i in indices)
 
+
 class BpeDataLoader(_TokenSequenceLoader):
     """JAX-compatible BPE tokenized data loader using TFDS.
 
     Loads pre-encoded Tiny Shakespeare BPE token sequences from .npy files
-    and yields batches of (x_indices, y_onehot) for next-token prediction.
+    and yields batches of (x_indices, y_indices) for next-token prediction.
+    Targets are integer ids; one-hot encoding happens in the training/eval
+    step (see _TokenSequenceLoader).
 
     The vocabulary is built from all splits of the Tiny Shakespeare dataset
     using a BPE tokenizer with vocab_size=11711. On first use, the tokenizer
-    is trained and all splits are encoded and cached to bpe_data_dir. 
+    is trained and all splits are encoded and cached to bpe_data_dir.
     Subsequent runs load directly from cache.
 
     Args:
@@ -421,9 +427,9 @@ class BpeDataLoader(_TokenSequenceLoader):
         bpe_data_dir: str = "data/bpe_tokenized",
         vocab_size: int = 11711,
         verbose: bool = True,
-    ):  
+    ):
         from pathlib import Path
-        
+
         if not _TOKENIZERS_AVAILABLE:
             raise ImportError(_TOKENIZERS_INSTALL_HINT)
 
@@ -456,7 +462,7 @@ class BpeDataLoader(_TokenSequenceLoader):
         import tensorflow_datasets as tfds
         import tensorflow as tf
         from pathlib import Path
-    
+
         tf.config.set_visible_devices([], "GPU")
         bpe_dir = Path(bpe_dir)
         bpe_dir.mkdir(parents=True, exist_ok=True)
@@ -510,6 +516,7 @@ class BpeDataLoader(_TokenSequenceLoader):
 
     def decode(self, indices) -> str:
         return self._tok.decode([int(i) for i in indices], skip_special_tokens=True)
+
 
 class FashionMnistLoader:
     """JAX-compatible Fashion-MNIST data loader using TensorFlow Datasets.

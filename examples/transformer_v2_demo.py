@@ -20,6 +20,23 @@ Usage:
     PYTHONPATH=. python examples/transformer_v2_demo.py
     PYTHONPATH=. python examples/transformer_v2_demo.py --mode backprop --lr 1e-3
     PYTHONPATH=. python examples/transformer_v2_demo.py --mode pc --depth 6 --num_epochs 10
+
+
+Results (default call):
+Model parameters: 108,353
+Vocab Size: 65
+Train Epoch 1/5, Energy: 274.3637, Loss: 2.1401, Perplexity: 8.50
+Train Epoch 2/5, Energy: 260.0219, Loss: 2.0280, Perplexity: 7.60
+Train Epoch 3/5, Energy: 250.6280, Loss: 1.9546, Perplexity: 7.06
+Train Epoch 4/5, Energy: 244.7030, Loss: 1.9089, Perplexity: 6.75
+Train Epoch 5/5, Energy: 242.0046, Loss: 1.8878, Perplexity: 6.61
+Training completed in 8772.4s
+Evaluation completed in 55.2s
+Test Accuracy:   35.92%
+Test CE Loss:    2.2108
+Test Perplexity: 9.12
+--- Generating ---
+ROMEO: whou sarone the bro beariers thas tray sucas a st my lo the to ate.
 """
 
 from jax_setup import set_jax_flags_before_importing_jax

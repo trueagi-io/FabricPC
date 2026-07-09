@@ -43,6 +43,7 @@ class BayesianTuner:
         storage=None,
         log_file: Optional[str] = "tuning_results.txt",
         divergence_rel_tol: float = 0.5,
+        verbose: bool = False,
     ):
         self.train_loader = train_loader
         self.val_loader = val_loader
@@ -52,6 +53,7 @@ class BayesianTuner:
         self.storage = storage
         self.log_file = log_file
         self.divergence_rel_tol = divergence_rel_tol
+        self.verbose = verbose
 
         if log_file:
             os.makedirs(
@@ -98,7 +100,7 @@ class BayesianTuner:
         train_config = {**config, "use_causal_mask": True}
 
         def iter_callback(epoch_idx, batch_idx, energy):
-            if (batch_idx + 1) % 50 == 0:
+            if self.verbose and (batch_idx + 1) % 50 == 0:
                 print(
                     f"  [Phase {phase}] Trial {trial.number} | "
                     f"Epoch {epoch_idx + 1} | Batch {batch_idx + 1} | Energy: {energy:.4f}"
@@ -351,7 +353,9 @@ class BayesianTuner:
 
         study1 = self.tune_phase1(n_trials_phase1, phase1_search_space)
 
-        if not study1.best_trial:
+        # Study.best_trial raises ValueError when no trial completed, so check
+        # the trial states directly.
+        if not any(t.state == optuna.trial.TrialState.COMPLETE for t in study1.trials):
             print("Phase 1 produced no successful trials.")
             return {}
 
@@ -374,7 +378,7 @@ class BayesianTuner:
 
         study2 = self.tune_phase2(n_trials_phase2, best_params, phase2_search_space)
 
-        if not study2.best_trial:
+        if not any(t.state == optuna.trial.TrialState.COMPLETE for t in study2.trials):
             print("Phase 2 produced no successful trials.")
             return {
                 "phase1_best_ppl": best_phase1_ppl,
@@ -388,7 +392,7 @@ class BayesianTuner:
         print(f"\nPhase 2 complete — Best perplexity: {best_ppl:.4f}")
 
         if save_best_to:
-            Path(save_best_to).parent.mkdir(exist_ok=True)
+            Path(save_best_to).parent.mkdir(parents=True, exist_ok=True)
             with open(save_best_to, "w") as f:
                 f.write("=" * 60 + "\n")
                 f.write("BEST HYPERPARAMETERS\n")

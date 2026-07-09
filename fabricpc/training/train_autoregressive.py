@@ -103,7 +103,7 @@ def train_step_autoregressive(
         opt_state: Optimizer state
         batch: Batch with keys matching task_map (e.g., 'x' for input, 'y' for target)
             x: (batch, seq_len, vocab_size) or (batch, seq_len)
-            y: (batch, seq_len, vocab_size) or (batch, seq_len)
+            y: (batch, seq_len) integer token ids; one-hot encoded in this step
         structure: Graph structure with task_map defining input/output nodes.
             An external "causal_mask" -> node_name entry is optional and only
             used by v1 graphs; v2 masks internally via the node's is_causal flag.
@@ -127,11 +127,15 @@ def train_step_autoregressive(
     # Targets arrive as integer token ids (batch, seq_len) to keep the
     # host->device transfer int32 (a one-hot is vocab_size x larger). The
     # CrossEntropy output node is clamped with a one-hot latent, so encode here.
+    # ndim is static under jit, so the check raises at trace time.
     y = batch["y"]
-    if y.ndim == 2:
-        y = jax.nn.one_hot(
-            y, structure.nodes[structure.task_map["y"]].node_info.shape[-1]
+    if y.ndim != 2:
+        raise ValueError(
+            f"batch['y'] must be integer token ids of shape (batch, seq_len); "
+            f"got shape {y.shape}. Token loaders yield integer targets; "
+            f"one-hot encoding happens in this step."
         )
+    y = jax.nn.one_hot(y, structure.nodes[structure.task_map["y"]].node_info.shape[-1])
     clamps[structure.task_map["y"]] = y
 
     # Clamp an external causal mask only if the graph defines one (the v1

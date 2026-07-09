@@ -71,11 +71,11 @@ def _fake_train(energies, ces):
     return fake
 
 
-def _make_tuner(tmp_path):
+def _make_tuner(tmp_path, trial_model=_tiny_trial_model):
     return BayesianTuner(
         train_loader=_tiny_loader(seed=0),
         val_loader=_tiny_loader(seed=1),
-        trial_model=_tiny_trial_model,
+        trial_model=trial_model,
         base_config={"seq_len": 4, "vocab_size": 10, "num_epochs": 1, "use_bpe": False},
         study_name="test_tuner",
         storage=None,
@@ -128,6 +128,50 @@ def test_nonfinite_energy_prunes(tmp_path, monkeypatch):
     t = _run_one(tuner, config)
     assert t.state == optuna.trial.TrialState.PRUNED
     assert "non-finite" in t.user_attrs.get("prune_reason", "").lower()
+
+
+def test_four_tuple_trial_model_loaders_used(tmp_path, monkeypatch):
+    """A trial_model returning (params, structure, train_loader, val_loader)
+    has those loaders used for training/eval, not the tuner defaults."""
+    trial_train = _tiny_loader(seed=2)
+    trial_val = _tiny_loader(seed=3)
+
+    def four_tuple_model(config, rng_key):
+        params, structure = _tiny_trial_model(config, rng_key)
+        return params, structure, trial_train, trial_val
+
+    seen = {}
+
+    def fake_train(
+        params,
+        structure,
+        loader,
+        optimizer,
+        config,
+        rng,
+        verbose=False,
+        iter_callback=None,
+        epoch_callback=None,
+    ):
+        seen["train_loader"] = loader
+        if epoch_callback is not None:
+            epoch_callback(0, params, structure, config, rng, energy=100.0, ce_loss=2.0)
+        return params, [], []
+
+    def fake_eval(params, structure, loader, config, rng):
+        seen["val_loader"] = loader
+        return {"perplexity": 7.0, "loss": float(np.log(7.0))}
+
+    monkeypatch.setattr(tuner_mod, "train_autoregressive", fake_train)
+    monkeypatch.setattr(tuner_mod, "evaluate_autoregressive", fake_eval)
+
+    tuner = _make_tuner(tmp_path, trial_model=four_tuple_model)
+    config = {**tuner.base_config, "depth": 1, "lr": 1e-3}
+    t = _run_one(tuner, config)
+    assert t.state == optuna.trial.TrialState.COMPLETE
+    assert seen["train_loader"] is trial_train
+    assert seen["val_loader"] is trial_val
+    assert t.value == pytest.approx(7.0)
 
 
 def _p1_space(trial):

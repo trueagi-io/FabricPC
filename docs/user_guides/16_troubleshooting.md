@@ -16,6 +16,36 @@ If you see CUDA-related errors, install the backend matching your driver and re-
 pip install -U "jax[cuda12]"   # or "jax[cuda13]" for driver ≥580
 ```
 
+**Two CUDA backends installed (`ALREADY_EXISTS: PJRT_Api already exists for device type cuda`)**
+
+At startup JAX scans the `jax_plugins` entry-point group and calls `initialize()` on every
+plugin it finds. If both the `cuda12` and `cuda13` backend sets are present, each registers
+a PJRT plugin for device type `cuda`; the first succeeds, the second is rejected and JAX
+aborts backend init. This is a local environment issue — it comes from installing more than
+one backend extra (`.[cuda12]` and `.[cuda13]`) into the same environment, not from the
+package spec.
+
+The reliable fix is to recreate the environment with exactly one backend — the CUDA wheels
+of both versions install into the *same* `site-packages/nvidia/<component>/lib/` directories
+(the `-cu12`/`-cu13` suffix is on the package name, not the import path), so a plain
+`pip uninstall` of one set deletes shared `.so` files the other set still lists. That leaves
+the surviving backend broken (e.g. `RuntimeError: cuDNN not found`) and JAX falls back to CPU.
+Keep the backend matching your driver (`cuda13` for driver ≥580):
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -U -e ".[all,cuda13]"
+python -c "import jax; print(jax.default_backend(), jax.devices())"   # -> gpu [CudaDevice(id=0)]
+```
+To repair in place without recreating the venv, uninstall the unwanted set and then
+force-reinstall the wanted set's wheels so the shared files are restored:
+```bash
+pip uninstall -y jax-cuda12-plugin jax-cuda12-pjrt \
+  $(pip list --format=freeze | grep -oE '^nvidia-[a-z0-9-]+-cu12')
+pip install --force-reinstall --no-deps \
+  $(pip list --format=freeze | grep -iE '^nvidia-')   # restore cu13 files clobbered by the uninstall
+python -c "import jax; print(jax.default_backend(), jax.devices())"
+```
+
 **GPU install fails on Windows / macOS**
 
 If `pip install -U -e ".[all,cuda12]"` (or `cuda13`) fails with

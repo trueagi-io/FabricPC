@@ -505,6 +505,9 @@ def create_deep_transformer(
             weight_init=w_init_obj,
         )
         nodes.append(mha)
+        # previous_residual feeds two edges: "in" is the attention-branch input
+        # and is muPC-scaled; "skip" is the residual bypass, unscaled and
+        # counted toward residual depth L.
         edges.append(Edge(source=previous_residual, target=mha.slot("in")))
         edges.append(Edge(source=previous_residual, target=mha.slot("skip")))
 
