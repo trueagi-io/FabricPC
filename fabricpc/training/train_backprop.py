@@ -285,10 +285,10 @@ def compute_loss_autoregressive(
     # Clamp input only (not output)
     clamps = {structure.task_map["x"]: batch["x"]}
 
-    # Add causal mask if enabled
-    if use_causal_mask:
-        if "causal_mask" not in structure.task_map:
-            raise ValueError("Causal masking enabled but 'causal_mask' not in task_map")
+    # Add an external causal mask only if the graph defines one (v1). The v2
+    # decomposed MhaResidualNode masks internally via is_causal, so its task_map
+    # has no "causal_mask" node and this is skipped.
+    if use_causal_mask and "causal_mask" in structure.task_map:
         causal_mask = create_causal_mask(seq_len)
         causal_mask = causal_mask[None, None, :, :]  # (1, 1, seq, seq)
         causal_mask = jnp.broadcast_to(causal_mask, (batch_size, 1, seq_len, seq_len))

@@ -43,32 +43,40 @@ from fabricpc.utils.data import CharDataLoader, BpeDataLoader
 import optax
 import time
 
+# Tuned on Tiny Shakespeare, BPE tokenizer (50k-sequence subset, val PPL ~1133).
+# NOTE: severe overfitting on this small corpus (train PPL ~85 vs test ~721),
+# from two compounding causes: BPE needs a larger corpus than Tiny Shakespeare,
+# and the model has no regularization (dropout / weight decay) yet. Placeholder
+# default, not a strong config; char-level remains recommended here. See Future
+# Work (regularization, larger BPE-suited datasets).
 BPE_DEFAULTS = {
-    "embed_dim": 256,
-    "num_heads": 8,
+    "embed_dim": 128,
+    "num_heads": 4,
     "mlp_dim": 512,
     "depth": 4,
     "seq_len": 64,
-    "batch_size": 16,
+    "batch_size": 32,
     "num_epochs": 5,
-    "infer_steps": 30,
-    "lr": 4.8336867874408474e-05,
-    "eta_infer": 0.087354491301969,
-    "weight_init_std": 0.019440512955251017,
+    "infer_steps": 23,
+    "lr": 1.676456563307537e-05,
+    "eta_infer": 0.06558512264378524,
+    "weight_init_std": 0.039890499730518045,
 }
 
+# Tuned on Tiny Shakespeare, char tokenizer (two-phase search, val PPL 12.22).
+# Phase 1 fixed the architecture; Phase 2 refined lr / eta_infer / infer_steps.
 CHAR_DEFAULTS = {
     "embed_dim": 64,
-    "num_heads": 4,
-    "mlp_dim": 512,
-    "depth": 3,
-    "seq_len": 64,
+    "num_heads": 8,
+    "mlp_dim": 256,
+    "depth": 2,
+    "seq_len": 128,
     "batch_size": 16,
     "num_epochs": 5,
-    "infer_steps": 18,
-    "lr": 6.710357156410781e-05,
-    "eta_infer": 0.08895631378177452,
-    "weight_init_std": 0.043898823650793964,
+    "infer_steps": 12,
+    "lr": 0.00012108621644524519,
+    "eta_infer": 0.0174852165627398,
+    "weight_init_std": 0.015166293102182283,
 }
 
 
@@ -83,38 +91,67 @@ def parse_args():
         help="Training mode: predictive coding or backpropagation (default: pc)",
     )
     parser.add_argument(
-        "--depth", type=int, default=4, help="Number of transformer layers"
+        "--depth",
+        type=int,
+        default=None,
+        help="Number of transformer layers (default: tuned per --tokenizer)",
     )
-    parser.add_argument("--embed_dim", type=int, default=64, help="Embedding dimension")
     parser.add_argument(
-        "--num_heads", type=int, default=4, help="Number of attention heads"
+        "--embed_dim",
+        type=int,
+        default=None,
+        help="Embedding dimension (default: tuned per --tokenizer)",
     )
-    parser.add_argument("--mlp_dim", type=int, default=256, help="MLP hidden dimension")
-    parser.add_argument("--seq_len", type=int, default=64, help="Sequence length")
+    parser.add_argument(
+        "--num_heads",
+        type=int,
+        default=None,
+        help="Number of attention heads (default: tuned per --tokenizer)",
+    )
+    parser.add_argument(
+        "--mlp_dim",
+        type=int,
+        default=None,
+        help="MLP hidden dimension (default: tuned per --tokenizer)",
+    )
+    parser.add_argument(
+        "--seq_len",
+        type=int,
+        default=None,
+        help="Sequence length (default: tuned per --tokenizer)",
+    )
     parser.add_argument(
         "--batch_size",
         type=int,
-        default=16,
-        help="Batch size (per-device for PC mode, total for backprop)",
+        default=None,
+        help="Batch size (per-device for PC, total for backprop; default: tuned per --tokenizer)",
     )
     parser.add_argument(
         "--num_epochs", type=int, default=5, help="Number of training epochs"
     )
-    parser.add_argument("--lr", type=float, default=0.0002, help="Learning rate")
     parser.add_argument(
-        "--infer_steps", type=int, default=23, help="PC inference steps"
+        "--lr",
+        type=float,
+        default=None,
+        help="Learning rate (default: tuned per --tokenizer)",
+    )
+    parser.add_argument(
+        "--infer_steps",
+        type=int,
+        default=None,
+        help="PC inference steps (default: tuned per --tokenizer)",
     )
     parser.add_argument(
         "--eta_infer",
         type=float,
-        default=0.06701833916050529,
-        help="PC inference step size",
+        default=None,
+        help="PC inference learning rate (default: tuned per --tokenizer)",
     )
     parser.add_argument(
         "--weight_init_std",
         type=float,
-        default=0.013123252658288186,
-        help="Weight init std",
+        default=None,
+        help="Weight init std (default: tuned per --tokenizer)",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument(
@@ -123,14 +160,26 @@ def parse_args():
         default="char",
         help="Tokenizer to use",
     )
+    parser.add_argument(
+        "--verbose", action="store_true", help="Print per-batch training energy"
+    )
     return parser.parse_args(), parser
 
 
 def main(args=None):
     if args is None:
-        args, parser = parse_args()
+        args, _ = parse_args()
 
     use_pc = args.mode == "pc"
+
+    # --- Resolve tuned defaults for any arg left unset (None sentinel) ---
+    # An explicit CLI value overrides; otherwise we fill from the tokenizer's
+    # tuned constants. Done before batch_size so the tuned batch_size applies.
+    use_bpe = args.tokenizer == "bpe"
+    defaults = BPE_DEFAULTS if use_bpe else CHAR_DEFAULTS
+    for key, val in defaults.items():
+        if getattr(args, key) is None:
+            setattr(args, key, val)
 
     # --- Batch size ---
     if use_pc:
@@ -142,13 +191,6 @@ def main(args=None):
         print(f"Backprop mode: single device, batch_size={batch_size}")
 
     # --- Data ---
-    use_bpe = args.tokenizer == "bpe"
-    defaults = BPE_DEFAULTS if use_bpe else CHAR_DEFAULTS
-
-    for key, val in defaults.items():
-        if getattr(args, key) == parser.get_default(key):
-            setattr(args, key, val)
-
     if use_bpe:
         train_loader = BpeDataLoader(
             "train",
@@ -217,7 +259,7 @@ def main(args=None):
     start = time.time()
 
     def iter_callback(epoch_idx, batch_idx, energy):
-        if (batch_idx + 1) % 50 == 0:
+        if args.verbose and (batch_idx + 1) % 50 == 0:
             print(
                 f"Epoch {epoch_idx + 1} | Batch {batch_idx + 1} | Energy: {energy:.4f}"
             )

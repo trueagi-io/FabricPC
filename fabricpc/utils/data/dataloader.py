@@ -1,6 +1,20 @@
 import numpy as np
 from fabricpc.utils.data.data_utils import one_hot, split_np_seed
 
+try:
+    from tokenizers import Tokenizer
+    from tokenizers.models import BPE
+    from tokenizers.trainers import BpeTrainer
+    from tokenizers.pre_tokenizers import Whitespace
+
+    _TOKENIZERS_AVAILABLE = True
+except ImportError:  # optional dependency (BPE only)
+    _TOKENIZERS_AVAILABLE = False
+
+_TOKENIZERS_INSTALL_HINT = (
+    "BpeDataLoader requires the 'tokenizers' package. "
+    "Install the text-data extras with: pip install -e '.[tfds]'"
+)
 
 class MnistLoader:
     """JAX-compatible data loader using TensorFlow Datasets.
@@ -253,8 +267,56 @@ class Cifar10Loader:
     def __len__(self):
         return self._num_batches
 
+class _TokenSequenceLoader:
+    """Shared sliding-window next-token batching for token-level loaders.
 
-class CharDataLoader:
+    Subclasses load their corpus into `self.data` (1D int32 token ids) and set
+    `self.vocab_size`, `self.seq_len`, `self.batch_size`, `self.shuffle`, and
+    `self.seed`, then call `self._init_sequence_indexing(max_samples)`. This base
+    provides the identical batching for both char and BPE:
+        x = data[i : i+seq_len],  y = data[i+1 : i+seq_len+1]
+
+    Targets are yielded as integer token ids (batch, seq_len) int32. One-hot
+    encoding to (batch, seq_len, vocab_size) for the CrossEntropy output node
+    happens inside the training/eval step (compute_loss and the PC y-clamp),
+    not here. This keeps the host->device transfer int32 and avoids a large
+    one-hot per batch for big vocabularies (~96 MB at 16x128x11711 for BPE; the
+    int ids are ~8 KB).
+    """
+
+    def _init_sequence_indexing(self, max_samples):
+        # Each sequence needs seq_len input tokens + 1 shifted target token.
+        self.num_sequences = len(self.data) - self.seq_len
+        if max_samples is not None:
+            self.num_sequences = min(self.num_sequences, max_samples)
+        self._num_batches = self.num_sequences // self.batch_size
+        self._epoch = 0
+
+    def __iter__(self):
+        indices = np.arange(self.num_sequences)
+        if self.shuffle:
+            epoch_seed = self.seed + self._epoch if self.seed is not None else None
+            rng = np.random.default_rng(epoch_seed)
+            rng.shuffle(indices)
+        self._epoch += 1
+
+        for start in range(0, len(indices), self.batch_size):
+            batch_idx = indices[start : start + self.batch_size]
+            if len(batch_idx) < self.batch_size:
+                continue  # drop incomplete last batch
+
+            x = np.stack([self.data[i : i + self.seq_len] for i in batch_idx])
+            y = np.stack(
+                [self.data[i + 1 : i + self.seq_len + 1] for i in batch_idx]
+            )
+            # Yield integer target ids; one-hot happens in the training/eval step
+            # to keep the host->device transfer int32 (see class docstring).
+            yield x, y
+
+    def __len__(self):
+        return self._num_batches
+
+class CharDataLoader(_TokenSequenceLoader):
     """JAX-compatible character-level dataloader using TFDS.
 
     Loads the tiny_shakespeare dataset from TensorFlow Datasets and
@@ -294,7 +356,6 @@ class CharDataLoader:
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.seed = seed
-        self._epoch = 0
 
         # Build vocabulary from the train split (cached across instances)
         if CharDataLoader._vocab is None:
@@ -318,43 +379,13 @@ class CharDataLoader:
         text = next(iter(ds))["text"].numpy().decode("utf-8")
         self.data = np.array([self.char_to_idx[ch] for ch in text], dtype=np.int32)
 
-        # Each sequence needs seq_len input chars + 1 target char
-        self.num_sequences = len(self.data) - seq_len
-        if max_samples is not None:
-            self.num_sequences = min(self.num_sequences, max_samples)
-        self._num_batches = self.num_sequences // batch_size
-
-    def __iter__(self):
-        indices = np.arange(self.num_sequences)
-        if self.shuffle:
-            epoch_seed = self.seed + self._epoch if self.seed is not None else None
-            rng = np.random.default_rng(epoch_seed)
-            rng.shuffle(indices)
-        self._epoch += 1
-
-        for start in range(0, len(indices), self.batch_size):
-            batch_idx = indices[start : start + self.batch_size]
-            if len(batch_idx) < self.batch_size:
-                continue  # drop incomplete last batch
-
-            x = np.stack(
-                [self.data[i : i + self.seq_len] for i in batch_idx]
-            )  # (batch, seq_len) int32
-            y_idx = np.stack(
-                [self.data[i + 1 : i + self.seq_len + 1] for i in batch_idx]
-            )  # (batch, seq_len)
-            y_onehot = np.eye(self.vocab_size, dtype=np.float32)[y_idx]
-
-            yield x, y_onehot
-
-    def __len__(self):
-        return self._num_batches
+        self._init_sequence_indexing(max_samples)
 
     def decode(self, indices) -> str:
         """Convert an array of character indices back to a string."""
         return "".join(self.idx_to_char[int(i)] for i in indices)
 
-class BpeDataLoader:
+class BpeDataLoader(_TokenSequenceLoader):
     """JAX-compatible BPE tokenized data loader using TFDS.
 
     Loads pre-encoded Tiny Shakespeare BPE token sequences from .npy files
@@ -389,15 +420,17 @@ class BpeDataLoader:
         max_samples: int = None,
         bpe_data_dir: str = "data/bpe_tokenized",
         vocab_size: int = 11711,
+        verbose: bool = True,
     ):  
         from pathlib import Path
-        from tokenizers import Tokenizer
         
+        if not _TOKENIZERS_AVAILABLE:
+            raise ImportError(_TOKENIZERS_INSTALL_HINT)
+
         self.seq_len = seq_len
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.seed = seed
-        self._epoch = 0
 
         bpe_dir = Path(bpe_data_dir)
         tokenizer_path = bpe_dir / "tokenizer.json"
@@ -405,7 +438,7 @@ class BpeDataLoader:
 
         # Prepare tokenizer and encoded splits if not already cached
         if not tokenizer_path.exists() or not token_path.exists():
-            self._prepare(bpe_dir, vocab_size)
+            self._prepare(bpe_dir, vocab_size=vocab_size, verbose=verbose)
 
         tok = Tokenizer.from_file(str(tokenizer_path))
         self.vocab_size = tok.get_vocab_size()
@@ -415,22 +448,15 @@ class BpeDataLoader:
         self.data = np.load(token_path)
         self._tok = tok
 
-        self.num_sequences = len(self.data) - seq_len
-        if max_samples is not None:
-            self.num_sequences = min(self.num_sequences, max_samples)
-        self._num_batches = self.num_sequences // batch_size
+        self._init_sequence_indexing(max_samples)
 
     @staticmethod
-    def _prepare(bpe_dir, vocab_size: int = 11711):
+    def _prepare(bpe_dir, vocab_size: int = 11711, verbose: bool = True):
         """Train BPE tokenizer on all splits and encode each split to .npy."""
         import tensorflow_datasets as tfds
         import tensorflow as tf
         from pathlib import Path
-        from tokenizers import Tokenizer
-        from tokenizers.models import BPE
-        from tokenizers.trainers import BpeTrainer
-        from tokenizers.pre_tokenizers import Whitespace
-
+    
         tf.config.set_visible_devices([], "GPU")
         bpe_dir = Path(bpe_dir)
         bpe_dir.mkdir(parents=True, exist_ok=True)
@@ -443,7 +469,8 @@ class BpeDataLoader:
 
         # Train tokenizer on all splits for full vocabulary coverage
         if not tokenizer_path.exists():
-            print("BpeDataLoader: training BPE tokenizer on Tiny Shakespeare...")
+            if verbose:
+                print("BpeDataLoader: training BPE tokenizer on Tiny Shakespeare...")
             tokenizer = Tokenizer(BPE(unk_token="[UNK]"))
             tokenizer.pre_tokenizer = Whitespace()
             trainer = BpeTrainer(
@@ -464,42 +491,22 @@ class BpeDataLoader:
                 Path(f).unlink()
 
             tokenizer.save(str(tokenizer_path))
-            print(f"BpeDataLoader: tokenizer saved to {tokenizer_path}")
+            if verbose:
+                print(f"BpeDataLoader: tokenizer saved to {tokenizer_path}")
         else:
-            from tokenizers import Tokenizer
             tokenizer = Tokenizer.from_file(str(tokenizer_path))
 
         # Encode and cache each split
         for split in BpeDataLoader.splits:
             token_path = bpe_dir / f"{split}.npy"
             if not token_path.exists():
-                print(f"BpeDataLoader: encoding {split} split...")
+                if verbose:
+                    print(f"BpeDataLoader: encoding {split} split...")
                 text = load_split(split)
                 ids = tokenizer.encode(text).ids
                 np.save(token_path, np.array(ids, dtype=np.int32))
-                print(f"BpeDataLoader: {split} saved to {token_path}")
-
-    def __iter__(self):
-        indices = np.arange(self.num_sequences)
-        if self.shuffle:
-            epoch_seed = self.seed + self._epoch if self.seed is not None else None
-            rng = np.random.default_rng(epoch_seed)
-            rng.shuffle(indices)
-        self._epoch += 1
-
-        for start in range(0, len(indices), self.batch_size):
-            batch_idx = indices[start : start + self.batch_size]
-            if len(batch_idx) < self.batch_size:
-                continue
-
-            x = np.stack([self.data[i : i + self.seq_len] for i in batch_idx])
-            y_idx = np.stack([self.data[i + 1 : i + self.seq_len + 1] for i in batch_idx])
-            y_onehot = np.eye(self.vocab_size, dtype=np.float32)[y_idx]
-
-            yield x, y_onehot
-
-    def __len__(self):
-        return self._num_batches
+                if verbose:
+                    print(f"BpeDataLoader: {split} saved to {token_path}")
 
     def decode(self, indices) -> str:
         return self._tok.decode([int(i) for i in indices], skip_special_tokens=True)

@@ -2,8 +2,8 @@
 Hyperparameter Tuning — Transformer on Tiny Shakespeare (Two-Phase)
 
 Phase 1 — Architecture search: explore embed_dim, mlp_dim, num_heads, depth,
-           infer_steps, eta_infer, lr, weight_init_std. Prune unstable trials
-           early based on energy explosion. Minimize energy.
+           infer_steps, eta_infer, lr, weight_init_std. Minimize perplexity;
+           prune diverging trials via a scale-free energy guard.
 
 Phase 2 — Continuous fine-tuning: fix the winning architecture, search only
            lr, eta_infer, infer_steps in a tight window. Minimize perplexity.
@@ -165,7 +165,7 @@ if __name__ == "__main__":
     seq_len = 128
     batch_size = 32
     max_tuning_samples = 50000
-    use_bpe = True  # set to False for character-level tokenizer
+    use_bpe = False  # set to True for BPE tokenizer
 
     # Used only to get vocab_size training loaders are created per trial in trial_model
     if use_bpe:
@@ -206,7 +206,15 @@ if __name__ == "__main__":
         "use_bpe": use_bpe,
     }
 
-    storage = JournalStorage(JournalFileStorage("fabricpc/tuning/optuna_journal.log"))
+    from pathlib import Path
+
+    tag = "bpe" if use_bpe else "char"
+    run_dir = Path("runs") / "tuning"
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    storage = JournalStorage(
+        JournalFileStorage(str(run_dir / f"optuna_journal_{tag}.log"))
+    )
 
     tuner = BayesianTuner(
         train_loader=train_loader,
@@ -215,8 +223,8 @@ if __name__ == "__main__":
         base_config=base_config,
         study_name="transformer_v2_tuning",
         storage=storage,
-        log_file="fabricpc/tuning/transformer_v2_results.txt",
-        energy_threshold=300,
+        log_file=str(run_dir / f"transformer_v2_results_{tag}.txt"),
+        divergence_rel_tol=0.5,
     )
 
     print("\n=== Starting Two-Phase Hyperparameter Search ===")
@@ -225,16 +233,16 @@ if __name__ == "__main__":
         phase2_search_space=phase2_search_space,
         n_trials_phase1=20,
         n_trials_phase2=15,
-        save_best_to="fabricpc/tuning/best_hyperparameters.txt",
+        save_best_to=str(run_dir / "best_hyperparameters.txt"),
     )
 
     if results:
         print("\n" + "=" * 60)
         print("TUNING COMPLETE")
         print("=" * 60)
-        print(f"Phase 1 Best Energy:     {results['phase1_best_energy']:.4f}")
+        print(f"Phase 1 Best Perplexity:     {results['phase1_best_ppl']:.4f}")
         print(f"Phase 2 Best Perplexity: {results['phase2_best_ppl']:.4f}")
         print(f"\nFinal parameters:")
         for k, v in results["final_params"].items():
             print(f"  {k}: {v}")
-        print(f"\nSaved to: fabricpc/tuning/best_hyperparameters.txt")
+        print(f"\nSaved to: {run_dir / 'best_hyperparameters.txt'}")

@@ -53,6 +53,7 @@ tfds = [
     # python_version < "3.9". Without this, the first download of any dataset
     # fails with ModuleNotFoundError on Python >= 3.9.
     "importlib_resources",
+    "tokenizers>=0.15.0",
 ]
 experiments = [
     "scipy>=1.10.0",

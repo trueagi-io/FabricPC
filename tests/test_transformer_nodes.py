@@ -18,7 +18,7 @@ from fabricpc.graph_initialization.state_initializer import (
     initialize_graph_state,
     FeedforwardStateInit,
 )
-from fabricpc.core.inference import run_inference, InferenceSGD
+from fabricpc.core.inference import run_inference, InferenceSGDNormClip
 from fabricpc.training import train_step
 import optax
 from fabricpc.nodes import Linear
@@ -65,7 +65,7 @@ class TestEmbeddingNode:
                 Edge(source=embed_node, target=output_node.slot("in")),
             ],
             task_map=TaskMap(x=input_node, y=output_node),
-            inference=InferenceSGD(eta_infer=0.1, infer_steps=5),
+            inference=InferenceSGDNormClip(eta_infer=0.1, infer_steps=5, max_norm=5.0),
         )
         params = initialize_params(structure, rng_key)
         return params, structure
@@ -260,7 +260,7 @@ class TestTransformerBlock:
                 Edge(source=mlp2, target=output_node.slot("in")),
             ],
             task_map=TaskMap(x=input_node, y=output_node),
-            inference=InferenceSGD(eta_infer=0.1, infer_steps=5),
+            inference=InferenceSGDNormClip(eta_infer=0.1, infer_steps=5, max_norm=5.0),
         )
         params = initialize_params(structure, rng_key)
         return params, structure
@@ -351,36 +351,55 @@ class TestTransformerBlock:
 
     def test_factory_structure(self, rng_key):
         """Verify create_deep_transformer generates correct graph topology."""
+        depth = 3
         structure = create_deep_transformer(
-            depth=3,
+            depth=depth,
             embed_dim=16,
             num_heads=2,
             mlp_dim=32,
             seq_len=10,
             vocab_size=10,
-            inference=InferenceSGD(eta_infer=0.1, infer_steps=2),
+            inference=InferenceSGDNormClip(eta_infer=0.1, infer_steps=2, max_norm=5.0),
         )
 
         # Decomposed architecture per layer: MhaResidualNode, LnMlp1Node, Mlp2ResidualNode
-        # Total nodes: input_ids + embed + 3*(mha + mlp1 + mlp2) + logits = 12
-        assert len(structure.nodes) == 12
+        # Nodes: input_ids + embed + depth*(mha + mlp1 + mlp2) + logits
+        assert len(structure.nodes) == 3 + 3 * depth  # depth=3 -> 12
 
-        # Edges per layer: mha<-in, mlp1<-mha, mlp2<-mlp1:in, mlp2<-mha:residual = 4
-        # Plus: input_ids->embed, last_mlp2->logits = 2
-        # Total: 2 + 3*4 = 14
-        assert len(structure.edges) == 14
+        # Edges per layer (5): mha<-in, mha<-skip,
+        #   mlp1<-mha:in, mlp2<-mlp1:in, mlp2<-mha:residual
+        # Plus 2 global: input_ids->embed:in, last_mlp2->logits:in
+        assert len(structure.edges) == 2 + 5 * depth  # depth=3 -> 17
 
-        # Check node types in topological order
-        node_types = [
-            structure.nodes[n].node_info.node_type for n in structure.node_order
+        # Assert the per-block skip/mask wiring by intent, not just by count,
+        # so a future topology change is caught structurally rather than arithmetically.
+        def has_edge(target, slot):
+            return any(
+                e.target == target and e.slot == slot for e in structure.edges.values()
+            )
+
+        for i in range(depth):
+            mha = f"L{i}_mha"
+            assert has_edge(mha, "in"), f"{mha} missing 'in' edge"
+            assert has_edge(mha, "skip"), f"{mha} missing residual 'skip' edge"
+            assert has_edge(
+                f"L{i}_mlp2", "residual"
+            ), f"L{i}_mlp2 missing 'residual' edge"
+
+        # Check node types by name. The input_ids source node has no fixed
+        # position in node_order, so assert by lookup rather than by index.
+        assert structure.nodes["input_ids"].node_info.node_type == "Linear"
+        assert structure.nodes["embed"].node_info.node_type == "EmbeddingNode"
+        assert structure.nodes["logits"].node_info.node_type == "VocabProjectionNode"
+
+        # Each block contributes MhaResidualNode -> LnMlp1Node -> Mlp2ResidualNode,
+        # in that topological order.
+        block_types = [
+            structure.nodes[n].node_info.node_type
+            for n in structure.node_order
+            if n.startswith("L")
         ]
-        assert node_types[0] == "Linear"  # input_ids
-        assert node_types[1] == "EmbeddingNode"  # embed
-        assert node_types[-1] == "VocabProjectionNode"  # logits
-
-        # Each depth block should contain MhaResidualNode, LnMlp1Node, Mlp2ResidualNode
-        block_types = node_types[2:-1]  # exclude input, embed, logits
-        for i in range(3):
+        for i in range(depth):
             assert block_types[i * 3] == "MhaResidualNode"
             assert block_types[i * 3 + 1] == "LnMlp1Node"
             assert block_types[i * 3 + 2] == "Mlp2ResidualNode"
@@ -398,7 +417,7 @@ class TestTransformerBlock:
             mlp_dim=32,
             seq_len=seq_len,
             vocab_size=vocab_size,
-            inference=InferenceSGD(eta_infer=0.1, infer_steps=2),
+            inference=InferenceSGDNormClip(eta_infer=0.1, infer_steps=5, max_norm=5.0),
         )
         params = initialize_params(structure, rng_key)
 
@@ -436,7 +455,7 @@ class TestEvaluateTransformer:
             mlp_dim=32,
             seq_len=seq_len,
             vocab_size=vocab_size,
-            inference=InferenceSGD(eta_infer=0.1, infer_steps=2),
+            inference=InferenceSGDNormClip(eta_infer=0.1, infer_steps=5, max_norm=5.0),
         )
         params = initialize_params(structure, rng_key)
 

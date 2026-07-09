@@ -174,7 +174,6 @@ class MhaResidualNode(NodeBase):
             "skip": SlotSpec(
                 "skip", False, is_variance_scalable=False, is_skip_connection=True
             ),
-            "mask": SlotSpec("mask", False, is_variance_scalable=False),
         }
 
     @staticmethod
@@ -206,8 +205,6 @@ class MhaResidualNode(NodeBase):
         x = inputs[next(k for k in inputs if k.endswith(":in"))]
         skip_key = next((k for k in inputs if k.endswith(":skip")), None)
         skip = inputs[skip_key] if skip_key else x
-        mask_key = next((k for k in inputs if k.endswith(":mask")), None)
-        external_mask = inputs[mask_key] if mask_key else None
 
         cfg = node_info.node_config
         B, L, D = x.shape
@@ -239,9 +236,6 @@ class MhaResidualNode(NodeBase):
         if cfg.get("is_causal", True):
             causal_mask = jnp.tril(jnp.ones((L, L)))
             scores = jnp.where(causal_mask == 0, -1e9, scores)
-
-        if external_mask is not None:
-            scores = jnp.where(external_mask == 0, -1e9, scores)
 
         attn = jax.nn.softmax(scores, axis=-1)
         mha = jnp.matmul(attn, V).transpose(0, 2, 1, 3).reshape(B, L, D)
@@ -453,8 +447,19 @@ def create_deep_transformer(
 ):
     """
     Creates a deep transformer graph using the new class-based builder API.
+
+    Note on initialization: the embedding and output-projection nodes
+    deliberately OVERRIDE their class-default initializers. The embedding uses
+    unit-normal (std=1.0) instead of the node default std=0.02, and the output
+    projection uses Normal(std=sqrt(1/embed_dim)) instead of the node default
+    Xavier. Both choices keep activations and logits at O(1) variance given that
+    muPC scaling is disabled on these two nodes (embedding = discrete lookup,
+    output = include_output=False). Changing these without accounting for the
+    muPC interaction can cause embedding variance collapse or softmax saturation.
     """
     if weight_init is None:
+        # Transformer block weights default to std=0.02 (GPT-style); embedding
+        # and output projection set their own init below (see those nodes)
         w_init_obj = NormalInitializer(std=0.02)
     else:
         init_type = weight_init.get("type", "normal")
@@ -473,6 +478,12 @@ def create_deep_transformer(
     )
     nodes.append(input_node)
 
+    # Embedding init: unit-normal (std=1.0), NOT the small std=0.02 used for
+    # dense layers. EmbeddingNode is a table lookup with muPC scaling disabled
+    # (discrete token indices, not a continuous signal). A Linear+one-hot+muPC
+    # path would collapse embedding variance to ~1/vocab_size because muPC
+    # assumes dense input with fan_in active features. Unit-normal keeps each
+    # token's embedding at O(1) variance going into the first attention block.
     embed_node = EmbeddingNode(
         name="embed",
         shape=(seq_len, embed_dim),
@@ -485,11 +496,6 @@ def create_deep_transformer(
 
     previous_residual = embed_node
 
-    mask_node = Linear(
-        shape=(1, seq_len, seq_len), activation=IdentityActivation(), name="causal_mask"
-    )
-    nodes.append(mask_node)
-
     for i in range(depth):
         mha = MhaResidualNode(
             name=f"L{i}_mha",
@@ -501,7 +507,6 @@ def create_deep_transformer(
         nodes.append(mha)
         edges.append(Edge(source=previous_residual, target=mha.slot("in")))
         edges.append(Edge(source=previous_residual, target=mha.slot("skip")))
-        edges.append(Edge(source=mask_node, target=mha.slot("mask")))
 
         mlp1 = LnMlp1Node(
             name=f"L{i}_mlp1",
@@ -527,6 +532,13 @@ def create_deep_transformer(
 
         previous_residual = mlp2
 
+    # Output projection init: std = sqrt(1/embed_dim). This keeps pre-softmax
+    # logits at O(1) variance regardless of model width — each logit is a dot
+    # product over embed_dim features, so scaling by 1/sqrt(embed_dim) prevents
+    # logit magnitudes from growing with width. Large initial logits would
+    # saturate the softmax and produce near-zero CE gradients at the start of
+    # training. muPC is disabled on the output (include_output=False), so this
+    # explicit init is what controls output-layer variance.
     logits = VocabProjectionNode(
         name="logits",
         shape=(seq_len, vocab_size),
@@ -540,7 +552,7 @@ def create_deep_transformer(
     return graph(
         nodes=nodes,
         edges=edges,
-        task_map=TaskMap(x=input_node, y=logits, causal_mask=mask_node),
+        task_map=TaskMap(x=input_node, y=logits),
         inference=inference,
         scaling=MuPCConfig(include_output=False),
         graph_state_initializer=FeedforwardStateInit(),
