@@ -48,6 +48,11 @@ dev = [
 tfds = [
     "tensorflow-datasets>=4.9.0",
     "tensorflow>=2.15.0",
+    # tfds imports the third-party importlib_resources backport unconditionally
+    # in its download path (dataset_builder.py), but declares it only for
+    # python_version < "3.9". Without this, the first download of any dataset
+    # fails with ModuleNotFoundError on Python >= 3.9.
+    "importlib_resources",
 ]
 experiments = [
     "scipy>=1.10.0",

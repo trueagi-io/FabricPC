@@ -12,6 +12,7 @@ from fabricpc.nodes.base import (
     Slot,
     NodeBase,
     FlattenInputMixin,
+    compute_windowed_output_shape,
 )
 
 from fabricpc.nodes.linear import Linear
@@ -28,10 +29,8 @@ from fabricpc.nodes.transformer_v2 import (
 from fabricpc.nodes.storkey_hopfield import StorkeyHopfield
 from fabricpc.nodes.skip_connection import SkipConnection
 from fabricpc.nodes.linear_residual import LinearResidual
-
-# Convenience aliases matching the target API
-Linear = Linear
-TransformerBlock = TransformerBlock
+from fabricpc.nodes.convolutional import ConvNode
+from fabricpc.nodes.pooling import MaxPool, AvgPool
 
 __all__ = [
     # Base classes and mixins
@@ -39,11 +38,15 @@ __all__ = [
     "Slot",
     "NodeBase",
     "FlattenInputMixin",
+    "compute_windowed_output_shape",
     # Built-in nodes (full names)
     "Linear",
     "LinearExplicitGrad",
     "TransformerBlock",
     "IdentityNode",
+    "ConvNode",
+    "MaxPool",
+    "AvgPool",
     "EmbeddingNode",
     "MhaResidualNode",
     "LnMlp1Node",
