@@ -81,7 +81,7 @@ class EmbeddingNode(NodeBase):
         key: jax.Array,
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
-        weight_init: Optional[InitializerBase],
+        weight_init: InitializerBase,
         config: Dict[str, Any],
     ) -> NodeParams:
         vocab_size = config["vocab_size"]

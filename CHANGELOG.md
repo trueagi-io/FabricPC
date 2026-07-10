@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+- Base classes are now immutable (frozen at construction); safe to use initializers, activations, and energy functionals as defaults in node constructor signatures. Removed None guards and migrated defaults from body methods to constructors.
+- Removed Optional annotation from node constructor arguments that were in fact always required. Node attribute objects are defaulted once, in the node __init__ signature; the single source of truth on defaults is the constructor.
+- Added ruff to pre-commit hooks for linting and formatting.
+
 ## [0.3.1] - 2026-05-04
 Internal infrastructure release: unified autodiff gradient path, muPC scaling lifted to callsites, and a package restructure that resolves circular import.
 

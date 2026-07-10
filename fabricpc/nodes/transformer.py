@@ -148,8 +148,8 @@ class TransformerBlock(NodeBase):
         self,
         shape: Tuple[int, ...],
         name: str,
-        activation: Optional[ActivationBase] = IdentityActivation(),
-        energy: Optional[EnergyFunctional] = GaussianEnergy(),
+        activation: ActivationBase = IdentityActivation(),
+        energy: EnergyFunctional = GaussianEnergy(),
         internal_activation: Optional[ActivationBase] = GeluActivation(),
         num_heads: int = 8,
         ff_dim: Optional[int] = None,
@@ -157,8 +157,8 @@ class TransformerBlock(NodeBase):
         pre_norm: bool = True,
         use_rope: bool = True,
         rope_theta: float = 10000.0,
-        weight_init: Optional[InitializerBase] = KaimingInitializer(),
-        latent_init: Optional[InitializerBase] = NormalInitializer(),
+        weight_init: InitializerBase = KaimingInitializer(),
+        latent_init: InitializerBase = NormalInitializer(),
     ):
         super().__init__(
             shape=shape,
@@ -201,7 +201,7 @@ class TransformerBlock(NodeBase):
         key: jax.Array,
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
-        weight_init: Optional[InitializerBase] = None,
+        weight_init: InitializerBase,
         config: Optional[Dict[str, Any]] = None,
     ) -> NodeParams:
         if config is None:

@@ -65,12 +65,12 @@ class LinearResidual(FlattenInputMixin, NodeBase):
         self,
         shape: Tuple[int, ...],
         name: str,
-        activation: Optional[ActivationBase] = IdentityActivation(),
-        energy: Optional[EnergyFunctional] = GaussianEnergy(),
+        activation: ActivationBase = IdentityActivation(),
+        energy: EnergyFunctional = GaussianEnergy(),
         use_bias: bool = True,
         flatten_input: bool = False,
-        weight_init: Optional[InitializerBase] = KaimingInitializer(),
-        latent_init: Optional[InitializerBase] = NormalInitializer(),
+        weight_init: InitializerBase = KaimingInitializer(),
+        latent_init: InitializerBase = NormalInitializer(),
     ):
         super().__init__(
             shape=shape,
@@ -100,7 +100,7 @@ class LinearResidual(FlattenInputMixin, NodeBase):
         key: jax.Array,
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
-        weight_init: Optional[InitializerBase] = None,
+        weight_init: InitializerBase,
         config: Optional[Dict[str, Any]] = None,
     ) -> NodeParams:
         """
@@ -112,8 +112,9 @@ class LinearResidual(FlattenInputMixin, NodeBase):
 
         flatten_input = config.get("flatten_input", False)
 
-        if weight_init is None:
-            weight_init = NormalInitializer(mean=0.0, std=0.05)
+        # weight_init is defaulted once, in the __init__ signature, and flows
+        # in via node_info.weight_init. It is not re-defaulted here — the
+        # single source of truth is the constructor.
 
         key_w, key_b = jax.random.split(key)
 

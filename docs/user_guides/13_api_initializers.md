@@ -66,6 +66,8 @@ class MyInitializer(InitializerBase):
         return gain * jax.random.normal(key, shape)
 ```
 
+Instances are frozen after `super().__init__(**config)`: all configuration must pass through `config`, and setting an instance attribute in a subclass `__init__` raises `AttributeError`. This makes every initializer safe to place directly as a node `__init__` signature default.
+
 ---
 
 ## State Initializers

@@ -48,6 +48,9 @@ import numpy as np
 from dataclasses import dataclass
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.topology import SlotRef, _get_current_namespace
+from fabricpc.core.activations import IdentityActivation
+from fabricpc.core.energy import GaussianEnergy
+from fabricpc.core.initializers import NormalInitializer
 
 if TYPE_CHECKING:
     from fabricpc.core.activations import ActivationBase
@@ -177,9 +180,9 @@ class NodeBase(ABC):
         self,
         shape: Tuple[int, ...],
         name: str,
-        activation: Optional[ActivationBase] = None,
-        energy: Optional[EnergyFunctional] = None,
-        latent_init: Optional[InitializerBase] = None,
+        activation: ActivationBase = IdentityActivation(),
+        energy: EnergyFunctional = GaussianEnergy(),
+        latent_init: InitializerBase = NormalInitializer(),
         weight_init: Optional[InitializerBase] = None,
         **extra_config,
     ):
@@ -189,10 +192,11 @@ class NodeBase(ABC):
         Args:
             shape: Output shape tuple (excluding batch dimension)
             name: Node name. Automatically prefixed with current GraphNamespace.
-            activation: ActivationBase instance, or None
-            energy: EnergyFunctional instance, or None
-            latent_init: InitializerBase instance, or None
-            weight_init: InitializerBase instance, or None
+            activation: ActivationBase instance (default: IdentityActivation)
+            energy: EnergyFunctional instance (default: GaussianEnergy)
+            latent_init: InitializerBase instance (default: NormalInitializer)
+            weight_init: InitializerBase instance, or None for a node with no
+                weights (e.g. pooling)
             **extra_config: Node-specific config (use_bias, flatten_input, etc.)
         """
         ns = _get_current_namespace()
@@ -292,7 +296,8 @@ class NodeBase(ABC):
             key: JAX random key
             node_shape: Output shape of this node (excluding batch dimension)
             input_shapes: Dictionary mapping edge keys to source node shapes
-            weight_init: InitializerBase instance for weight initialization, or None
+            weight_init: InitializerBase instance for weight initialization, or
+                None for a weight-free node
             config: Node configuration (may contain initialization settings)
 
         Returns:
@@ -549,11 +554,6 @@ class NodeBase(ABC):
             Updated NodeState with energy field set
         """
         energy_obj = node_info.energy
-        if energy_obj is None:
-            raise ValueError(
-                f"Node '{node_info.name}' has no energy functional configured."
-            )
-
         energy_cls = type(energy_obj)
         config = energy_obj.config
 

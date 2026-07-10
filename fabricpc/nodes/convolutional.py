@@ -145,7 +145,7 @@ class ConvNode(NodeBase):
         key: jax.Array,
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
-        weight_init: Optional["InitializerBase"] = None,
+        weight_init: "InitializerBase",
         config: Optional[Dict[str, Any]] = None,
     ) -> NodeParams:
         """

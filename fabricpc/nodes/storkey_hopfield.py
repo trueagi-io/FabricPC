@@ -78,7 +78,6 @@ from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.activations import TanhActivation
 from fabricpc.core.energy import GaussianEnergy
 from fabricpc.core.initializers import (
-    ZerosInitializer,
     NormalInitializer,
     XavierInitializer,
     initialize,
@@ -137,14 +136,14 @@ class StorkeyHopfield(NodeBase):
         self,
         shape: Tuple[int, ...],
         name: str,
-        activation: Optional[ActivationBase] = TanhActivation(),
-        energy: Optional[EnergyFunctional] = GaussianEnergy(),
+        activation: ActivationBase = TanhActivation(),
+        energy: EnergyFunctional = GaussianEnergy(),
         hopfield_strength: Optional[float] = None,
         use_bias: bool = False,
         enforce_symmetry: bool = True,
         zero_diagonal: bool = False,
-        latent_init: Optional[InitializerBase] = NormalInitializer(),
-        weight_init: Optional[InitializerBase] = XavierInitializer(),
+        latent_init: InitializerBase = NormalInitializer(),
+        weight_init: InitializerBase = XavierInitializer(),
     ):
         super().__init__(
             shape=shape,
@@ -169,7 +168,7 @@ class StorkeyHopfield(NodeBase):
         key: jax.Array,
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
-        weight_init: Optional[InitializerBase] = None,
+        weight_init: InitializerBase,
         config: Optional[Dict[str, Any]] = None,
     ) -> NodeParams:
         """
@@ -185,8 +184,9 @@ class StorkeyHopfield(NodeBase):
         if config is None:
             config = {}
 
-        if weight_init is None:
-            weight_init = ZerosInitializer()
+        # weight_init is defaulted once, in the __init__ signature, and flows
+        # in via node_info.weight_init. It is not re-defaulted here — the
+        # single source of truth is the constructor.
 
         # Weights
         weights_dict = {}

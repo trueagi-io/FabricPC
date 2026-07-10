@@ -456,7 +456,9 @@ class KLDivergenceEnergy(EnergyFunctional):
 
 
 def compute_energy(
-    z_latent: jnp.ndarray, z_mu: jnp.ndarray, energy: EnergyFunctional = None
+    z_latent: jnp.ndarray,
+    z_mu: jnp.ndarray,
+    energy: EnergyFunctional = GaussianEnergy(),
 ) -> jnp.ndarray:
     """
     Compute energy using the specified energy functional.
@@ -464,19 +466,18 @@ def compute_energy(
     Args:
         z_latent: Latent states, shape (batch, *dims)
         z_mu: Predicted expectations, shape (batch, *dims)
-        energy: EnergyFunctional instance. If None, uses GaussianEnergy with defaults.
+        energy: EnergyFunctional instance (default: GaussianEnergy())
 
     Returns:
         Energy per sample, shape (batch,)
     """
-    if energy is None:
-        energy = GaussianEnergy()
-
     return type(energy).energy(z_latent, z_mu, energy.config)
 
 
 def compute_energy_gradient(
-    z_latent: jnp.ndarray, z_mu: jnp.ndarray, energy: EnergyFunctional = None
+    z_latent: jnp.ndarray,
+    z_mu: jnp.ndarray,
+    energy: EnergyFunctional = GaussianEnergy(),
 ) -> jnp.ndarray:
     """
     Compute energy gradient w.r.t. z_latent.
@@ -484,19 +485,18 @@ def compute_energy_gradient(
     Args:
         z_latent: Latent states, shape (batch, *dims)
         z_mu: Predicted expectations, shape (batch, *dims)
-        energy: EnergyFunctional instance. If None, uses GaussianEnergy with defaults.
+        energy: EnergyFunctional instance (default: GaussianEnergy())
 
     Returns:
         Gradient dE/dz_latent, same shape as z_latent
     """
-    if energy is None:
-        energy = GaussianEnergy()
-
     return type(energy).grad_latent(z_latent, z_mu, energy.config)
 
 
 def get_energy_and_gradient(
-    z_latent: jnp.ndarray, z_mu: jnp.ndarray, energy: EnergyFunctional = None
+    z_latent: jnp.ndarray,
+    z_mu: jnp.ndarray,
+    energy: EnergyFunctional = GaussianEnergy(),
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Compute both energy and gradient efficiently.
@@ -504,16 +504,13 @@ def get_energy_and_gradient(
     Args:
         z_latent: Latent states, shape (batch, *dims)
         z_mu: Predicted expectations, shape (batch, *dims)
-        energy: EnergyFunctional instance. If None, uses GaussianEnergy with defaults.
+        energy: EnergyFunctional instance (default: GaussianEnergy())
 
     Returns:
         Tuple of (energy, gradient):
             - energy: per-sample energy, shape (batch,)
             - gradient: dE/dz_latent, same shape as z_latent
     """
-    if energy is None:
-        energy = GaussianEnergy()
-
     energy_cls = type(energy)
     config = energy.config
 

@@ -42,6 +42,9 @@ dev = [
     "pytest>=7.0.0",
     "hypothesis>=6.0.0",
     "black[colorama]==26.1.0",
+    # Pinned to the ruff-pre-commit rev in .pre-commit-config.yaml so local
+    # `ruff check` and the hook agree.
+    "ruff==0.15.19",
     "mypy>=1.0.0",
     "pre-commit>=3.0.0",
 ]

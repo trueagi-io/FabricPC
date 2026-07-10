@@ -52,12 +52,12 @@ class Linear(FlattenInputMixin, NodeBase):
         self,
         shape: Tuple[int, ...],
         name: str,
-        activation: Optional[ActivationBase] = IdentityActivation(),
-        energy: Optional[EnergyFunctional] = GaussianEnergy(),
+        activation: ActivationBase = IdentityActivation(),
+        energy: EnergyFunctional = GaussianEnergy(),
         use_bias: bool = True,
         flatten_input: bool = False,
-        weight_init: Optional[InitializerBase] = KaimingInitializer(),
-        latent_init: Optional[InitializerBase] = NormalInitializer(),
+        weight_init: InitializerBase = KaimingInitializer(),
+        latent_init: InitializerBase = NormalInitializer(),
     ):
         """
         Args:
@@ -67,7 +67,7 @@ class Linear(FlattenInputMixin, NodeBase):
             energy: EnergyFunctional instance (default: GaussianEnergy)
             use_bias: Whether to use bias (default: True)
             flatten_input: If True, flatten all input dims for dense behavior (default: False)
-            weight_init: InitializerBase instance for weights (default: NormalInitializer)
+            weight_init: InitializerBase instance for weights (default: KaimingInitializer)
             latent_init: InitializerBase instance for latent states
         """
         super().__init__(
@@ -91,7 +91,7 @@ class Linear(FlattenInputMixin, NodeBase):
         key: jax.Array,
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
-        weight_init: Optional[InitializerBase] = None,
+        weight_init: InitializerBase,
         config: Optional[Dict[str, Any]] = None,
     ) -> NodeParams:
         """
@@ -105,7 +105,8 @@ class Linear(FlattenInputMixin, NodeBase):
             key: JAX random key
             node_shape: Output shape of this node (excluding batch dimension)
             input_shapes: Dictionary with EdgeInfo.key -> source shape for that edge
-            weight_init: InitializerBase instance for weight initialization, or None
+            weight_init: InitializerBase instance for weight initialization,
+                supplied by the graph builder from the constructor's weight_init
             config: Node configuration with weight_init settings
 
         Returns:
@@ -115,9 +116,6 @@ class Linear(FlattenInputMixin, NodeBase):
             config = {}
 
         flatten_input = config.get("flatten_input", False)
-
-        if weight_init is None:
-            weight_init = NormalInitializer(mean=0.0, std=0.05)
 
         # Split key for weights and biases
         key_w, key_b = jax.random.split(key)
