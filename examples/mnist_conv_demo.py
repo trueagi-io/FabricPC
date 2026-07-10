@@ -24,7 +24,6 @@ Architecture::
 
 import time
 import jax
-import jax.numpy as jnp
 import optax
 
 from fabricpc.nodes import ConvNode, MaxPool, Linear, IdentityNode

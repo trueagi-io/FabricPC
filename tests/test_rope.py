@@ -9,7 +9,6 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 import pytest
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 from fabricpc.core.positional import precompute_freqs_cis, apply_rotary_emb
 

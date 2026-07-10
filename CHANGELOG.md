@@ -2,8 +2,12 @@
 
 ## [Unreleased]
 - Base classes are now immutable (frozen at construction); safe to use initializers, activations, and energy functionals as defaults in node constructor signatures. Removed None guards and migrated defaults from body methods to constructors.
+- Config values are validated at construction: immutable scalars (int, float, str, bool, bytes, None) and tuples of those only. A list, dict, set, or array config value raises TypeError.
 - Removed Optional annotation from node constructor arguments that were in fact always required. Node attribute objects are defaulted once, in the node __init__ signature; the single source of truth on defaults is the constructor.
-- Added ruff to pre-commit hooks for linting and formatting.
+- Breaking: None is no longer accepted for activation, energy, or latent_init — NodeBase raises TypeError at construction, naming the node. weight_init=None still means a weight-free node (e.g. pooling).
+- Breaking: TransformerBlock(internal_activation=None) previously meant GELU; None is now rejected at construction, and identity is spelled IdentityActivation().
+- Custom nodes that forward **kwargs without setting energy or activation now receive the NodeBase signature defaults (GaussianEnergy, IdentityActivation) instead of raising at energy computation.
+- Added ruff to pre-commit hooks for linting (formatting stays with Black). The lint scope covers fabricpc/, tests/, examples/, and scripts/; E402 is ignored in examples/ and scripts/, which configure JAX flags before importing jax.
 
 ## [0.3.1] - 2026-05-04
 Internal infrastructure release: unified autodiff gradient path, muPC scaling lifted to callsites, and a package restructure that resolves circular import.

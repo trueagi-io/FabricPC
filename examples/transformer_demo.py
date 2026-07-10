@@ -66,7 +66,6 @@ from fabricpc.core.activations import (
 from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.core.initializers import (
     NormalInitializer,
-    MuPCInitializer,
 )
 from fabricpc.core.inference import InferenceSGDNormClip
 import optax

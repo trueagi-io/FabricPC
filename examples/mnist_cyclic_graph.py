@@ -138,12 +138,12 @@ def main():
     print("=" * 70)
     print("Statistical Comparison: Cyclic Graph vs Standard MLP")
     print("=" * 70)
-    print(f"Dataset: MNIST")
+    print("Dataset: MNIST")
     print(
-        f"Cyclic Graph: 784 -> [256 + 256_lat] -> [64 + 64_lat] -> 10  (6 nodes, 7 edges)"
+        "Cyclic Graph: 784 -> [256 + 256_lat] -> [64 + 64_lat] -> 10  (6 nodes, 7 edges)"
     )
-    print(f"MLP:     784 -> 256 -> 64 -> 10                         (4 nodes, 3 edges)")
-    print(f"Training: Predictive Coding (both arms)")
+    print("MLP:     784 -> 256 -> 64 -> 10                         (4 nodes, 3 edges)")
+    print("Training: Predictive Coding (both arms)")
     print(f"Epochs per trial: {train_config['num_epochs']}")
     print(f"Number of trials: {args.n_trials}")
     print()

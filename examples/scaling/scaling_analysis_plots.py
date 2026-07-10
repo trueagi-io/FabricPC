@@ -42,7 +42,7 @@ def fit_power_law(x, y):
         ss_tot = np.sum((y - np.mean(y)) ** 2)
         r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
         return a, b, r_squared
-    except:
+    except Exception:
         return np.nan, np.nan, np.nan
 
 
@@ -393,7 +393,7 @@ def plot_combined_analysis(pc_df, bp_df, widths, depths, colors):
         subplot_titles=(
             "Predictive Coding: Time vs Depth<br>(Linear O(n) scaling observed)",
             "Backpropagation: Time vs Depth<br>(Linear O(n) scaling observed)",
-            f"Depth Scaling Exponent: time ~ depth^α",
+            "Depth Scaling Exponent: time ~ depth^α",
             "Training Time Ratio: PC / Backprop<br>(Higher = PC slower)",
         ),
         specs=[
@@ -761,7 +761,7 @@ def print_scaling_summary(pc_df, bp_df, widths, depths):
     print(
         f"BP average exponent α: {np.mean(bp_exps):.3f} → O(n^{np.mean(bp_exps):.2f}) ≈ linear"
     )
-    print(f"Both show approximately linear scaling with depth (time ~ depth^α, α ≈ 1)")
+    print("Both show approximately linear scaling with depth (time ~ depth^α, α ≈ 1)")
 
     # Time ratios
     print("\n--- PC/BP Time Ratios ---")

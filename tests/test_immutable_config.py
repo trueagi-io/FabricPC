@@ -30,6 +30,7 @@ from fabricpc.graph_initialization import initialize_params
 from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 from fabricpc.core.inference import run_inference, InferenceSGD
 from fabricpc.core.activations import (
+    IdentityActivation,
     ReLUActivation,
     SoftmaxActivation,
     GeluActivation,
@@ -253,15 +254,13 @@ def test_freeze_is_single_source():
 
 
 # =============================================================================
-# 6. TransformerBlock internal_activation: default vs explicit None
+# 6. TransformerBlock internal_activation: default shared, None rejected
 # =============================================================================
 
 
 def test_transformer_block_internal_activation_default_and_none():
-    """The signature default is a shared, frozen GELU; passing None selects the
-    identity path that forward() implements (previously unreachable because the
-    old ``internal_activation or GeluActivation()`` idiom forced a non-None
-    value)."""
+    """The signature default is a shared, frozen GELU. None is not a sentinel:
+    it is rejected at construction. Identity is spelled ``IdentityActivation()``."""
     a = TransformerBlock(shape=(4, 8), name="a", num_heads=2)
     b = TransformerBlock(shape=(4, 8), name="b", num_heads=2)
 
@@ -273,7 +272,76 @@ def test_transformer_block_internal_activation_default_and_none():
     with pytest.raises(AttributeError):
         a._extra_config["internal_activation"].leaked = 1
 
+    with pytest.raises(TypeError, match="internal_activation"):
+        TransformerBlock(shape=(4, 8), name="c", num_heads=2, internal_activation=None)
+
     identity_block = TransformerBlock(
-        shape=(4, 8), name="c", num_heads=2, internal_activation=None
+        shape=(4, 8), name="d", num_heads=2, internal_activation=IdentityActivation()
     )
-    assert identity_block._extra_config["internal_activation"] is None
+    assert isinstance(
+        identity_block._extra_config["internal_activation"], IdentityActivation
+    )
+
+
+# =============================================================================
+# 7. Config values are validated: immutable scalars and tuples only
+# =============================================================================
+
+
+class TestConfigValueValidation:
+    def test_scalars_and_tuples_accepted(self):
+        obj = FrozenConfig(
+            precision=2.0,
+            mode="fan_in",
+            enabled=True,
+            missing=None,
+            channel_alpha=(0.1, 0.2, 0.3),
+            nested=((1, 2), (3, 4)),
+        )
+        assert obj.config["channel_alpha"] == (0.1, 0.2, 0.3)
+
+    @pytest.mark.parametrize(
+        "bad_value",
+        [
+            pytest.param([1, 2, 3], id="list"),
+            pytest.param({"k": 1}, id="dict"),
+            pytest.param({1, 2}, id="set"),
+            pytest.param((1, [2, 3]), id="list-inside-tuple"),
+            pytest.param(jnp.zeros(3), id="jax-array"),
+        ],
+    )
+    def test_mutable_values_rejected(self, bad_value):
+        """A mutable config value would defeat the freeze; construction fails."""
+        with pytest.raises(TypeError, match="immutable scalar"):
+            FrozenConfig(table=bad_value)
+
+    def test_family_subclass_goes_through_validation(self):
+        """The families route their named params through FrozenConfig, so a
+        mutable value passed to a concrete subclass is rejected the same way."""
+        with pytest.raises(TypeError, match="immutable scalar"):
+            GaussianEnergy(precision=[1.0, 2.0])
+
+
+# =============================================================================
+# 8. Node constructors reject None for the always-required config objects
+# =============================================================================
+
+
+class TestNodeConstructorValidation:
+    """None lost its use-the-default meaning when defaults moved into the
+    signature; passing it now fails at construction with the node name,
+    instead of an AttributeError deep in energy or parameter initialization."""
+
+    @pytest.mark.parametrize("param", ["activation", "energy", "latent_init"])
+    def test_none_rejected_with_node_name(self, param):
+        with pytest.raises(TypeError, match=r"Node 'n'.*" + param):
+            Linear(shape=(3,), name="n", **{param: None})
+
+    def test_wrong_type_rejected(self):
+        with pytest.raises(TypeError, match="weight_init"):
+            Linear(shape=(3,), name="n", weight_init=5)
+
+    def test_weight_init_none_still_means_weight_free(self):
+        """Pooling nodes pass weight_init=None deliberately; that stays legal."""
+        pool = MaxPool(shape=(4, 4, 4), name="pool", window_shape=(2, 2))
+        assert pool._weight_init is None

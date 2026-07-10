@@ -46,7 +46,6 @@ from jax_setup import set_jax_flags_before_importing_jax
 set_jax_flags_before_importing_jax()
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 import optax
 import argparse
@@ -64,9 +63,8 @@ from fabricpc.core.activations import (
     LeakyReLUActivation,
     SoftmaxActivation,
 )
-from fabricpc.core.energy import GaussianEnergy, CrossEntropyEnergy
+from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.core.initializers import (
-    NormalInitializer,
     MuPCInitializer,
     XavierInitializer,
 )
@@ -153,7 +151,7 @@ def make_residual_block(
     stride,
     block_name,
     weight_init,
-    activation=None,
+    activation=ReLUActivation(),
 ):
     """
     Create one residual block: conv_a -> conv_b(act) -> skip(sum).
@@ -164,9 +162,6 @@ def make_residual_block(
     Returns:
         (nodes_list, edges_list, skip_node) where skip_node is the block output.
     """
-    if activation is None:
-        activation = ReLUActivation()
-
     in_h, in_w, in_channels = prev_node._shape
 
     if stride == 1:
@@ -233,8 +228,8 @@ def make_residual_block(
 def build_resnet18(
     weight_init,
     scaling=None,
-    output_weight_init=None,
-    activation=None,
+    output_weight_init=XavierInitializer(),
+    activation=ReLUActivation(),
     *,
     infer_steps,
     eta_infer,
@@ -245,7 +240,8 @@ def build_resnet18(
     Args:
         weight_init: InitializerBase for conv/linear weights.
         scaling: Optional MuPCConfig for muPC parameterization.
-        output_weight_init: Optional InitializerBase for the output layer.
+        output_weight_init: InitializerBase for the output layer
+            (default: XavierInitializer).
         activation: Activation for hidden conv layers (default: ReLU).
         infer_steps: Number of PC inference steps.
         eta_infer: Inference rate.
@@ -253,11 +249,6 @@ def build_resnet18(
     Returns:
         GraphStructure ready for initialize_params().
     """
-    if output_weight_init is None:
-        output_weight_init = XavierInitializer()
-    if activation is None:
-        activation = ReLUActivation()
-
     # Input
     input_node = IdentityNode(shape=(32, 32, 3), name="input")
 
@@ -337,7 +328,7 @@ def build_resnet18(
 # =============================================================================
 
 
-def _create_mupc_model(rng_key, *, infer_steps, eta_infer, activation=None):
+def _create_mupc_model(rng_key, *, infer_steps, eta_infer, activation=ReLUActivation()):
     """Create ResNet-18 with muPC parameterization."""
     structure = build_resnet18(
         weight_init=MuPCInitializer(),

@@ -58,7 +58,6 @@ class TestDistributionStateInit:
     ):
         """Test distribution init with graph-level default initializer."""
         structure = simple_graph_structure
-        params = initialize_params(structure, rng_key)
 
         batch_size = 8
         x = jax.random.normal(rng_key, (batch_size, 784))
@@ -141,7 +140,6 @@ class TestClampHandling:
     def test_distribution_init_respects_clamps(self, simple_graph_structure, rng_key):
         """Test that distribution init respects clamped values."""
         structure = simple_graph_structure
-        params = initialize_params(structure, rng_key)
 
         batch_size = 4
         x = jnp.ones((batch_size, 784)) * 5.0

@@ -39,7 +39,7 @@ safe to share across every node that does not override it.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING
+from typing import Dict, Any, Optional, Tuple
 import copy
 import types
 import jax
@@ -48,14 +48,9 @@ import numpy as np
 from dataclasses import dataclass
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.topology import SlotRef, _get_current_namespace
-from fabricpc.core.activations import IdentityActivation
-from fabricpc.core.energy import GaussianEnergy
-from fabricpc.core.initializers import NormalInitializer
-
-if TYPE_CHECKING:
-    from fabricpc.core.activations import ActivationBase
-    from fabricpc.core.energy import EnergyFunctional
-    from fabricpc.core.initializers import InitializerBase
+from fabricpc.core.activations import ActivationBase, IdentityActivation
+from fabricpc.core.energy import EnergyFunctional, GaussianEnergy
+from fabricpc.core.initializers import InitializerBase, NormalInitializer
 
 
 @dataclass(frozen=True)
@@ -198,7 +193,29 @@ class NodeBase(ABC):
             weight_init: InitializerBase instance, or None for a node with no
                 weights (e.g. pooling)
             **extra_config: Node-specific config (use_bias, flatten_input, etc.)
+
+        Raises:
+            TypeError: If activation, energy, or latent_init is not an instance
+                of its base class, or weight_init is neither an InitializerBase
+                instance nor None. None is not a "use the default" sentinel;
+                the defaults live in the signature.
         """
+        for param, value, base in (
+            ("activation", activation, ActivationBase),
+            ("energy", energy, EnergyFunctional),
+            ("latent_init", latent_init, InitializerBase),
+        ):
+            if not isinstance(value, base):
+                raise TypeError(
+                    f"Node '{name}': {param} must be an {base.__name__} "
+                    f"instance; got {type(value).__name__}"
+                )
+        if weight_init is not None and not isinstance(weight_init, InitializerBase):
+            raise TypeError(
+                f"Node '{name}': weight_init must be an InitializerBase "
+                f"instance, or None for a weight-free node; "
+                f"got {type(weight_init).__name__}"
+            )
         ns = _get_current_namespace()
         self._name = f"{ns}/{name}" if ns else name
         self._shape = tuple(shape)

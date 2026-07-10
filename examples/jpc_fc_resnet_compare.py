@@ -95,7 +95,7 @@ set_jax_flags_before_importing_jax()
 import argparse
 import math
 import time
-from typing import Dict, Any, Optional, Tuple
+from typing import Tuple
 
 import jax
 import jax.numpy as jnp
@@ -111,7 +111,7 @@ from fabricpc.core.activations import IdentityActivation, ReLUActivation
 from fabricpc.core.energy import GaussianEnergy
 from fabricpc.core.inference import InferenceSGDNormClip
 from fabricpc.core.initializers import NormalInitializer, initialize
-from fabricpc.core.types import NodeParams, NodeState, NodeInfo
+from fabricpc.core.types import NodeParams
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
 
@@ -743,8 +743,8 @@ def main():
     print(f"Test Accuracy: {accuracy:.2f}%")
 
     # Comparison
-    print(f"\n--- Comparison ---")
-    print(f"jpc reference:   ~93% (depth=30, width=128, ODE solver)")
+    print("\n--- Comparison ---")
+    print("jpc reference:   ~93% (depth=30, width=128, ODE solver)")
     print(
         f"This run:        {accuracy:.2f}% (depth={args.depth}, "
         f"width={args.width}, scaling={args.scaling})"

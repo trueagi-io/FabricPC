@@ -5,20 +5,26 @@
 
 from __future__ import annotations
 
+import math
+
 import jax
 import jax.numpy as jnp
 
 from fabricpc.nodes.base import NodeBase, SlotSpec
-from fabricpc.core.activations import IdentityActivation, GeluActivation
-from fabricpc.core.energy import GaussianEnergy
-from fabricpc.core.initializers import NormalInitializer, KaimingInitializer, initialize
+from fabricpc.core.activations import (
+    ActivationBase,
+    IdentityActivation,
+    GeluActivation,
+)
+from fabricpc.core.energy import EnergyFunctional, GaussianEnergy
+from fabricpc.core.initializers import (
+    InitializerBase,
+    NormalInitializer,
+    KaimingInitializer,
+    initialize,
+)
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
-from typing import Dict, Optional, Tuple, Any, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from fabricpc.core.activations import ActivationBase
-    from fabricpc.core.energy import EnergyFunctional
-    from fabricpc.core.initializers import InitializerBase
+from typing import Dict, Optional, Tuple, Any
 
 # =============================================================================
 # Rotary Position Embeddings (RoPE)
@@ -160,6 +166,12 @@ class TransformerBlock(NodeBase):
         weight_init: InitializerBase = KaimingInitializer(),
         latent_init: InitializerBase = NormalInitializer(),
     ):
+        if not isinstance(internal_activation, ActivationBase):
+            raise TypeError(
+                f"Node '{name}': internal_activation must be an ActivationBase "
+                f"instance (use IdentityActivation() for no activation); "
+                f"got {type(internal_activation).__name__}"
+            )
         super().__init__(
             shape=shape,
             name=name,
@@ -239,29 +251,29 @@ class TransformerBlock(NodeBase):
                 "W_q": initialize(
                     keys[0],
                     (embed_dim, embed_dim),
-                    NormalInitializer(std=1.0 / jnp.sqrt(embed_dim)),
+                    NormalInitializer(std=1.0 / math.sqrt(embed_dim)),
                 ),
                 "W_k": initialize(
                     keys[1],
                     (embed_dim, embed_dim),
-                    NormalInitializer(std=1.0 / jnp.sqrt(embed_dim)),
+                    NormalInitializer(std=1.0 / math.sqrt(embed_dim)),
                 ),
                 "W_v": initialize(
                     keys[2],
                     (embed_dim, embed_dim),
-                    NormalInitializer(std=1.0 / jnp.sqrt(embed_dim)),
+                    NormalInitializer(std=1.0 / math.sqrt(embed_dim)),
                 ),
                 "W_o": initialize(
                     keys[3],
                     (embed_dim, embed_dim),
-                    NormalInitializer(std=1.0 / jnp.sqrt(embed_dim)),
+                    NormalInitializer(std=1.0 / math.sqrt(embed_dim)),
                 ),
                 # FFN weights
                 "W_ff1": initialize(keys[4], (embed_dim, ff_dim), KaimingInitializer()),
                 "W_ff2": initialize(
                     keys[5],
                     (ff_dim, embed_dim),
-                    NormalInitializer(std=1.0 / jnp.sqrt(ff_dim)),
+                    NormalInitializer(std=1.0 / math.sqrt(ff_dim)),
                 ),
                 # LayerNorm parameters
                 "ln1_gamma": jnp.ones((1, 1, embed_dim)),
@@ -294,7 +306,8 @@ class TransformerBlock(NodeBase):
         internal_activation = config.get("internal_activation")
 
         def activation_fn(x):
-            # todo: would this line would fail when user chooses IdentityActivation or some other activation that lacks config arguments?
+            # Every ActivationBase.forward takes (x, config); an activation that
+            # ignores config still accepts it, so this holds for all subclasses.
             return type(internal_activation).forward(x, internal_activation.config)
 
         # Get input (self-attention)

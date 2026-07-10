@@ -88,7 +88,6 @@ class TestGraphConstruction:
 
     def test_invalid_slot_rejection(self):
         """Test that invalid slot connections are rejected."""
-        a_node = Linear(shape=(10,), name="a")
         b_node = Linear(shape=(5,), name="b")
 
         with pytest.raises(KeyError, match="no slot"):

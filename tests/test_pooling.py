@@ -7,10 +7,8 @@ import jax
 import jax.numpy as jnp
 import fabricpc.nodes as nodes
 from fabricpc.nodes.pooling import MaxPool, AvgPool, _PoolBase
-from fabricpc.nodes.base import SlotSpec
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.activations import IdentityActivation
-from fabricpc.core.energy import GaussianEnergy
 
 jax.config.update("jax_default_prng_impl", "threefry2x32")
 

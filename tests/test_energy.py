@@ -5,8 +5,6 @@ Tests built-in energy functionals, custom energy creation,
 and integration with graph construction.
 """
 
-import pytest
-import jax
 import jax.numpy as jnp
 
 from fabricpc.core.energy import (
@@ -20,7 +18,6 @@ from fabricpc.core.energy import (
 from fabricpc.nodes import Linear
 from fabricpc.core.topology import Edge
 from fabricpc.graph_assembly import TaskMap, graph
-from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.inference import InferenceSGD
 
 

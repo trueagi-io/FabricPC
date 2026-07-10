@@ -233,7 +233,6 @@ def main(args=None):
 
     vocab_size = train_loader.vocab_size
     char_to_ix = train_loader.token_to_idx if use_bpe else train_loader.char_to_idx
-    ix_to_char = train_loader.idx_to_token if use_bpe else train_loader.idx_to_char
 
     # --- Model ---
     structure = create_deep_transformer(

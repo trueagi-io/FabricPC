@@ -9,7 +9,6 @@ and determinism.
 from math import prod
 
 import pytest
-import jax
 import jax.numpy as jnp
 
 from fabricpc.core.initializers import (
