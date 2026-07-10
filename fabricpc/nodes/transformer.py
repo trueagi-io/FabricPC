@@ -150,7 +150,7 @@ class TransformerBlock(NodeBase):
         name: str,
         activation: ActivationBase = IdentityActivation(),
         energy: EnergyFunctional = GaussianEnergy(),
-        internal_activation: Optional[ActivationBase] = GeluActivation(),
+        internal_activation: ActivationBase = GeluActivation(),
         num_heads: int = 8,
         ff_dim: Optional[int] = None,
         dropout_rate: float = 0.0,
@@ -292,15 +292,10 @@ class TransformerBlock(NodeBase):
 
         # Get internal activation from config (stored as ActivationBase instance)
         internal_activation = config.get("internal_activation")
-        if internal_activation is not None:
 
-            def activation_fn(x):
-                return type(internal_activation).forward(x, internal_activation.config)
-
-        else:
-
-            def activation_fn(x):
-                return x
+        def activation_fn(x):
+            # todo: would this line would fail when user chooses IdentityActivation or some other activation that lacks config arguments?
+            return type(internal_activation).forward(x, internal_activation.config)
 
         # Get input (self-attention)
         in_edge_key = next(iter(k for k in inputs.keys() if k.endswith(":in")))
