@@ -238,15 +238,26 @@ def extract_latent_grad_statistics(
 
 
 def flatten_for_distribution(arr: jnp.ndarray) -> np.ndarray:
-    """Flatten array to 1D numpy for Aim Distribution tracking.
+    """Flatten array to 1D float64 numpy with non-finite values removed,
+    for Aim Distribution tracking.
+
+    Aim's Distribution histograms the samples with np.histogram, which
+    raises ValueError when the data contains inf/NaN or when max - min
+    overflows the sample dtype (float32 weights in a diverging run reach
+    ~1e38, so their range exceeds float32 max). A tracker must record
+    pathological training states, not crash the run on them: cast to
+    float64 so any finite float32 range is binnable, and drop non-finite
+    entries. Callers skip distribution tracking when nothing finite
+    remains.
 
     Args:
         arr: JAX array of any shape.
 
     Returns:
-        1D numpy array.
+        1D float64 numpy array of the finite elements (may be empty).
     """
-    return np.asarray(arr).flatten()
+    flat = np.asarray(arr, dtype=np.float64).ravel()
+    return flat[np.isfinite(flat)]
 
 
 def extract_all_distributions(
