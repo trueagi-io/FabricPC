@@ -18,20 +18,23 @@ Usage:
     python examples/transformer_demo.py --mode backprop --lr 1e-3 --num_epochs 3
     python examples/transformer_demo.py --mode pc --num_blocks 2
 
-Results: PC training
-Final train energy: 221.06
-Final test loss: 2.5351, Perplexity: 12.62
+Results: PC training (cuda13, rtx3090)
+Final train energy: 332.7728
+Test loss: 2.6713, Perplexity: 14.46
 Prompt: 'ROMEO: '
 ----------------------------------------
-ROMEO: heacfeeearecayayoule
+ROMEO: hiteeeeeo he
+Wateeo
 ----------------------------------------
 
 Backprop Training
-Final test loss: 1.6892, Perplexity: 5.41
+Test loss: 1.8867, Perplexity: 6.60
 Prompt: 'ROMEO: '
 ----------------------------------------
-ROMEO: go,
-bound this merry
+ROMEO: his.fe!
+
+CARILARE:
+M
 ----------------------------------------
 """
 
@@ -135,7 +138,7 @@ def parse_args():
     parser.add_argument(
         "--eta_infer", type=float, default=0.1, help="PC inference step size"
     )
-    parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     return parser.parse_args()
 
@@ -157,7 +160,7 @@ def create_transformer_model(
 ) -> Tuple:
     """Create a transformer language model. Returns (structure, params)."""
     if infer_steps is None:
-        infer_steps = 4 * (2 * num_blocks + 2)
+        infer_steps = 3 * (2 * num_blocks + 2)
 
     input_node = IdentityNode(shape=(seq_len,), name="input")
     # Use EmbeddingNode (table lookup) instead of Linear with one-hot input.
@@ -427,10 +430,10 @@ def main(args=None):
     lr_schedule = optax.cosine_decay_schedule(
         init_value=args.lr,
         decay_steps=max(1, round(args.num_epochs * len(train_batches))),
-        alpha=0.1,
+        alpha=0.01,
     )
     optimizer = optax.chain(
-        optax.clip_by_global_norm(5.0),
+        optax.clip_by_global_norm(1.0),
         optax.adamw(lr_schedule, weight_decay=0.1),
     )
     train_config = {
