@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+- Removed pre-activation from NodeState. Nodes that compute pre-activation should use it only as an intermediate value and not store it.
+- Moved the summation of per-sample energy from the node forward() method to the node base forward_and_latent_grads() and forward_and_weight_grads() methods. The forward methods should update the NodeState object with the per-sample energy (call to energy functional) and let the base class sum it.
 - Fixed incomplete one-hot-to-integer target migration in the backprop autoregressive path: `evaluate_backprop_autoregressive`'s debug diagnostics multiplied integer token ids (batch, seq_len) against log-probabilities (batch, seq_len, vocab), raising a broadcast error on the first evaluated batch when debug=True. Targets are now one-hot encoded when they arrive one axis short of predictions, the same contract as `compute_loss`.
 - Fixed `eval_step_backprop` accuracy: the one-hot test `targets.ndim > 1 and targets.shape[-1] > 1` misread integer sequence targets (batch, seq_len) as one-hot and argmaxed over sequence positions. The test is now a rank comparison against predictions.
 - Fixed `generate_autoregressive` on v1 graphs that declare an external `causal_mask` node: generation never clamped the mask node, so attention ran with a mask latent from state initialization instead of the lower-triangular pattern used in training and eval.

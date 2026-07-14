@@ -35,58 +35,47 @@ including GELU continue to work unchanged.
 
 ## Approach
 
-### 1. Migrate `LinearExplicitGrad` to thread `pre_activation` locally
+### 1. Migrate `LinearExplicitGrad` via a shared `_forward_with_preact` helper
 
-`pre_activation` becomes a local variable in `forward_and_latent_grads` and
-`forward_and_weight_grads`, computed once and passed to
-`compute_gain_mod_error`. The activation API is untouched.
+`pre_activation` becomes a value threaded locally through `LinearExplicitGrad`'s
+gradient methods instead of a `NodeState` field. The activation API is untouched.
 
 **File: `fabricpc/nodes/linear.py`**
 
-Factor a small static helper out of `Linear.forward` so `LinearExplicitGrad` can
-reuse it:
+`Linear` exposes a private forward variant that returns the updated state
+together with the pre-activation; the public `forward` delegates to it and
+discards `pre_activation`:
 
 ```python
-class Linear(NodeBase):
+class Linear(FlattenInputMixin, NodeBase):
     @staticmethod
-    def _compute_pre_activation(
+    def _forward_with_preact(
         params: NodeParams,
         inputs: Dict[str, jnp.ndarray],
-        batch_size: int,
-        out_shape: Tuple[int, ...],
-        flatten_input: bool,
-    ) -> jnp.ndarray:
-        if flatten_input:
-            pre_activation = FlattenInputMixin.compute_linear(
-                inputs, params.weights, batch_size, out_shape
-            )
-        else:
-            pre_activation = jnp.zeros((batch_size,) + out_shape)
-            for edge_key, x in inputs.items():
-                pre_activation = pre_activation + jnp.matmul(
-                    x, params.weights[edge_key]
-                )
-        if "b" in params.biases and params.biases["b"].size > 0:
-            pre_activation = pre_activation + params.biases["b"]
-        return pre_activation
-```
+        state: NodeState,
+        node_info: NodeInfo,
+    ) -> tuple[NodeState, jnp.ndarray]:
+        """Internal forward returning (state, pre_activation).
 
-Rewrite `Linear.forward` (lines ~185-226) to use the helper and stop storing
-`pre_activation` on state:
+        Shared between Linear.forward (which discards pre_activation) and
+        LinearExplicitGrad's gradient methods (which thread pre_activation
+        into f'(z) for the gain-modulated error). Not for use by other node
+        types — LinearResidual, StorkeyHopfield, and Transformer compute
+        pre_activation differently and override forward directly.
+        """
+        ...
+        return state, pre_activation
 
-```python
-pre_activation = Linear._compute_pre_activation(
-    params, inputs, batch_size, out_shape, flatten_input
-)
-z_mu = type(activation).forward(pre_activation, activation.config)
-error = state.z_latent - z_mu
-state = state._replace(z_mu=z_mu, error=error)   # was: pre_activation=pre_activation, ...
+    @staticmethod
+    def forward(params, inputs, state, node_info) -> NodeState:
+        state, _ = Linear._forward_with_preact(params, inputs, state, node_info)
+        return state
 ```
 
 **File: `fabricpc/nodes/linear_explicit_grad.py`**
 
-Change the signature of `compute_gain_mod_error` so it receives `pre_activation`
-explicitly instead of reading `state.pre_activation`:
+`compute_gain_mod_error` receives `pre_activation` explicitly instead of reading
+`state.pre_activation`:
 
 ```python
 @staticmethod
@@ -100,31 +89,30 @@ def compute_gain_mod_error(
     return error * f_prime
 ```
 
-Both `forward_and_latent_grads` (lines 49-107) and `forward_and_weight_grads`
-(lines 109-151) compute `pre_activation` locally before calling
-`compute_gain_mod_error`:
+Both `forward_and_latent_grads` and `forward_and_weight_grads` call
+`Linear._forward_with_preact` exactly once, obtaining state and
+`pre_activation` together:
 
 ```python
-batch_size = state.z_latent.shape[0]
-out_shape = node_info.shape
-flatten_input = node_info.node_config.get("flatten_input", False)
-pre_activation = Linear._compute_pre_activation(
-    params, inputs, batch_size, out_shape, flatten_input
+state, pre_activation = Linear._forward_with_preact(
+    params, inputs, state, node_info
 )
-
-# Forward pass to get state with z_mu, error, energy
-_, state = node_class.forward(params, inputs, state, node_info)
-
-# Gain-modulated error (was: compute_gain_mod_error(state, node_info))
 gain_mod_error = node_class.compute_gain_mod_error(
     pre_activation, state.error, node_info
 )
 ```
 
-The forward call recomputes `pre_activation` internally (cheap — one matmul +
-bias). This duplication is acceptable in an explicit-gradient verification node;
-a more aggressive refactor (e.g. an internal `_forward_with_preact` returning a
-3-tuple) is unnecessary because `LinearExplicitGrad` is not on a hot path.
+History: the first implementation used a two-step design — a
+`Linear._compute_pre_activation` helper computing only the linear combination,
+plus a separate `node_class.forward()` call inside each gradient method. The
+companion review (`deprecate_and_remove_pre_activation_review.md`) flagged two
+problems: the helper carried a silent Linear-only contract (`LinearResidual`
+sums `:skip` edges after activation, `StorkeyHopfield` blends `x` and `x·W` by
+strength, and `Transformer` has no classical pre-activation, so wrapping any of
+them would produce wrong `f'(z)`), and each gradient method recomputed the
+matmul that the forward call had already done. Collapsing the helper into
+`_forward_with_preact` removed the duplicate computation and moved the
+Linear-only contract into the helper's docstring.
 
 ### 2. Remove `pre_activation` from `NodeState` and its pytree
 
@@ -211,11 +199,11 @@ touched.
 ## Critical files (modified)
 
 - `fabricpc/core/types.py` — remove field + pytree entry
-- `fabricpc/nodes/linear.py` — factor `_compute_pre_activation` helper, stop
-  storing `pre_activation` in state
+- `fabricpc/nodes/linear.py` — factor `_forward_with_preact` out of `forward`,
+  stop storing `pre_activation` in state
 - `fabricpc/nodes/linear_explicit_grad.py` — `compute_gain_mod_error` takes
-  `pre_activation` explicitly; both gradient methods compute it locally via the
-  helper
+  `pre_activation` explicitly; both gradient methods obtain it from
+  `_forward_with_preact`
 - `fabricpc/nodes/{linear_residual, storkey_hopfield, skip_connection, identity, transformer}.py`
   — drop `pre_activation` from `_replace`
 - `fabricpc/nodes/base.py` — drop from terminal-node reset
@@ -224,6 +212,8 @@ touched.
 - `tests/test_fabricpc.py`, `tests/test_auto_node_grad.py` — drop from constructions
 - `examples/custom_node.py`, `examples/resnet18_cifar10_demo.py`,
   `examples/jpc_fc_resnet_compare.py`, `examples/storkey_hopfield_diagnostic.py`
+- `examples/scaling/scaling_analysis_plots.py` — state-memory coefficient 5 → 4
+  (found in review)
 - `docs/user_guides/06_custom_nodes.md`
 
 Activations (`fabricpc/core/activations.py`) are intentionally unchanged.
@@ -256,12 +246,12 @@ End-to-end checks, in order:
    repo after edits — no remaining call sites or key references.
 
 
-Results
+## Results
 
-  - Factored Linear._compute_pre_activation static helper.
-  - Linear.forward no longer stores pre_activation on state.
+  Step 1 — LinearExplicitGrad migration (fabricpc/nodes/linear.py, linear_explicit_grad.py):
+  - Linear exposes `_forward_with_preact(params, inputs, state, node_info) -> (state, pre_activation)`; the public Linear.forward delegates to it and discards pre_activation.
   - LinearExplicitGrad.compute_gain_mod_error now takes pre_activation, error, node_info directly.
-  - Both forward_and_latent_grads / forward_and_weight_grads compute pre_activation locally via the helper.
+  - Both forward_and_latent_grads / forward_and_weight_grads call `_forward_with_preact` exactly once, obtaining state and pre_activation together — no recomputation, no separate forward call.
 
   Step 2 — Drop the field (fabricpc/core/types.py): removed pre_activation from the NodeState NamedTuple and from the pytree flatten lambda.
 
@@ -274,7 +264,7 @@ Results
 
   Step 6 — Storkey Hopfield diagnostic: replaced pre_activation-based tanh_saturation_frac / pre_act_mean_abs with z_mu-based equivalents (renamed to act_mean_abs); updated the print line at l.696.
 
-  Step 7 — Docs: dropped pre_activation from the _replace call in 06_custom_nodes.md; removed extract_preactivation_statistics from the 09_experiment_tracking.md import block; updated the 5→4 tensor count in examples/scaling/scaling_analysis_plots.py.
+  Step 7 — Docs: dropped pre_activation from the _replace call in 06_custom_nodes.md; removed extract_preactivation_statistics from the 09_experiment_tracking.md import block; updated the 5→4 tensor count in examples/scaling/scaling_analysis_plots.py (line 792 commentary block).
 
   Verification:
   - NodeState._fields → ('z_latent', 'z_mu', 'error', 'energy', 'latent_grad') ✓
@@ -282,8 +272,29 @@ Results
   - pytest tests/ → 127/127 passed.
   - grep extract_preactivation_statistics|"pre_activation" → no remaining references.
 
-Additional changes made:
+## Review follow-ups applied
 
-Removed code duplication in LinearExplictGrad. `Linear` now exposes
-`_forward_with_preact(params, inputs, state, node_info) -> (energy, state,
-pre_activation)` and the public `Linear.forward` delegates to it.
+From `deprecate_and_remove_pre_activation_review.md`:
+
+- **Coefficient bug fixed:** `examples/scaling/scaling_analysis_plots.py:905`
+  still computed PC state memory as `5 * num_nodes * batch_size * w * 4` bytes,
+  inconsistent with the file's own 4-tensor commentary (z_latent, z_mu, error,
+  latent_grad). The leftover 5 overestimated PC state memory by 25% and
+  distorted the PC/BP memory-ratio analysis. Corrected to 4.
+- **`_compute_pre_activation` replaced by `_forward_with_preact`:** the review
+  flagged the original helper's silent Linear-only contract and the duplicate
+  matmul (helper + separate forward call in each gradient method). The helper
+  was collapsed into the private forward variant described in step 1; its
+  docstring states the contract (shared with LinearExplicitGrad; not for
+  LinearResidual, StorkeyHopfield, or Transformer).
+- Verification re-run after both follow-ups: pytest tests/test_auto_node_grad.py
+  → 9/9, pytest tests/ → 127/127.
+
+## Later update
+
+The per-sample energy summation refactor
+(`per_sample_energy_summation_refactor_plan.md`) removed the batch-summed
+energy from the node `forward()` return contract. `_forward_with_preact`
+accordingly returns `(state, pre_activation)` rather than
+`(energy, state, pre_activation)`, and LinearExplicitGrad unpacks the 2-tuple.
+The step 1 code above reflects this final signature.
