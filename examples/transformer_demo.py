@@ -18,7 +18,7 @@ Usage:
     python examples/transformer_demo.py --mode backprop --lr 1e-3 --num_epochs 3
     python examples/transformer_demo.py --mode pc --num_blocks 2
 
-Results: PC training (cuda13, rtx3090)
+Results: PC training (cuda13, rtx3090, jax 0.10.2, can vary a few points in perplexity in different jax versions / hardware due to sensitivity to floating point rounding)
 Final train energy: 332.7728
 Test loss: 2.6713, Perplexity: 14.46
 Prompt: 'ROMEO: '
