@@ -22,7 +22,7 @@ Usage:
     PYTHONPATH=. python examples/transformer_v2_demo.py --mode pc --depth 6 --num_epochs 10
 
 
-Results (default call):
+Results (default call, cuda12, rtx3090, jax 0.8.1, can vary a few points in perplexity in different jax versions / hardware due to sensitivity to floating point rounding):
 Model parameters: 108,353
 Vocab Size: 65
 Train Epoch 1/5, Energy: 274.3637, Loss: 2.1401, Perplexity: 8.50
@@ -233,7 +233,6 @@ def main(args=None):
 
     vocab_size = train_loader.vocab_size
     char_to_ix = train_loader.token_to_idx if use_bpe else train_loader.char_to_idx
-    ix_to_char = train_loader.idx_to_token if use_bpe else train_loader.idx_to_char
 
     # --- Model ---
     structure = create_deep_transformer(

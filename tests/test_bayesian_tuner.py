@@ -6,7 +6,6 @@ import os
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 import numpy as np
-import jax
 import optuna
 import pytest
 

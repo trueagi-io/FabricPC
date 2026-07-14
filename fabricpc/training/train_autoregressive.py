@@ -37,6 +37,27 @@ def create_causal_mask(seq_len: int) -> jnp.ndarray:
     return jnp.tril(jnp.ones((seq_len, seq_len)))
 
 
+def causal_mask_clamps(
+    structure: GraphStructure, batch_size: int, seq_len: int
+) -> Dict[str, jnp.ndarray]:
+    """
+    Build the external causal-mask clamp for graphs that declare one.
+
+    Every consumer that runs the graph (train, eval, backprop, generation)
+    must clamp the same mask, so the assembly lives here. Returns
+    {mask_node: mask} with a lower-triangular mask of shape
+    (batch, 1, seq_len, seq_len) when the task_map declares a "causal_mask"
+    node (the v1 monolithic TransformerBlock). The v2 decomposed
+    MhaResidualNode masks internally via is_causal, so its task_map has no
+    "causal_mask" node and this returns an empty dict.
+    """
+    if "causal_mask" not in structure.task_map:
+        return {}
+    mask = create_causal_mask(seq_len)[None, None, :, :]
+    mask = jnp.broadcast_to(mask, (batch_size, 1, seq_len, seq_len))
+    return {structure.task_map["causal_mask"]: mask}
+
+
 def compute_loss(
     final_state: GraphState,
     targets: jnp.ndarray,
@@ -78,6 +99,63 @@ def compute_loss(
     return loss
 
 
+def build_train_clamps(
+    batch: Dict[str, jnp.ndarray],
+    structure: GraphStructure,
+    use_causal_mask: bool = True,
+) -> Dict[str, jnp.ndarray]:
+    """
+    Assemble the node clamps for one autoregressive training batch.
+
+    Every consumer that reproduces the training inference trajectory
+    (train_step_autoregressive, dashboards re-running inference on a batch)
+    must clamp identically, so the assembly lives here:
+
+    1. Each batch key present in task_map clamps its mapped node.
+    2. Targets arrive as integer token ids (batch, seq_len) to keep the
+       host->device transfer int32 (a one-hot is vocab_size x larger). The
+       CrossEntropy output node is clamped with a one-hot latent, so encode
+       here. ndim is static under jit, so the check raises at trace time.
+    3. An external causal mask is clamped only if the graph defines one (the
+       v1 monolithic TransformerBlock). The v2 decomposed MhaResidualNode
+       masks internally via is_causal, so its task_map has no "causal_mask"
+       node and that branch is skipped.
+
+    Args:
+        batch: Batch with keys matching task_map.
+            x: (batch, seq_len, vocab_size) or (batch, seq_len)
+            y: (batch, seq_len) integer token ids; one-hot encoded here
+        structure: Graph structure with task_map defining input/output nodes
+        use_causal_mask: Whether to apply causal masking
+
+    Returns:
+        Dictionary of clamped values, keyed on node names
+    """
+    batch_size = batch["x"].shape[0]
+    seq_len = batch["x"].shape[1]
+
+    clamps = {}
+    for task_name, task_value in batch.items():
+        if task_name in structure.task_map:
+            node_name = structure.task_map[task_name]
+            clamps[node_name] = task_value
+
+    y = batch["y"]
+    if y.ndim != 2:
+        raise ValueError(
+            f"batch['y'] must be integer token ids of shape (batch, seq_len); "
+            f"got shape {y.shape}. Token loaders yield integer targets; "
+            f"one-hot encoding happens in build_train_clamps."
+        )
+    y = jax.nn.one_hot(y, structure.nodes[structure.task_map["y"]].node_info.shape[-1])
+    clamps[structure.task_map["y"]] = y
+
+    if use_causal_mask:
+        clamps.update(causal_mask_clamps(structure, batch_size, seq_len))
+
+    return clamps
+
+
 def train_step_autoregressive(
     params: GraphParams,
     opt_state: optax.OptState,
@@ -91,19 +169,18 @@ def train_step_autoregressive(
     Single autoregressive training step.
 
     This implements the predictive coding training loop for sequence prediction:
-    1. Clamp input sequence and target sequence using task_map
-    2. Optionally clamp an external causal mask if task_map defines a
-       "causal_mask" node (v1 only); the v2 node masks internally
-    3. Run inference to convergence
-    4. Compute local gradients
-    5. Update weights
+    1. Build clamps from the batch (build_train_clamps: task_map mapping,
+       target one-hot encoding, optional external causal mask)
+    2. Run inference to convergence
+    3. Compute local gradients
+    4. Update weights
 
     Args:
         params: Current model parameters
         opt_state: Optimizer state
         batch: Batch with keys matching task_map (e.g., 'x' for input, 'y' for target)
             x: (batch, seq_len, vocab_size) or (batch, seq_len)
-            y: (batch, seq_len) integer token ids; one-hot encoded in this step
+            y: (batch, seq_len) integer token ids; one-hot encoded in build_train_clamps
         structure: Graph structure with task_map defining input/output nodes.
             An external "causal_mask" -> node_name entry is optional and only
             used by v1 graphs; v2 masks internally via the node's is_causal flag.
@@ -115,43 +192,8 @@ def train_step_autoregressive(
         Tuple of (updated_params, updated_opt_state, avg_energy, output_cross_entropy, final_state)
     """
     batch_size = batch["x"].shape[0]
-    seq_len = batch["x"].shape[1]
 
-    # Map tasks to nodes using task_map
-    clamps = {}
-    for task_name, task_value in batch.items():
-        if task_name in structure.task_map:
-            node_name = structure.task_map[task_name]
-            clamps[node_name] = task_value
-
-    # Targets arrive as integer token ids (batch, seq_len) to keep the
-    # host->device transfer int32 (a one-hot is vocab_size x larger). The
-    # CrossEntropy output node is clamped with a one-hot latent, so encode here.
-    # ndim is static under jit, so the check raises at trace time.
-    y = batch["y"]
-    if y.ndim != 2:
-        raise ValueError(
-            f"batch['y'] must be integer token ids of shape (batch, seq_len); "
-            f"got shape {y.shape}. Token loaders yield integer targets; "
-            f"one-hot encoding happens in this step."
-        )
-    y = jax.nn.one_hot(y, structure.nodes[structure.task_map["y"]].node_info.shape[-1])
-    clamps[structure.task_map["y"]] = y
-
-    # Clamp an external causal mask only if the graph defines one (the v1
-    # monolithic TransformerBlock). The v2 decomposed MhaResidualNode masks
-    # internally via is_causal, so its task_map has no "causal_mask" node and
-    # this branch is skipped.
-    if use_causal_mask and "causal_mask" in structure.task_map:
-        # Create causal mask: (seq_len, seq_len) where mask[i,j] = 1 if j <= i
-        causal_mask = create_causal_mask(seq_len)
-        # Broadcast to (batch, 1, seq_len, seq_len) for attention scores
-        causal_mask = causal_mask[None, None, :, :]
-        causal_mask = jnp.broadcast_to(causal_mask, (batch_size, 1, seq_len, seq_len))
-
-        # Clamp the causal mask to the node specified in task_map
-        mask_node = structure.task_map["causal_mask"]
-        clamps[mask_node] = causal_mask
+    clamps = build_train_clamps(batch, structure, use_causal_mask)
 
     # Initialize state
     init_state = initialize_graph_state(
@@ -182,7 +224,10 @@ def train_step_autoregressive(
 
     # Compute output cross-entropy loss for perplexity metric - not used for gradients
     output_cross_entropy = compute_loss(
-        final_state, y, structure.task_map["y"], loss_type="cross_entropy"
+        final_state,
+        clamps[structure.task_map["y"]],
+        structure.task_map["y"],
+        loss_type="cross_entropy",
     )
 
     return (
@@ -216,7 +261,6 @@ def train_autoregressive(
         config: Training configuration:
             - num_epochs: Number of training epochs
             - use_causal_mask: Whether to use causal masking (default True)
-            - gradient_accumulation_steps: Steps to accumulate gradients (default 1)
         rng_key: JAX random key
         verbose: Whether to print progress
         epoch_callback: Optional callback called at each epoch end as
@@ -233,7 +277,6 @@ def train_autoregressive(
     # Training hyperparameters
     num_epochs = config.get("num_epochs", 10)  # supports float (e.g. 1.5)
     use_causal_mask = config.get("use_causal_mask", True)
-    grad_accum_steps = config.get("gradient_accumulation_steps", 1)
 
     # Support fractional epochs: e.g. 1.5 -> 2 loop iterations, last stops at 50%
     total_epochs = math.ceil(num_epochs)
@@ -374,8 +417,12 @@ def _generation_step(
     else:
         input_data = jax.nn.one_hot(context_window, vocab_size)
 
-    # Create clamps (only input, not output)
+    # Create clamps (only input, not output). Graphs with an external causal
+    # mask node (v1) need it clamped here too; without the clamp the mask
+    # latent comes from state initialization, not the lower-triangular
+    # pattern the model was trained with.
     clamps = {input_node: input_data}
+    clamps.update(causal_mask_clamps(structure, batch_size, seq_len))
 
     # Initialize and run inference
     state = initialize_graph_state(
@@ -566,11 +613,8 @@ def _eval_step_autoregressive(
 
     # Add an external causal mask only if the graph defines one (v1). v2 masks
     # internally via the node's is_causal flag, so this is skipped there.
-    if use_causal_mask and "causal_mask" in structure.task_map:
-        causal_mask = create_causal_mask(seq_len)
-        causal_mask = causal_mask[None, None, :, :]
-        causal_mask = jnp.broadcast_to(causal_mask, (batch_size, 1, seq_len, seq_len))
-        clamps[structure.task_map["causal_mask"]] = causal_mask
+    if use_causal_mask:
+        clamps.update(causal_mask_clamps(structure, batch_size, seq_len))
 
     # Initialize and run inference
     state = initialize_graph_state(
@@ -659,7 +703,11 @@ def evaluate_autoregressive(
 
         # Debug diagnostics for first batch
         if debug and batch_idx == 0:
-            tgt = batch["y"]  # (batch, seq_len, vocab_size) one-hot
+            # Targets arrive as integer token ids (batch, seq_len); one-hot to
+            # match predictions, same contract as compute_loss.
+            tgt = batch["y"]
+            if tgt.ndim == predictions.ndim - 1:
+                tgt = jax.nn.one_hot(tgt, predictions.shape[-1])
 
             # Check individual loss components
             log_preds = jnp.log(predictions + 1e-10)

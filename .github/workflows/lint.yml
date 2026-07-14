@@ -3,11 +3,11 @@ name: Lint
 on: [push, pull_request]
 
 jobs:
-  black:
+  pre-commit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: psf/black@stable
+      - uses: actions/setup-python@v5
         with:
-          version: "26.1.0"
-          src: "./fabricpc ./tests ./examples"
+          python-version: "3.12"
+      - uses: pre-commit/action@v3.0.1

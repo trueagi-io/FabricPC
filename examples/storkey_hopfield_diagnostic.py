@@ -38,7 +38,7 @@ from fabricpc.core.topology import Edge
 from fabricpc.graph_assembly import TaskMap, graph
 from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.activations import SoftmaxActivation, TanhActivation
-from fabricpc.core.energy import CrossEntropyEnergy, GaussianEnergy
+from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.core.inference import InferenceSGD, gather_inputs, run_inference
 from fabricpc.core.initializers import XavierInitializer
 from fabricpc.training import train_pcn, evaluate_pcn
@@ -767,7 +767,7 @@ def phase3_W_analysis():
 
     # Final detailed analysis
     final = analyze_W_matrix(params, structure)
-    print(f"\nFinal W Analysis (after training):")
+    print("\nFinal W Analysis (after training):")
     print(f"  Frobenius norm:        {final['W_frobenius']:.4f}")
     print(f"  Operator norm:         {final['W_operator_norm']:.4f}")
     print(
@@ -782,7 +782,7 @@ def phase3_W_analysis():
 
     # Eigenvalue histogram
     eigs = final["eigenvalues"]
-    print(f"\n  Eigenvalue distribution (128 eigenvalues):")
+    print("\n  Eigenvalue distribution (128 eigenvalues):")
     bins = [
         (-2, -1),
         (-1, -0.5),

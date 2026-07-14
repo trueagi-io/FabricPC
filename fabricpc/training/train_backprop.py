@@ -26,7 +26,7 @@ from fabricpc.graph_initialization.state_initializer import (
     initialize_graph_state,
     FeedforwardStateInit,
 )
-from fabricpc.training.train_autoregressive import create_causal_mask, compute_loss
+from fabricpc.training.train_autoregressive import causal_mask_clamps, compute_loss
 
 
 def validate_feedforward_init(structure: GraphStructure):
@@ -288,11 +288,8 @@ def compute_loss_autoregressive(
     # Add an external causal mask only if the graph defines one (v1). The v2
     # decomposed MhaResidualNode masks internally via is_causal, so its task_map
     # has no "causal_mask" node and this is skipped.
-    if use_causal_mask and "causal_mask" in structure.task_map:
-        causal_mask = create_causal_mask(seq_len)
-        causal_mask = causal_mask[None, None, :, :]  # (1, 1, seq, seq)
-        causal_mask = jnp.broadcast_to(causal_mask, (batch_size, 1, seq_len, seq_len))
-        clamps[structure.task_map["causal_mask"]] = causal_mask
+    if use_causal_mask:
+        clamps.update(causal_mask_clamps(structure, batch_size, seq_len))
 
     # Single forward pass
     state = initialize_graph_state(
@@ -505,9 +502,12 @@ def eval_step_backprop(
 
     loss = compute_loss(state, targets, output_node, loss_type)
 
-    # Compute accuracy (for classification)
+    # Compute accuracy (for classification). One-hot targets match the
+    # predictions' rank; integer ids are one axis short (the compute_loss
+    # contract). A shape[-1] test cannot tell integer sequence targets
+    # (batch, seq_len) from one-hot.
     pred_labels = jnp.argmax(predictions, axis=-1)
-    if targets.ndim > 1 and targets.shape[-1] > 1:
+    if targets.ndim == predictions.ndim:
         true_labels = jnp.argmax(targets, axis=-1)
     else:
         true_labels = targets
@@ -657,7 +657,11 @@ def evaluate_backprop_autoregressive(
 
         # Debug diagnostics for first batch
         if debug and batch_idx == 0:
-            tgt = batch["y"]  # (batch, seq_len, vocab_size) one-hot
+            # Targets arrive as integer token ids (batch, seq_len); one-hot to
+            # match predictions, same contract as compute_loss.
+            tgt = batch["y"]
+            if tgt.ndim == predictions.ndim - 1:
+                tgt = jax.nn.one_hot(tgt, predictions.shape[-1])
 
             # Check individual loss components
             log_preds = jnp.log(predictions + 1e-10)

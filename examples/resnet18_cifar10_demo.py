@@ -28,17 +28,18 @@ Includes cosine LR schedule with warmup and optional data augmentation
 (random horizontal flip + random crop with padding).
 
 Usage:
-    python examples/resnet18_cifar10_demo.py --quick              # 2-epoch smoke test
+    python examples/resnet18_cifar10_demo.py                      # 2-epoch smoke test
     python examples/resnet18_cifar10_demo.py --activation tanh    # with tanh instead of relu
-    python examples/resnet18_cifar10_demo.py --num_epochs 100 --activation tanh --eval_every 10
+    python examples/resnet18_cifar10_demo.py --num_epochs 100 --activation tanh --eval_every 10 --augment  # full training with tanh and augmentation
 
 
-python examples/resnet18_cifar10_demo.py --quick
+python examples/resnet18_cifar10_demo.py
+results (RTX3090, cuda13, jax 0.10.2, can vary a few points in accuracy in different jax versions / hardware due to sensitivity to floating point rounding)
 Model: 31 nodes, 38 edges
 Total parameters: 2,795,210
-Train energy: 0.1020
-Test Accuracy: 40.89%
-Training time: 623.3s (311.6s per epoch)
+Train energy: 0.1096
+Test Accuracy: 37.08%
+Training time: 682.0s (341.0s per epoch)
 """
 
 from jax_setup import set_jax_flags_before_importing_jax
@@ -46,7 +47,6 @@ from jax_setup import set_jax_flags_before_importing_jax
 set_jax_flags_before_importing_jax()
 
 import jax
-import jax.numpy as jnp
 import numpy as np
 import optax
 import argparse
@@ -64,9 +64,8 @@ from fabricpc.core.activations import (
     LeakyReLUActivation,
     SoftmaxActivation,
 )
-from fabricpc.core.energy import GaussianEnergy, CrossEntropyEnergy
+from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.core.initializers import (
-    NormalInitializer,
     MuPCInitializer,
     XavierInitializer,
 )
@@ -153,7 +152,7 @@ def make_residual_block(
     stride,
     block_name,
     weight_init,
-    activation=None,
+    activation=ReLUActivation(),
 ):
     """
     Create one residual block: conv_a -> conv_b(act) -> skip(sum).
@@ -164,9 +163,6 @@ def make_residual_block(
     Returns:
         (nodes_list, edges_list, skip_node) where skip_node is the block output.
     """
-    if activation is None:
-        activation = ReLUActivation()
-
     in_h, in_w, in_channels = prev_node._shape
 
     if stride == 1:
@@ -233,8 +229,8 @@ def make_residual_block(
 def build_resnet18(
     weight_init,
     scaling=None,
-    output_weight_init=None,
-    activation=None,
+    output_weight_init=XavierInitializer(),
+    activation=ReLUActivation(),
     *,
     infer_steps,
     eta_infer,
@@ -245,7 +241,8 @@ def build_resnet18(
     Args:
         weight_init: InitializerBase for conv/linear weights.
         scaling: Optional MuPCConfig for muPC parameterization.
-        output_weight_init: Optional InitializerBase for the output layer.
+        output_weight_init: InitializerBase for the output layer
+            (default: XavierInitializer).
         activation: Activation for hidden conv layers (default: ReLU).
         infer_steps: Number of PC inference steps.
         eta_infer: Inference rate.
@@ -253,11 +250,6 @@ def build_resnet18(
     Returns:
         GraphStructure ready for initialize_params().
     """
-    if output_weight_init is None:
-        output_weight_init = XavierInitializer()
-    if activation is None:
-        activation = ReLUActivation()
-
     # Input
     input_node = IdentityNode(shape=(32, 32, 3), name="input")
 
@@ -337,7 +329,7 @@ def build_resnet18(
 # =============================================================================
 
 
-def _create_mupc_model(rng_key, *, infer_steps, eta_infer, activation=None):
+def _create_mupc_model(rng_key, *, infer_steps, eta_infer, activation=ReLUActivation()):
     """Create ResNet-18 with muPC parameterization."""
     structure = build_resnet18(
         weight_init=MuPCInitializer(),
@@ -365,7 +357,7 @@ def run_single_mupc(args):
     print("=" * 60)
     print(
         f"Activation: {args.activation}  |  Epochs: {args.num_epochs}  |  "
-        f"LR: {args.lr}  |  Augment: {not args.no_augment}"
+        f"LR: {args.lr}  |  Augment: {args.augment}"
     )
 
     master_rng_key = jax.random.PRNGKey(42)
@@ -389,10 +381,10 @@ def run_single_mupc(args):
     base_train_loader = Cifar10Loader(
         "train", batch_size=args.batch_size, shuffle=True, seed=42
     )
-    if args.no_augment:
-        train_loader = base_train_loader
-    else:
+    if args.augment:
         train_loader = AugmentedCifar10Loader(base_train_loader, seed=42)
+    else:
+        train_loader = base_train_loader
     test_loader = Cifar10Loader("test", batch_size=args.batch_size, shuffle=False)
 
     # Cosine LR schedule with warmup
@@ -488,20 +480,15 @@ def parse_args():
         help="Activation function for hidden layers (default: relu)",
     )
     parser.add_argument(
-        "--no_augment",
+        "--augment",
         action="store_true",
-        help="Disable data augmentation (random crop + horizontal flip)",
+        help="Enable data augmentation (random crop + horizontal flip)",
     )
     parser.add_argument(
         "--eval_every",
         type=int,
-        default=10,
+        default=0,
         help="Evaluate on test set every N epochs (0 to disable; default: 10)",
-    )
-    parser.add_argument(
-        "--quick",
-        action="store_true",
-        help="Quick smoke test: 2 epochs, no augmentation",
     )
     parser.add_argument("--verbose", action="store_true", help="Print per-epoch output")
     return parser.parse_args()
@@ -509,10 +496,6 @@ def parse_args():
 
 def main():
     args = parse_args()
-    if args.quick:
-        args.num_epochs = 2
-        args.no_augment = True
-        args.eval_every = 0
     run_single_mupc(args)
 
 

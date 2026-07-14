@@ -6,7 +6,6 @@ Verifies that multi-dimensional node shapes (2D images, 3D NHWC tensors)
 work correctly through graph construction, inference, and training.
 """
 
-import pytest
 import jax
 import jax.numpy as jnp
 

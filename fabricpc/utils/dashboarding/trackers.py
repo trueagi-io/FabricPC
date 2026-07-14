@@ -302,9 +302,11 @@ class AimExperimentTracker:
         for node_name in nodes:
             node_params = params.nodes[node_name]
             for edge_key, weight in node_params.weights.items():
-                dist = aim.Distribution(flatten_for_distribution(weight))
+                samples = flatten_for_distribution(weight)
+                if samples.size == 0:
+                    continue  # no finite values (diverged run) — nothing to bin
                 self._run.track(
-                    dist,
+                    aim.Distribution(samples),
                     name="weights",
                     step=self._global_step,
                     epoch=epoch,
@@ -312,9 +314,11 @@ class AimExperimentTracker:
                 )
 
             for bias_key, bias in node_params.biases.items():
-                dist = aim.Distribution(flatten_for_distribution(bias))
+                samples = flatten_for_distribution(bias)
+                if samples.size == 0:
+                    continue
                 self._run.track(
-                    dist,
+                    aim.Distribution(samples),
                     name="biases",
                     step=self._global_step,
                     epoch=epoch,
@@ -388,9 +392,11 @@ class AimExperimentTracker:
 
                 # Optionally track full distributions
                 if self.config.track_state_distributions:
-                    dist = aim.Distribution(flatten_for_distribution(data))
+                    samples = flatten_for_distribution(data)
+                    if samples.size == 0:
+                        continue
                     self._run.track(
-                        dist,
+                        aim.Distribution(samples),
                         name=var_name,
                         step=self._global_step,
                         epoch=epoch,

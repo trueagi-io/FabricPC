@@ -18,20 +18,23 @@ Usage:
     python examples/transformer_demo.py --mode backprop --lr 1e-3 --num_epochs 3
     python examples/transformer_demo.py --mode pc --num_blocks 2
 
-Results: PC training
-Final train energy: 221.06
-Final test loss: 2.5351, Perplexity: 12.62
+Results: PC training (cuda13, rtx3090, jax 0.10.2, can vary a few points in perplexity in different jax versions / hardware due to sensitivity to floating point rounding)
+Final train energy: 332.7728
+Test loss: 2.6713, Perplexity: 14.46
 Prompt: 'ROMEO: '
 ----------------------------------------
-ROMEO: heacfeeearecayayoule
+ROMEO: hiteeeeeo he
+Wateeo
 ----------------------------------------
 
 Backprop Training
-Final test loss: 1.6892, Perplexity: 5.41
+Test loss: 1.8867, Perplexity: 6.60
 Prompt: 'ROMEO: '
 ----------------------------------------
-ROMEO: go,
-bound this merry
+ROMEO: his.fe!
+
+CARILARE:
+M
 ----------------------------------------
 """
 
@@ -66,7 +69,6 @@ from fabricpc.core.activations import (
 from fabricpc.core.energy import CrossEntropyEnergy
 from fabricpc.core.initializers import (
     NormalInitializer,
-    MuPCInitializer,
 )
 from fabricpc.core.inference import InferenceSGDNormClip
 import optax
@@ -74,7 +76,7 @@ from fabricpc.training.train_autoregressive import (
     train_step_autoregressive,
     generate_autoregressive,
     evaluate_autoregressive,
-    create_causal_mask,
+    build_train_clamps,
 )
 from fabricpc.graph_initialization import initialize_graph_state
 from fabricpc.utils.dashboarding.inference_tracking import (
@@ -136,7 +138,7 @@ def parse_args():
     parser.add_argument(
         "--eta_infer", type=float, default=0.1, help="PC inference step size"
     )
-    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate")
+    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     return parser.parse_args()
 
@@ -345,7 +347,11 @@ def main(args=None):
     vocab_size = train_loader.vocab_size
 
     class _IndexLoader:
-        """Thin wrapper: passes integer token indices as x, one-hot as y."""
+        """Repackage (x, y) tuples as {'x': ..., 'y': ...} dicts.
+
+        Both x and y are integer token ids (batch, seq_len); y is one-hot
+        encoded later by build_train_clamps.
+        """
 
         def __init__(self, base):
             self.base = base
@@ -354,11 +360,11 @@ def main(args=None):
             return len(self.base)
 
         def __iter__(self):
-            for x_idx, y_oh in self.base:
-                yield {"x": x_idx, "y": y_oh}
+            for x_idx, y_idx in self.base:
+                yield {"x": x_idx, "y": y_idx}
 
-    train_loader_oh = _IndexLoader(train_loader)
-    test_loader_oh = _IndexLoader(test_loader)
+    train_batches = _IndexLoader(train_loader)
+    test_batches = _IndexLoader(test_loader)
 
     print(
         f"Vocab: {vocab_size}, Train batches: {len(train_loader)}, Test batches: {len(test_loader)}"
@@ -419,9 +425,16 @@ def main(args=None):
         tracker = None
 
     # Training
+    # Cosine decay from args.lr over the full run; alpha is the
+    # final-to-peak learning-rate ratio.
+    lr_schedule = optax.cosine_decay_schedule(
+        init_value=args.lr,
+        decay_steps=max(1, round(args.num_epochs * len(train_batches))),
+        alpha=0.01,
+    )
     optimizer = optax.chain(
         optax.clip_by_global_norm(1.0),
-        optax.adamw(args.lr, weight_decay=0.1),
+        optax.adamw(lr_schedule, weight_decay=0.1),
     )
     train_config = {
         "num_epochs": args.num_epochs,
@@ -437,7 +450,7 @@ def main(args=None):
                 metrics = evaluate_autoregressive(
                     params,
                     structure,
-                    test_loader_oh,
+                    test_batches,
                     {
                         "use_causal_mask": True,
                     },  # No inference steps for eval because model predicts feedforward
@@ -456,7 +469,7 @@ def main(args=None):
                 metrics = evaluate_backprop_autoregressive(
                     params,
                     structure,
-                    test_loader_oh,
+                    test_batches,
                     {"use_causal_mask": True},
                     eval_rng,
                     debug=(epoch_idx == 0),
@@ -470,7 +483,7 @@ def main(args=None):
 
     eval_callback = create_eval_callback(use_pc)
     progress_bar = TrainingProgressBar(
-        total_batches=len(train_loader_oh),
+        total_batches=len(train_batches),
         num_epochs=args.num_epochs,
         mode_label="PC" if use_pc else "BP",
     )
@@ -534,7 +547,7 @@ def main(args=None):
 
     try:
         for epoch in range(total_epochs):
-            num_batches = len(train_loader_oh)
+            num_batches = len(train_batches)
             is_last = epoch == total_epochs - 1
             max_batches = (
                 round(frac * num_batches) if (is_last and frac > 0) else num_batches
@@ -544,7 +557,7 @@ def main(args=None):
             batch_keys = jax.random.split(epoch_rng, max_batches)
 
             batch_energies = []
-            for batch_idx, batch_data in enumerate(train_loader_oh):
+            for batch_idx, batch_data in enumerate(train_batches):
                 if batch_idx >= max_batches:
                     break
 
@@ -580,18 +593,9 @@ def main(args=None):
                         and batch_idx % tracker.config.tracking_every_n_batches == 0
                     )
                     if should_track_state:
-                        track_clamps = {}
-                        for task_name, task_value in batch.items():
-                            if task_name in structure.task_map:
-                                track_clamps[structure.task_map[task_name]] = task_value
-                        if use_causal_mask:
-                            seq_len = batch["x"].shape[1]
-                            cm = create_causal_mask(seq_len)[None, None, :, :]
-                            cm = jnp.broadcast_to(
-                                cm, (batch["x"].shape[0], 1, seq_len, seq_len)
-                            )
-                            track_clamps[structure.task_map["causal_mask"]] = cm
-
+                        track_clamps = build_train_clamps(
+                            batch, structure, use_causal_mask
+                        )
                         track_init_state = initialize_graph_state(
                             structure,
                             batch["x"].shape[0],

@@ -6,3 +6,5 @@ Run examples from the project root:
 """
 
 from fabricpc.examples.plotting import visualize_experiment
+
+__all__ = ["visualize_experiment"]

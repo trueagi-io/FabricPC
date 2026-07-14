@@ -115,6 +115,8 @@ class MyActivation(ActivationBase):
 
 Optional overrides: `variance_gain(config)` and `jacobian_gain(config)` for muPC compatibility.
 
+Instances are frozen after `super().__init__(**config)`: all configuration must pass through `config`, and setting an instance attribute in a subclass `__init__` raises `AttributeError`. This makes every activation safe to place directly as a node `__init__` signature default. Config values are validated at construction: immutable scalars (`int`, `float`, `str`, `bool`, `bytes`, `None`) and tuples of those only — a list, dict, or array raises `TypeError`. A structured value (e.g. a per-channel alpha) is a tuple.
+
 ---
 
 ## Energy Functionals
@@ -237,3 +239,5 @@ class MyEnergy(EnergyFunctional):
         temp = config.get("temperature", 1.0) if config else 1.0
         return (z_latent - z_mu) / temp
 ```
+
+Instances are frozen after `super().__init__(**config)`: all configuration must pass through `config`, and setting an instance attribute in a subclass `__init__` raises `AttributeError`. This makes every energy functional safe to place directly as a node `__init__` signature default. Config values are validated at construction: immutable scalars (`int`, `float`, `str`, `bool`, `bytes`, `None`) and tuples of those only — a list, dict, or array raises `TypeError`. A structured value (e.g. a per-channel alpha) is a tuple.

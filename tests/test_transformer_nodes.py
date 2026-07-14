@@ -12,7 +12,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.graph_initialization import initialize_params
 from fabricpc.graph_initialization.state_initializer import (
     initialize_graph_state,
@@ -30,7 +29,6 @@ from fabricpc.nodes.transformer_v2 import (
     MhaResidualNode,
     LnMlp1Node,
     Mlp2ResidualNode,
-    VocabProjectionNode,
     create_deep_transformer,
 )
 

@@ -53,9 +53,9 @@ class EmbeddingNode(NodeBase):
         name,
         vocab_size,
         embed_dim,
-        weight_init=None,
-        latent_init=None,
-        energy=None,
+        weight_init=NormalInitializer(std=0.02),
+        latent_init=NormalInitializer(),
+        energy=GaussianEnergy(),
         **kwargs,
     ):
         super().__init__(
@@ -63,9 +63,9 @@ class EmbeddingNode(NodeBase):
             name=name,
             vocab_size=vocab_size,
             embed_dim=embed_dim,
-            weight_init=weight_init or NormalInitializer(std=0.02),
-            latent_init=latent_init or NormalInitializer(),
-            energy=energy or GaussianEnergy(),
+            weight_init=weight_init,
+            latent_init=latent_init,
+            energy=energy,
             **kwargs,
         )
 
@@ -81,7 +81,7 @@ class EmbeddingNode(NodeBase):
         key: jax.Array,
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
-        weight_init: Optional[InitializerBase],
+        weight_init: InitializerBase,
         config: Dict[str, Any],
     ) -> NodeParams:
         vocab_size = config["vocab_size"]
@@ -148,9 +148,9 @@ class MhaResidualNode(NodeBase):
         use_rope=True,
         rope_theta=10000.0,
         is_causal=True,
-        weight_init=None,
-        latent_init=None,
-        energy=None,
+        weight_init=XavierInitializer(),
+        latent_init=NormalInitializer(),
+        energy=GaussianEnergy(),
         **kwargs,
     ):
         super().__init__(
@@ -161,9 +161,9 @@ class MhaResidualNode(NodeBase):
             use_rope=use_rope,
             rope_theta=rope_theta,
             is_causal=is_causal,
-            weight_init=weight_init or XavierInitializer(),
-            latent_init=latent_init or NormalInitializer(),
-            energy=energy or GaussianEnergy(),
+            weight_init=weight_init,
+            latent_init=latent_init,
+            energy=energy,
             **kwargs,
         )
 
@@ -264,10 +264,10 @@ class LnMlp1Node(NodeBase):
         name,
         embed_dim,
         ff_dim,
-        activation=None,
-        weight_init=None,
-        latent_init=None,
-        energy=None,
+        activation=GeluActivation(),
+        weight_init=KaimingInitializer(),
+        latent_init=NormalInitializer(),
+        energy=GaussianEnergy(),
         **kwargs,
     ):
         super().__init__(
@@ -275,10 +275,10 @@ class LnMlp1Node(NodeBase):
             name=name,
             embed_dim=embed_dim,
             ff_dim=ff_dim,
-            activation=activation or GeluActivation(),
-            weight_init=weight_init or KaimingInitializer(),
-            latent_init=latent_init or NormalInitializer(),
-            energy=energy or GaussianEnergy(),
+            activation=activation,
+            weight_init=weight_init,
+            latent_init=latent_init,
+            energy=energy,
             **kwargs,
         )
 
@@ -328,9 +328,9 @@ class Mlp2ResidualNode(NodeBase):
         name,
         embed_dim,
         ff_dim,
-        weight_init=None,
-        latent_init=None,
-        energy=None,
+        weight_init=XavierInitializer(),
+        latent_init=NormalInitializer(),
+        energy=GaussianEnergy(),
         **kwargs,
     ):
         super().__init__(
@@ -338,9 +338,9 @@ class Mlp2ResidualNode(NodeBase):
             name=name,
             embed_dim=embed_dim,
             ff_dim=ff_dim,
-            weight_init=weight_init or XavierInitializer(),
-            latent_init=latent_init or NormalInitializer(),
-            energy=energy or GaussianEnergy(),
+            weight_init=weight_init,
+            latent_init=latent_init,
+            energy=energy,
             **kwargs,
         )
 
@@ -388,10 +388,10 @@ class VocabProjectionNode(NodeBase):
         name,
         vocab_size,
         embed_dim,
-        activation=None,
-        weight_init=None,
-        latent_init=None,
-        energy=None,
+        activation=SoftmaxActivation(),
+        weight_init=XavierInitializer(),
+        latent_init=NormalInitializer(),
+        energy=CrossEntropyEnergy(),
         **kwargs,
     ):
         super().__init__(
@@ -399,10 +399,10 @@ class VocabProjectionNode(NodeBase):
             name=name,
             vocab_size=vocab_size,
             embed_dim=embed_dim,
-            activation=activation or SoftmaxActivation(),
-            weight_init=weight_init or XavierInitializer(),
-            latent_init=latent_init or NormalInitializer(),
-            energy=energy or CrossEntropyEnergy(),
+            activation=activation,
+            weight_init=weight_init,
+            latent_init=latent_init,
+            energy=energy,
             **kwargs,
         )
 

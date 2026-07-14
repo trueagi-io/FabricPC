@@ -57,9 +57,9 @@ class SkipConnection(NodeBase):
         self,
         shape: Tuple[int, ...],
         name: str,
-        activation: Optional[ActivationBase] = IdentityActivation(),
-        energy: Optional[EnergyFunctional] = GaussianEnergy(),
-        latent_init: Optional[InitializerBase] = NormalInitializer(),
+        activation: ActivationBase = IdentityActivation(),
+        energy: EnergyFunctional = GaussianEnergy(),
+        latent_init: InitializerBase = NormalInitializer(),
     ):
         super().__init__(
             shape=shape,

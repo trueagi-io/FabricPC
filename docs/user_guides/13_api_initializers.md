@@ -66,6 +66,8 @@ class MyInitializer(InitializerBase):
         return gain * jax.random.normal(key, shape)
 ```
 
+Instances are frozen after `super().__init__(**config)`: all configuration must pass through `config`, and setting an instance attribute in a subclass `__init__` raises `AttributeError`. This makes every initializer safe to place directly as a node `__init__` signature default. Config values are validated at construction: immutable scalars (`int`, `float`, `str`, `bool`, `bytes`, `None`) and tuples of those only — a list, dict, or array raises `TypeError`. A structured value (e.g. a per-channel alpha) is a tuple.
+
 ---
 
 ## State Initializers

@@ -29,12 +29,17 @@ Users can create custom nodes by extending NodeBase:
         @staticmethod
         def forward(params, inputs, state, node_info):
             ...
+
+Place the default activation/energy/initializer objects directly in the
+``__init__`` signature, as above. Those objects are immutable — their base
+classes block mutation after construction — so the single default instance is
+safe to share across every node that does not override it.
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any, Optional, Tuple, TYPE_CHECKING
+from typing import Dict, Any, Optional, Tuple
 import copy
 import types
 import jax
@@ -43,11 +48,9 @@ import numpy as np
 from dataclasses import dataclass
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.topology import SlotRef, _get_current_namespace
-
-if TYPE_CHECKING:
-    from fabricpc.core.activations import ActivationBase
-    from fabricpc.core.energy import EnergyFunctional
-    from fabricpc.core.initializers import InitializerBase
+from fabricpc.core.activations import ActivationBase, IdentityActivation
+from fabricpc.core.energy import EnergyFunctional, GaussianEnergy
+from fabricpc.core.initializers import InitializerBase, NormalInitializer
 
 
 @dataclass(frozen=True)
@@ -163,16 +166,18 @@ class NodeBase(ABC):
     steps every implementation must perform are documented in its docstring.
 
     Subclasses set concrete default instances for activation, energy, latent_init,
-    and weight_init in their ``__init__`` parameter defaults.
+    and weight_init directly in their ``__init__`` parameter defaults. Those
+    default objects are immutable, so a single shared default instance cannot
+    leak state across nodes.
     """
 
     def __init__(
         self,
         shape: Tuple[int, ...],
         name: str,
-        activation: Optional[ActivationBase] = None,
-        energy: Optional[EnergyFunctional] = None,
-        latent_init: Optional[InitializerBase] = None,
+        activation: ActivationBase = IdentityActivation(),
+        energy: EnergyFunctional = GaussianEnergy(),
+        latent_init: InitializerBase = NormalInitializer(),
         weight_init: Optional[InitializerBase] = None,
         **extra_config,
     ):
@@ -182,12 +187,35 @@ class NodeBase(ABC):
         Args:
             shape: Output shape tuple (excluding batch dimension)
             name: Node name. Automatically prefixed with current GraphNamespace.
-            activation: ActivationBase instance, or None
-            energy: EnergyFunctional instance, or None
-            latent_init: InitializerBase instance, or None
-            weight_init: InitializerBase instance, or None
+            activation: ActivationBase instance (default: IdentityActivation)
+            energy: EnergyFunctional instance (default: GaussianEnergy)
+            latent_init: InitializerBase instance (default: NormalInitializer)
+            weight_init: InitializerBase instance, or None for a node with no
+                weights (e.g. pooling)
             **extra_config: Node-specific config (use_bias, flatten_input, etc.)
+
+        Raises:
+            TypeError: If activation, energy, or latent_init is not an instance
+                of its base class, or weight_init is neither an InitializerBase
+                instance nor None. None is not a "use the default" sentinel;
+                the defaults live in the signature.
         """
+        for param, value, base in (
+            ("activation", activation, ActivationBase),
+            ("energy", energy, EnergyFunctional),
+            ("latent_init", latent_init, InitializerBase),
+        ):
+            if not isinstance(value, base):
+                raise TypeError(
+                    f"Node '{name}': {param} must be an {base.__name__} "
+                    f"instance; got {type(value).__name__}"
+                )
+        if weight_init is not None and not isinstance(weight_init, InitializerBase):
+            raise TypeError(
+                f"Node '{name}': weight_init must be an InitializerBase "
+                f"instance, or None for a weight-free node; "
+                f"got {type(weight_init).__name__}"
+            )
         ns = _get_current_namespace()
         self._name = f"{ns}/{name}" if ns else name
         self._shape = tuple(shape)
@@ -285,7 +313,8 @@ class NodeBase(ABC):
             key: JAX random key
             node_shape: Output shape of this node (excluding batch dimension)
             input_shapes: Dictionary mapping edge keys to source node shapes
-            weight_init: InitializerBase instance for weight initialization, or None
+            weight_init: InitializerBase instance for weight initialization, or
+                None for a weight-free node
             config: Node configuration (may contain initialization settings)
 
         Returns:
@@ -542,11 +571,6 @@ class NodeBase(ABC):
             Updated NodeState with energy field set
         """
         energy_obj = node_info.energy
-        if energy_obj is None:
-            raise ValueError(
-                f"Node '{node_info.name}' has no energy functional configured."
-            )
-
         energy_cls = type(energy_obj)
         config = energy_obj.config
 

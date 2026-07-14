@@ -1,4 +1,4 @@
-from typing import Dict, Optional, Tuple
+from typing import Dict, Tuple
 
 import jax.numpy as jnp
 from fabricpc.nodes.linear import Linear
@@ -27,12 +27,12 @@ class LinearExplicitGrad(Linear):
         self,
         shape: Tuple[int, ...],
         name: str,
-        activation: Optional[ActivationBase] = IdentityActivation(),
-        energy: Optional[EnergyFunctional] = GaussianEnergy(),
+        activation: ActivationBase = IdentityActivation(),
+        energy: EnergyFunctional = GaussianEnergy(),
         use_bias: bool = True,
         flatten_input: bool = False,
-        weight_init: Optional[InitializerBase] = NormalInitializer(),
-        latent_init: Optional[InitializerBase] = NormalInitializer(),
+        weight_init: InitializerBase = NormalInitializer(),
+        latent_init: InitializerBase = NormalInitializer(),
     ):
         super().__init__(
             shape=shape,

@@ -42,6 +42,9 @@ dev = [
     "pytest>=7.0.0",
     "hypothesis>=6.0.0",
     "black[colorama]==26.1.0",
+    # Pinned to the ruff-pre-commit rev in .pre-commit-config.yaml so local
+    # `ruff check` and the hook agree.
+    "ruff==0.15.19",
     "mypy>=1.0.0",
     "pre-commit>=3.0.0",
 ]
@@ -102,3 +105,30 @@ extend-exclude = '''
     | dist
 )/
 '''
+
+[tool.ruff]
+target-version = "py310"
+extend-exclude = [".git", ".venv", "build", "dist"]
+
+[tool.ruff.lint]
+# B006 (mutable-argument-default) forbids list/dict/set literal defaults — the
+# genuinely dangerous shared-mutable-state bug. It does NOT flag custom
+# constructor calls such as `= GaussianEnergy()`; those stateless value-object
+# defaults are the convention this package standardizes on, made
+# safe-by-construction by freezing the config base classes (ActivationBase /
+# EnergyFunctional / InitializerBase are immutable after construction).
+#
+# `extend-select` runs B006 on top of ruff's default ruleset (pyflakes F +
+# pycodestyle E4/E7/E9), which the codebase is kept clean against. B008
+# (function-call-in-default-argument) is intentionally NOT enabled — it would
+# flag every `= GaussianEnergy()` / `= KaimingInitializer()` signature default,
+# which is exactly the pattern being standardized on.
+extend-select = ["B006"]
+
+[tool.ruff.lint.per-file-ignores]
+# examples/ and scripts/ deliberately configure JAX
+# (set_jax_flags_before_importing_jax) before `import jax`; that import order is
+# E402 by design, so only that rule is ignored there. Everything else — B006,
+# pyflakes, the rest of pycodestyle — still applies.
+"examples/**" = ["E402"]
+"scripts/**" = ["E402"]

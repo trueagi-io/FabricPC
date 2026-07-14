@@ -79,6 +79,10 @@ Key points:
 - Accept custom parameters (`kernel_size`, `stride`, `padding`)
 - Pass everything to `super().__init__()` via `**kwargs`
 - Custom parameters end up in `node_info.node_config` and are accessible in static methods
+- Object-valued defaults (`activation`, `energy`, `weight_init`, `latent_init`) go **in the signature**, as above. These objects are immutable — construction stores only a read-only `config` mapping of validated immutable values (scalars and tuples; a list, dict, or array raises `TypeError`) and blocks further attribute writes — so the module-level singleton a signature default creates cannot leak state between nodes.
+- `None` is not a "use the default" sentinel: `NodeBase.__init__` raises `TypeError` if `activation`, `energy`, or `latent_init` is not an instance of its base class. `weight_init=None` stays legal and means a weight-free node (pooling).
+- Fill a default **in the body** (`param=None` + `if param is None:`) only when it is computed from another argument (e.g. a `stride` derived from the kernel's spatial rank).
+- Never default a parameter to a `dict`/`list`/`set` literal; that shared object is mutated across calls. `ruff` B006 rejects it in CI.
 
 ### Step 2: Define Input Slots
 
@@ -121,7 +125,7 @@ If you don't override this method, the default implementation uses the flattened
 
 ```python
 @staticmethod
-def initialize_params(key, node_shape, input_shapes, weight_init=None, config=None):
+def initialize_params(key, node_shape, input_shapes, weight_init, config):
     """
     Initialize convolutional kernels and biases.
 

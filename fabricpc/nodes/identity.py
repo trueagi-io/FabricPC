@@ -41,9 +41,9 @@ class IdentityNode(NodeBase):
         self,
         shape: Tuple[int, ...],
         name: str,
-        activation: Optional[ActivationBase] = IdentityActivation(),
-        energy: Optional[EnergyFunctional] = GaussianEnergy(),
-        latent_init: Optional[InitializerBase] = NormalInitializer(),
+        activation: ActivationBase = IdentityActivation(),
+        energy: EnergyFunctional = GaussianEnergy(),
+        latent_init: InitializerBase = NormalInitializer(),
         scale: float = 1.0,  # Optional fixed scaling factor of the node output (default 1.0, no scaling)
     ):
         """

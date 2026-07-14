@@ -35,18 +35,19 @@ Energy functionals are instantiated with their parameters:
     energy = CrossEntropyEnergy(eps=1e-7)
 """
 
-import types
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Tuple
 
 import jax.numpy as jnp
+
+from fabricpc.core._frozen import FrozenConfig
 
 # =============================================================================
 # Energy Functional Base Class
 # =============================================================================
 
 
-class EnergyFunctional(ABC):
+class EnergyFunctional(FrozenConfig, ABC):
     """
     Abstract base class for energy functionals.
 
@@ -55,6 +56,11 @@ class EnergyFunctional(ABC):
     and parameter learning (minimizing E w.r.t. params).
 
     All methods are static for JAX compatibility (pure functions, no state).
+
+    Instances are frozen after construction (see ``FrozenConfig``): attributes
+    cannot be set or deleted and ``config`` keys cannot be added, removed, or
+    reassigned, so one default instance is safe to share as a signature default.
+    The freeze is shallow: construct only with immutable scalar config values.
 
     Required methods:
         - energy(): Compute E(z_latent, z_mu) per sample
@@ -76,9 +82,6 @@ class EnergyFunctional(ABC):
                 temp = config.get("temperature", 1.0) if config else 1.0
                 return (z_latent - z_mu) / temp
     """
-
-    def __init__(self, **config):
-        self.config = types.MappingProxyType(config)  # Immutable dictionary
 
     @staticmethod
     @abstractmethod
@@ -453,7 +456,9 @@ class KLDivergenceEnergy(EnergyFunctional):
 
 
 def compute_energy(
-    z_latent: jnp.ndarray, z_mu: jnp.ndarray, energy: EnergyFunctional = None
+    z_latent: jnp.ndarray,
+    z_mu: jnp.ndarray,
+    energy: EnergyFunctional = GaussianEnergy(),
 ) -> jnp.ndarray:
     """
     Compute energy using the specified energy functional.
@@ -461,19 +466,18 @@ def compute_energy(
     Args:
         z_latent: Latent states, shape (batch, *dims)
         z_mu: Predicted expectations, shape (batch, *dims)
-        energy: EnergyFunctional instance. If None, uses GaussianEnergy with defaults.
+        energy: EnergyFunctional instance (default: GaussianEnergy())
 
     Returns:
         Energy per sample, shape (batch,)
     """
-    if energy is None:
-        energy = GaussianEnergy()
-
     return type(energy).energy(z_latent, z_mu, energy.config)
 
 
 def compute_energy_gradient(
-    z_latent: jnp.ndarray, z_mu: jnp.ndarray, energy: EnergyFunctional = None
+    z_latent: jnp.ndarray,
+    z_mu: jnp.ndarray,
+    energy: EnergyFunctional = GaussianEnergy(),
 ) -> jnp.ndarray:
     """
     Compute energy gradient w.r.t. z_latent.
@@ -481,19 +485,18 @@ def compute_energy_gradient(
     Args:
         z_latent: Latent states, shape (batch, *dims)
         z_mu: Predicted expectations, shape (batch, *dims)
-        energy: EnergyFunctional instance. If None, uses GaussianEnergy with defaults.
+        energy: EnergyFunctional instance (default: GaussianEnergy())
 
     Returns:
         Gradient dE/dz_latent, same shape as z_latent
     """
-    if energy is None:
-        energy = GaussianEnergy()
-
     return type(energy).grad_latent(z_latent, z_mu, energy.config)
 
 
 def get_energy_and_gradient(
-    z_latent: jnp.ndarray, z_mu: jnp.ndarray, energy: EnergyFunctional = None
+    z_latent: jnp.ndarray,
+    z_mu: jnp.ndarray,
+    energy: EnergyFunctional = GaussianEnergy(),
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """
     Compute both energy and gradient efficiently.
@@ -501,16 +504,13 @@ def get_energy_and_gradient(
     Args:
         z_latent: Latent states, shape (batch, *dims)
         z_mu: Predicted expectations, shape (batch, *dims)
-        energy: EnergyFunctional instance. If None, uses GaussianEnergy with defaults.
+        energy: EnergyFunctional instance (default: GaussianEnergy())
 
     Returns:
         Tuple of (energy, gradient):
             - energy: per-sample energy, shape (batch,)
             - gradient: dE/dz_latent, same shape as z_latent
     """
-    if energy is None:
-        energy = GaussianEnergy()
-
     energy_cls = type(energy)
     config = energy.config
 

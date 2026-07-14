@@ -5,20 +5,26 @@
 
 from __future__ import annotations
 
+import math
+
 import jax
 import jax.numpy as jnp
 
 from fabricpc.nodes.base import NodeBase, SlotSpec
-from fabricpc.core.activations import IdentityActivation, GeluActivation
-from fabricpc.core.energy import GaussianEnergy
-from fabricpc.core.initializers import NormalInitializer, KaimingInitializer, initialize
+from fabricpc.core.activations import (
+    ActivationBase,
+    IdentityActivation,
+    GeluActivation,
+)
+from fabricpc.core.energy import EnergyFunctional, GaussianEnergy
+from fabricpc.core.initializers import (
+    InitializerBase,
+    NormalInitializer,
+    KaimingInitializer,
+    initialize,
+)
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
-from typing import Dict, Optional, Tuple, Any, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from fabricpc.core.activations import ActivationBase
-    from fabricpc.core.energy import EnergyFunctional
-    from fabricpc.core.initializers import InitializerBase
+from typing import Dict, Optional, Tuple, Any
 
 # =============================================================================
 # Rotary Position Embeddings (RoPE)
@@ -92,7 +98,6 @@ def apply_rotary_emb(
     """
     # x shape: (batch, num_heads, seq_len, head_dim)
     seq_len = x.shape[2]
-    head_dim = x.shape[3]
 
     # Slice frequencies to match sequence length
     cos = cos[:seq_len, :]  # (seq_len, head_dim // 2)
@@ -149,18 +154,24 @@ class TransformerBlock(NodeBase):
         self,
         shape: Tuple[int, ...],
         name: str,
-        activation: Optional[ActivationBase] = IdentityActivation(),
-        energy: Optional[EnergyFunctional] = GaussianEnergy(),
-        internal_activation: Optional[ActivationBase] = None,
+        activation: ActivationBase = IdentityActivation(),
+        energy: EnergyFunctional = GaussianEnergy(),
+        internal_activation: ActivationBase = GeluActivation(),
         num_heads: int = 8,
         ff_dim: Optional[int] = None,
         dropout_rate: float = 0.0,
         pre_norm: bool = True,
         use_rope: bool = True,
         rope_theta: float = 10000.0,
-        weight_init: Optional[InitializerBase] = KaimingInitializer(),
-        latent_init: Optional[InitializerBase] = NormalInitializer(),
+        weight_init: InitializerBase = KaimingInitializer(),
+        latent_init: InitializerBase = NormalInitializer(),
     ):
+        if not isinstance(internal_activation, ActivationBase):
+            raise TypeError(
+                f"Node '{name}': internal_activation must be an ActivationBase "
+                f"instance (use IdentityActivation() for no activation); "
+                f"got {type(internal_activation).__name__}"
+            )
         super().__init__(
             shape=shape,
             name=name,
@@ -168,7 +179,7 @@ class TransformerBlock(NodeBase):
             energy=energy,
             latent_init=latent_init,
             weight_init=weight_init,
-            internal_activation=internal_activation or GeluActivation(),
+            internal_activation=internal_activation,
             num_heads=num_heads,
             ff_dim=ff_dim,
             dropout_rate=dropout_rate,
@@ -202,7 +213,7 @@ class TransformerBlock(NodeBase):
         key: jax.Array,
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
-        weight_init: Optional[InitializerBase] = None,
+        weight_init: InitializerBase,
         config: Optional[Dict[str, Any]] = None,
     ) -> NodeParams:
         if config is None:
@@ -240,29 +251,29 @@ class TransformerBlock(NodeBase):
                 "W_q": initialize(
                     keys[0],
                     (embed_dim, embed_dim),
-                    NormalInitializer(std=1.0 / jnp.sqrt(embed_dim)),
+                    NormalInitializer(std=1.0 / math.sqrt(embed_dim)),
                 ),
                 "W_k": initialize(
                     keys[1],
                     (embed_dim, embed_dim),
-                    NormalInitializer(std=1.0 / jnp.sqrt(embed_dim)),
+                    NormalInitializer(std=1.0 / math.sqrt(embed_dim)),
                 ),
                 "W_v": initialize(
                     keys[2],
                     (embed_dim, embed_dim),
-                    NormalInitializer(std=1.0 / jnp.sqrt(embed_dim)),
+                    NormalInitializer(std=1.0 / math.sqrt(embed_dim)),
                 ),
                 "W_o": initialize(
                     keys[3],
                     (embed_dim, embed_dim),
-                    NormalInitializer(std=1.0 / jnp.sqrt(embed_dim)),
+                    NormalInitializer(std=1.0 / math.sqrt(embed_dim)),
                 ),
                 # FFN weights
                 "W_ff1": initialize(keys[4], (embed_dim, ff_dim), KaimingInitializer()),
                 "W_ff2": initialize(
                     keys[5],
                     (ff_dim, embed_dim),
-                    NormalInitializer(std=1.0 / jnp.sqrt(ff_dim)),
+                    NormalInitializer(std=1.0 / math.sqrt(ff_dim)),
                 ),
                 # LayerNorm parameters
                 "ln1_gamma": jnp.ones((1, 1, embed_dim)),
@@ -293,12 +304,11 @@ class TransformerBlock(NodeBase):
 
         # Get internal activation from config (stored as ActivationBase instance)
         internal_activation = config.get("internal_activation")
-        if internal_activation is not None:
-            activation_fn = lambda x: type(internal_activation).forward(
-                x, internal_activation.config
-            )
-        else:
-            activation_fn = lambda x: x
+
+        def activation_fn(x):
+            # Every ActivationBase.forward takes (x, config); an activation that
+            # ignores config still accepts it, so this holds for all subclasses.
+            return type(internal_activation).forward(x, internal_activation.config)
 
         # Get input (self-attention)
         in_edge_key = next(iter(k for k in inputs.keys() if k.endswith(":in")))

@@ -51,8 +51,8 @@ class NodeInfo:
     node_config: Dict[str, Any]  # Extra config (use_bias, flatten_input, etc.)
     activation: Any  # ActivationBase instance
     energy: Any  # EnergyFunctional instance
-    latent_init: Any  # InitializerBase instance or None
-    weight_init: Any  # InitializerBase instance or None
+    latent_init: Any  # InitializerBase instance
+    weight_init: Any  # InitializerBase instance, or None for a weight-free node
     slots: Dict[str, SlotInfo]  # {"in": SlotInfo, ...}
     in_degree: int  # Number of incoming edges
     out_degree: int  # Number of outgoing edges

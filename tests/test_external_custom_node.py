@@ -24,7 +24,7 @@ verifies the API contract, not import isolation.
 """
 
 import dataclasses
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Tuple
 
 import pytest
 import jax
@@ -93,7 +93,7 @@ class ScaledSumNode(NodeBase):
         key: jax.Array,
         node_shape: Tuple[int, ...],
         input_shapes: Dict[str, Tuple[int, ...]],
-        weight_init: Optional[InitializerBase],
+        weight_init: InitializerBase,
         config: Dict[str, Any],
     ) -> NodeParams:
         """

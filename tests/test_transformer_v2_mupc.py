@@ -9,7 +9,6 @@ import os
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 import math
-import jax
 import pytest
 
 from fabricpc.core.inference import InferenceSGDNormClip
