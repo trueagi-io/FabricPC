@@ -467,7 +467,7 @@ def parse_args():
         "--eta_infer", type=float, default=0.1, help="Inference rate (default: 0.1)"
     )
     parser.add_argument(
-        "--lr", type=float, default=0.001, help="Learning rate (default: 0.001)"
+        "--lr", type=float, default=0.01, help="Learning rate (default: 0.01)"
     )
     parser.add_argument(
         "--weight_decay", type=float, default=0.01, help="Weight decay (default: 0.01)"
