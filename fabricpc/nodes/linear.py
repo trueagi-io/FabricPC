@@ -192,7 +192,9 @@ class Linear(FlattenInputMixin, NodeBase):
         use_bias = config.get("use_bias", True)
         if use_bias:
             bias_shape = (1,) * len(node_shape) + (node_shape[-1],)
-            b = jnp.zeros(bias_shape)
+            b = jnp.zeros(
+                bias_shape
+            )  # TODO allow configurable bias initialization across all nodes that use bias; default to zeros init; use the initializer object and seed key_b
 
         return NodeParams(weights=weights_dict, biases={"b": b} if use_bias else {})
 
