@@ -188,10 +188,33 @@ magnitude), so the second key is renamed accordingly.
 
 ### 7. Update user-facing docs
 
-**File: `docs/user_guides/06_custom_nodes.md`** — update the example custom node
-(around lines 195-227 and 311-314) to drop `pre_activation` from the
-`_replace` call. The local computation of `pre_activation` inside the forward
-function stays (it's how `z_mu` is built); only the storage step goes.
+**File: `docs/user_guides/06_custom_nodes.md`**
+- Update the example custom node (around lines 195-227 and 311-314) to drop
+  `pre_activation` from the `_replace` call. The local computation of
+  `pre_activation` inside the forward function stays (it's how `z_mu` is
+  built); only the storage step goes.
+- Add a note after the example's `_replace` block stating that
+  `pre_activation` is a transient local variable inside `forward()`, not a
+  `NodeState` field, and enumerating the writable fields
+  (`z_latent`, `z_mu`, `error`, `energy`, `latent_grad`). The surviving
+  `pre_activation` references in the guide are local variables in the Conv2D
+  and `MyDenseNode` examples — the correct post-refactor pattern (compute,
+  apply the activation, discard) — and stay as-is.
+
+**File: `docs/user_guides/09_experiment_tracking.md`** — remove
+`extract_preactivation_statistics` from the extractor import list, matching
+the exports in `fabricpc/utils/dashboarding/__init__.py`.
+
+**File: `docs/user_guides/03_how_predictive_coding_works.md`** — add the
+missing `latent_grad` row to the NodeState mapping table. A pre-existing gap,
+fixed in the same pass so the table lists all five fields of the
+post-refactor pytree.
+
+Doc-pass verification: `grep -rn "pre_activation" docs/user_guides/` must
+match only local-variable usages inside `forward()` examples — no
+`NodeState.pre_activation`, `state.pre_activation`,
+`_replace(pre_activation=...)`, or `extract_preactivation_statistics`
+anywhere.
 
 Archive docs under `docs/dev_plans_archive/` are historical and need not be
 touched.
@@ -264,7 +287,7 @@ End-to-end checks, in order:
 
   Step 6 — Storkey Hopfield diagnostic: replaced pre_activation-based tanh_saturation_frac / pre_act_mean_abs with z_mu-based equivalents (renamed to act_mean_abs); updated the print line at l.696.
 
-  Step 7 — Docs: dropped pre_activation from the _replace call in 06_custom_nodes.md; removed extract_preactivation_statistics from the 09_experiment_tracking.md import block; updated the 5→4 tensor count in examples/scaling/scaling_analysis_plots.py (line 792 commentary block).
+  Step 7 — Docs: dropped pre_activation from the _replace call in 06_custom_nodes.md and added the transient-pre_activation note enumerating the writable NodeState fields; removed extract_preactivation_statistics from the 09_experiment_tracking.md import block; added the latent_grad row to the NodeState mapping table in 03_how_predictive_coding_works.md and the latent_grad field to the node-state list in 04_building_models.md; updated the 5→4 tensor count in examples/scaling/scaling_analysis_plots.py (line 792 commentary block). Doc-pass grep: pre_activation appears in docs/user_guides/ only as a local variable inside forward() examples.
 
   Verification:
   - NodeState._fields → ('z_latent', 'z_mu', 'error', 'energy', 'latent_grad') ✓
