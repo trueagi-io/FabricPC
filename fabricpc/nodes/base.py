@@ -426,11 +426,13 @@ class NodeBase(ABC):
 
         Contract:
         1. In-degree-0 nodes are handled specially, without calling
-           ``forward()``: z_mu <- z_latent (cast to z_mu's dtype); error,
-           energy, and all gradients are zero.
+           ``forward()``: z_mu <- z_latent (cast to z_mu's dtype); error and
+           all gradients are zero; energy is E(z_latent, z_latent) from the
+           node's energy functional.
         2. Every node with in-degree > 0 goes through ``node_class.forward()``.
-           For unclamped out-degree-0 nodes this computes z_mu only, with
-           zero gradients.
+           For unclamped out-degree-0 nodes the forward's z_mu is kept and
+           written into z_latent (outputs track predictions in evaluation
+           mode); error, energy, and all gradients are zeroed.
         3. The per-sample ``state.energy`` (shape (batch,)) is summed over
            the batch dimension to a scalar.
         4. ``jax.value_and_grad`` differentiates that scalar w.r.t. the
@@ -479,7 +481,7 @@ class NodeBase(ABC):
                 z_mu=state.z_latent.astype(state.z_mu.dtype),
                 error=jnp.zeros_like(state.error),
             )
-            # Update the state's energy; will be zero since z_mu = z_latent
+            # Energy from the node's energy functional evaluated at z_mu = z_latent
             new_state = node_class.energy_functional(new_state, node_info)
             # No inputs, no contribution to latent_grad of self or upstream
             input_grads = {

@@ -63,14 +63,13 @@ Change `-> Tuple[jax.Array, NodeState]` / `-> tuple[jax.Array, NodeState]` to `-
 
 Same closure fix as base (the LayerNorm-compensation post-processing stays unchanged).
 
-### 5. `fabricpc/nodes/transformer_v2.py` — DEFERRED: migrate after the conflicting branch merges
+### 5. `fabricpc/nodes/transformer_v2.py` — deferred at first, applied in the branch's final commit
 
-Deliberately skipped in commit 2bfcf1d to avoid a merge conflict with a
-concurrent branch that touches this file. Until these edits land, the five
-transformer_v2 nodes remain on the old contract and are incompatible with the
-new base gradient methods and the state initializer (see Outcome).
+Deliberately skipped in the initial refactor commits to avoid a merge conflict
+with a concurrent branch that touched this file, then applied in the branch's
+final commit once that conflict was resolved (see Outcome).
 
-Pending edits:
+Edits:
 - `EmbeddingNode.forward` (lines 97, 113): annotation → `NodeState`; `return jnp.sum(state.energy), state` → `return state`.
 - `EmbeddingNode.forward_and_latent_grads` (line 117): `_, new_state = node_info.node_class.forward(...)` → `new_state = node_info.node_class.forward(...)`.
 - `MhaResidualNode.forward` (line 248), `LnMlp1Node.forward` (line 312), `Mlp2ResidualNode.forward` (line 372), `VocabProjectionNode.forward` (line 429): `return jnp.sum(state.energy), state` → `return state`.
@@ -101,29 +100,30 @@ No changes to `docs/user_guides/10_api_nodes.md` (constructor-level reference on
 
 1. `python -m pytest tests/` — full suite; `test_fabricpc.py`, `test_auto_node_grad.py` (exercises `LinearExplicitGrad` against autodiff `Linear`), and `test_transformer_nodes.py` cover both gradient paths and the migrated call sites.
 2. `grep -rn "total_energy, \|tuple\[jax.Array, NodeState\]\|Tuple\[jax.Array, NodeState\]" fabricpc/ tests/ examples/` — must return nothing (no residual two-value unpacking of `forward()` or stale annotations).
-3. Run one training example end-to-end (e.g. `examples/custom_node.py`) to confirm the inference and learning loops work through `state_initializer`, `forward_and_latent_grads`, and `forward_and_weight_grads`.
+3. Run one training example end-to-end to confirm the inference and learning loops work through `state_initializer`, `forward_and_latent_grads`, and `forward_and_weight_grads`.
 
 ## Outcome
 
-Implemented in commit 2bfcf1d (branch clinfra2): sections 1–4 and 6–9. Section
-5 (transformer_v2) was deliberately deferred to avoid a merge conflict with a
-concurrent branch; apply it after that branch merges.
+All sections implemented on branch clinfra2. Sections 1–4 and 6–9 landed in
+the initial refactor commits; section 5 (transformer_v2) was deferred to avoid
+a merge conflict with a concurrent branch and applied in the branch's final
+commit once that conflict was resolved.
 
-Verification results with section 5 applied (pre-deferral working tree):
-- `pytest tests/` → 127/127 passed.
+While section 5 was pending, 9 of 11 tests in `tests/test_transformer_nodes.py`
+failed (TestEmbeddingNode ×4, TestTransformerBlock ×4,
+TestEvaluateTransformer::test_smoke) — every test that builds a graph
+containing transformer_v2 nodes. Mechanism: the transformer_v2 `forward()`
+methods still returned the old `(scalar_energy, NodeState)` tuple, so the
+state initializer failed at `projected.z_mu` (`state_initializer.py:290`,
+`AttributeError: 'tuple' object has no attribute 'z_mu'`) and the base
+gradient closures failed at `new_s.energy`. The failures were left visible on
+purpose — no xfail markers — as the signal that the section 5 migration was
+pending.
+
+Final verification with all sections applied:
+- `pytest tests/` → 269/269 passed.
 - Stale-pattern grep → clean; the only remaining `total_energy` occurrences are
   the intended `energy_fn` closures inside the two gradient methods.
-- `examples/custom_node.py` end-to-end: 3 epochs conv MNIST on GPU, energy
-  1.16 → ~0.001, test accuracy 98.74%.
-
-Known failures while section 5 is deferred: 9 of 11 tests in
-`tests/test_transformer_nodes.py` fail (TestEmbeddingNode ×4,
-TestTransformerBlock ×4, TestEvaluateTransformer::test_smoke) — every test
-that builds a graph containing transformer_v2 nodes. Mechanism: the
-transformer_v2 `forward()` methods still return the old
-`(scalar_energy, NodeState)` tuple, so the state initializer fails at
-`projected.z_mu` (`state_initializer.py:290`,
-`AttributeError: 'tuple' object has no attribute 'z_mu'`) and the base
-gradient closures fail at `new_s.energy`. The failures are left visible on
-purpose — no xfail markers — as the signal that the section 5 migration is
-pending.
+- Pre-deferral smoke run on the plan's original base: 3 epochs conv MNIST on
+  GPU via the (since-removed) `examples/custom_node.py`, energy 1.16 → ~0.001,
+  test accuracy 98.74%.

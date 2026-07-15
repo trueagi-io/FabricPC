@@ -243,7 +243,7 @@ def forward(params, inputs, state, node_info):
     return state
 ```
 
-> **Note (`pre_activation` is transient):** `pre_activation` is a local variable inside `forward()` — not a `NodeState` field. Earlier versions stored it on state; the current API does not. Compute it locally, pass it to the activation, and let it go out of scope. The `NodeState` fields you can write back via `_replace()` are `z_latent`, `z_mu`, `error`, `energy`, and `latent_grad`.
+> **Note (`pre_activation` is transient):** `pre_activation` is a local variable inside `forward()` — not a `NodeState` field. Compute it locally, pass it to the activation, and let it go out of scope. The `NodeState` fields you can write back via `_replace()` are `z_latent`, `z_mu`, `error`, `energy`, and `latent_grad`.
 
 `forward()` is a **pure function**. It must have no side effects and must express its dependence on `params`, `inputs`, and `state.z_latent` entirely through JAX operations, because the framework differentiates it under `jax.value_and_grad` — `forward_and_latent_grads` differentiates it with respect to inputs and `z_latent`, and `forward_and_weight_grads` with respect to `params`. Side effects or Python-level control flow on traced values produce wrong gradients during inference and learning.
 
@@ -345,8 +345,8 @@ The mixin provides:
 
 `forward_and_latent_grads(params, inputs, state, node_info, is_clamped)` drives the inference phase. The base implementation's responsibilities:
 
-1. **In-degree-0 nodes are handled specially**, without calling `forward()`: `z_mu <- z_latent` (cast to `z_mu`'s dtype); error, energy, and all gradients are zero.
-2. **Every node with in-degree > 0 goes through `forward()`**. For unclamped out-degree-0 nodes this computes `z_mu` only, with zero gradients.
+1. **In-degree-0 nodes are handled specially**, without calling `forward()`: `z_mu <- z_latent` (cast to `z_mu`'s dtype); error and all gradients are zero; energy is `E(z_latent, z_latent)` from the node's energy functional.
+2. **Every node with in-degree > 0 goes through `forward()`**. For unclamped out-degree-0 nodes the forward's `z_mu` is kept and written into `z_latent` (outputs track predictions in evaluation mode); error, energy, and all gradients are zeroed.
 3. **The per-sample `state.energy` (shape `(batch,)`) is summed over the batch dimension** to a scalar.
 4. **`jax.value_and_grad` differentiates that scalar** w.r.t. the input tensors and `z_latent`.
 

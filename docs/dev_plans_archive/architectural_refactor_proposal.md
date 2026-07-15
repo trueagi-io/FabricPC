@@ -116,7 +116,7 @@ This is the worst of both worlds: muPC is structurally embedded in supposedly-ge
 - **`ZerosInitializer.__init__` accepts `gain` and silently discards it** (`initializers.py:93-101`) — the constructor doesn't store it and `initialize` returns `jnp.zeros(shape)` regardless. Either honor it or drop it.
 - **`UniformInitializer` stores config under `"min"`/`"max"` keys** (`initializers.py:162`) while taking constructor args `min_val`/`max_val` — surprising for callers reading `init.config`.
 - **`DEFAULT_ENERGY` / `DEFAULT_ACTIVATION` class attributes** in `transformer_v2.py:45-46` — never read anywhere. Delete or wire them through `NodeBase.__init__`.
-- **`SoftmaxActivation.derivative`** (`activations.py:345`) returns the diagonal `s*(1-s)` and admits in-comment that it's wrong for non-element-wise use. Footgun for any future non-autodiff caller — either rename or delete (the full Jacobian at `SoftmaxActivation.jacobian` is the correct form).
+- **`SoftmaxActivation.derivative`** (`activations.py:345`) returns the diagonal `s*(1-s)` and admits in-comment that it's wrong for non-element-wise use. Any future non-autodiff caller would compute wrong derivatives — either rename or delete (the full Jacobian at `SoftmaxActivation.jacobian` is the correct form).
 - **Repeated `MappingProxyType` immutability pattern** in `InferenceBase`, `EnergyFunctional`, `ActivationBase`, `InitializerBase` (4× verbatim) — extract a mixin.
 
 ---

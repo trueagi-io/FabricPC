@@ -678,7 +678,7 @@ def phase2_inference_dynamics():
         print(
             f"\n{'Step':>4} {'E_pc':>8} {'E_hop':>8} {'|z|':>7} "
             f"{'PC_grad':>9} {'Hop_grad':>9} {'TD_grad':>9} "
-            f"{'Hop/PC':>8} {'Hop/TD':>8} {'Sat%':>6} {'|preact|':>8} "
+            f"{'Hop/PC':>8} {'Hop/TD':>8} {'Sat%':>6} {'|act|':>8} "
             f"{'xcheck':>8}"
         )
         print("-" * 115)

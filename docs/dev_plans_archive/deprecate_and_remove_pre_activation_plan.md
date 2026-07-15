@@ -255,8 +255,8 @@ End-to-end checks, in order:
 
   Step 2 — Drop the field (fabricpc/core/types.py): removed pre_activation from the NodeState NamedTuple and from the pytree flatten lambda.
 
-  Step 3 — Drop write sites: state_initializer.py (3 sites), base.py terminal-node reset, linear_residual.py, storkey_hopfield.py, skip_connection.py, identity.py, transformer.py (both _replace and the inlined _mha local), and the four examples (custom_node.py, resnet18_cifar10_demo.py,
-  jpc_fc_resnet_compare.py).
+  Step 3 — Drop write sites: state_initializer.py (3 sites), base.py terminal-node reset, linear_residual.py, storkey_hopfield.py, skip_connection.py, identity.py, transformer.py (both _replace and the inlined _mha local), and examples/jpc_fc_resnet_compare.py (3 sites).
+  Of the other examples listed in the plan, none needed migration on the final base: main had deleted examples/custom_node.py (PR #19) and examples/resnet18_cifar10_demo.py no longer references pre_activation. A rebase re-added custom_node.py as an empty file by accident; it has been removed from the branch.
 
   Step 4 — Tests: dropped pre_activation=... from NodeState constructions in test_fabricpc.py and test_auto_node_grad.py.
 
