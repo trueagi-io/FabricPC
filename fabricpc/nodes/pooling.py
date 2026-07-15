@@ -142,7 +142,7 @@ class _PoolBase(NodeBase):
         inputs: Dict[str, jnp.ndarray],
         state: NodeState,
         node_info: NodeInfo,
-    ) -> Tuple[jax.Array, NodeState]:
+    ) -> NodeState:
         """
         Sum incoming edges, apply the subclass reduction, apply activation,
         and compute energy. Dispatches the reduction through
@@ -155,10 +155,10 @@ class _PoolBase(NodeBase):
         activation = node_info.activation
         z_mu = type(activation).forward(pre_activation, activation.config)
         error = state.z_latent - z_mu
-        state = state._replace(pre_activation=pre_activation, z_mu=z_mu, error=error)
+        state = state._replace(z_mu=z_mu, error=error)
         state = node_info.node_class.energy_functional(state, node_info)
 
-        return jnp.sum(state.energy), state
+        return state
 
 
 class MaxPool(_PoolBase):

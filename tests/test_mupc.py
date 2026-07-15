@@ -554,7 +554,7 @@ class TestSkipConnectionScaling:
                 error = state.z_latent - z_mu
                 state = state._replace(z_mu=z_mu, error=error)
                 state = node_info.node_class.energy_functional(state, node_info)
-                return jnp.sum(state.energy), state
+                return state
 
         # Build graph: x -> meta_node (with meta slot) -> y
         # Also connect a "meta" source to meta_node's meta slot

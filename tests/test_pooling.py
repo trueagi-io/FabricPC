@@ -198,18 +198,15 @@ class TestMaxPoolForward:
         state = NodeState(
             z_latent=z_latent,
             z_mu=jnp.zeros_like(z_latent),
-            pre_activation=jnp.zeros_like(z_latent),
             error=jnp.zeros_like(z_latent),
-            energy=jnp.zeros(()),
+            energy=jnp.zeros(z_latent.shape[0]),
             latent_grad=jnp.zeros_like(z_latent),
         )
         config = {"window_shape": (2, 2), "stride": (2, 2), "padding": "VALID"}
         node_info = self._build_node_info(node, (14, 14, C), config)
-        energy, new_state = MaxPool.forward(
-            params, {"src→pool:in": x}, state, node_info
-        )
+        new_state = MaxPool.forward(params, {"src→pool:in": x}, state, node_info)
         assert new_state.z_mu.shape == (B, 14, 14, C)
-        assert energy.shape == ()
+        assert new_state.energy.shape == (B,)
 
     def test_1d_forward_shape(self):
         B, L_in, C = 4, 20, 8
@@ -227,16 +224,13 @@ class TestMaxPoolForward:
         state = NodeState(
             z_latent=z_latent,
             z_mu=jnp.zeros_like(z_latent),
-            pre_activation=jnp.zeros_like(z_latent),
             error=jnp.zeros_like(z_latent),
-            energy=jnp.zeros(()),
+            energy=jnp.zeros(z_latent.shape[0]),
             latent_grad=jnp.zeros_like(z_latent),
         )
         config = {"window_shape": (2,), "stride": (2,), "padding": "VALID"}
         node_info = self._build_node_info(node, (10, C), config)
-        energy, new_state = MaxPool.forward(
-            params, {"src→pool:in": x}, state, node_info
-        )
+        new_state = MaxPool.forward(params, {"src→pool:in": x}, state, node_info)
         assert new_state.z_mu.shape == (B, 10, C)
 
     def test_forward_energy_nonnegative(self):
@@ -255,15 +249,14 @@ class TestMaxPoolForward:
         state = NodeState(
             z_latent=z_latent,
             z_mu=jnp.zeros_like(z_latent),
-            pre_activation=jnp.zeros_like(z_latent),
             error=jnp.zeros_like(z_latent),
-            energy=jnp.zeros(()),
+            energy=jnp.zeros(z_latent.shape[0]),
             latent_grad=jnp.zeros_like(z_latent),
         )
         config = {"window_shape": (2, 2), "stride": (2, 2), "padding": "VALID"}
         node_info = self._build_node_info(node, (4, 4, C), config)
-        energy, _ = MaxPool.forward(params, {"src→pool:in": x}, state, node_info)
-        assert energy >= 0.0
+        new_state = MaxPool.forward(params, {"src→pool:in": x}, state, node_info)
+        assert jnp.sum(new_state.energy) >= 0.0
 
     def test_max_pool_selects_max(self):
         """Verify that the pooling output actually contains the max values."""
@@ -290,14 +283,13 @@ class TestMaxPoolForward:
         state = NodeState(
             z_latent=z_latent,
             z_mu=jnp.zeros_like(z_latent),
-            pre_activation=jnp.zeros_like(z_latent),
             error=jnp.zeros_like(z_latent),
-            energy=jnp.zeros(()),
+            energy=jnp.zeros(z_latent.shape[0]),
             latent_grad=jnp.zeros_like(z_latent),
         )
         config = {"window_shape": (2, 2), "stride": (2, 2), "padding": "VALID"}
         node_info = self._build_node_info(node, (2, 2, 1), config)
-        _, new_state = MaxPool.forward(params, {"src→pool:in": x}, state, node_info)
+        new_state = MaxPool.forward(params, {"src→pool:in": x}, state, node_info)
         # Max of each 2x2 block: [[6, 8], [14, 16]]
         expected = jnp.array([[[[6.0], [8.0]], [[14.0], [16.0]]]])
         assert jnp.allclose(new_state.z_mu, expected)
@@ -329,9 +321,8 @@ def _make_state(z_latent):
     return NodeState(
         z_latent=z_latent,
         z_mu=jnp.zeros_like(z_latent),
-        pre_activation=jnp.zeros_like(z_latent),
         error=jnp.zeros_like(z_latent),
-        energy=jnp.zeros(()),
+        energy=jnp.zeros(z_latent.shape[0]),
         latent_grad=jnp.zeros_like(z_latent),
     )
 
@@ -370,11 +361,11 @@ class TestAvgPoolWindowed:
             "global_pool": False,
         }
         node_info = _make_node_info(node, (14, 14, C), config)
-        energy, new_state = AvgPool.forward(
+        new_state = AvgPool.forward(
             NodeParams(weights={}, biases={}), {"src→pool:in": x}, state, node_info
         )
         assert new_state.z_mu.shape == (B, 14, 14, C)
-        assert energy.shape == ()
+        assert new_state.energy.shape == (B,)
 
     def test_avg_pool_computes_mean(self):
         """Each 2x2 block should be averaged."""
@@ -397,7 +388,7 @@ class TestAvgPoolWindowed:
             "global_pool": False,
         }
         node_info = _make_node_info(node, (2, 2, 1), config)
-        _, new_state = AvgPool.forward(
+        new_state = AvgPool.forward(
             NodeParams(weights={}, biases={}), {"src→pool:in": x}, state, node_info
         )
         # Mean of each 2x2 block: [[3.5, 5.5], [11.5, 13.5]]
@@ -426,7 +417,7 @@ class TestAvgPoolWindowed:
             "count_include_pad": False,
         }
         node_info = _make_node_info(node, (2, 2, 1), config)
-        _, new_state = AvgPool.forward(
+        new_state = AvgPool.forward(
             NodeParams(weights={}, biases={}), {"src→pool:in": x}, state, node_info
         )
         # SAME pads 3->4 on the high side. Real-element means per window:
@@ -455,7 +446,7 @@ class TestAvgPoolWindowed:
             "count_include_pad": True,
         }
         node_info = _make_node_info(node, (2, 2, 1), config)
-        _, new_state = AvgPool.forward(
+        new_state = AvgPool.forward(
             NodeParams(weights={}, biases={}), {"src→pool:in": x}, state, node_info
         )
         expected = jnp.array([[[[3.0], [2.25]], [[3.75], [2.25]]]])
@@ -483,13 +474,13 @@ class TestAvgPoolGlobal:
         state = _make_state(jnp.zeros((B, C)))
         config = {"global_pool": True, "padding": "VALID"}
         node_info = _make_node_info(node, (C,), config)
-        energy, new_state = AvgPool.forward(
+        new_state = AvgPool.forward(
             NodeParams(weights={}, biases={}), {"src→pool:in": x}, state, node_info
         )
         assert new_state.z_mu.shape == (B, C)
         # Matches jnp.mean over spatial axes
         assert jnp.allclose(new_state.z_mu, jnp.mean(x, axis=(1, 2)))
-        assert energy >= 0.0
+        assert jnp.sum(new_state.energy) >= 0.0
 
 
 # ── Tuple/numeric padding ─────────────────────────────────────────────────
@@ -511,7 +502,7 @@ class TestPoolPadding:
         state = _make_state(jnp.zeros((B, 3, 3, C)))
         config = {"window_shape": (2, 2), "stride": (2, 2), "padding": ((1, 1), (1, 1))}
         node_info = _make_node_info(node, (3, 3, C), config)
-        _, new_state = MaxPool.forward(
+        new_state = MaxPool.forward(
             NodeParams(weights={}, biases={}), {"src→pool:in": x}, state, node_info
         )
         # padded 4->6, (6-2)/2 + 1 = 3

@@ -125,8 +125,8 @@ class ScaledSumNode(NodeBase):
         inputs: Dict[str, jnp.ndarray],
         state: NodeState,
         node_info: NodeInfo,
-    ) -> Tuple[jax.Array, NodeState]:
-        """Six-step forward per the NodeBase.forward docstring contract."""
+    ) -> NodeState:
+        """Five-step forward per the NodeBase.forward docstring contract."""
         batch_size = state.z_latent.shape[0]
         out_shape = node_info.shape
 
@@ -142,7 +142,6 @@ class ScaledSumNode(NodeBase):
 
         state = state._replace(
             z_mu=z_mu,
-            pre_activation=pre_activation,
             error=error,
         )
 
@@ -152,7 +151,7 @@ class ScaledSumNode(NodeBase):
         weighted_energy = state.energy * energy_weight
         state = state._replace(energy=weighted_energy)
 
-        return jnp.sum(state.energy), state
+        return state
 
 
 def _build_simple_graph(shape=(8,)):
@@ -337,8 +336,10 @@ class TestExternalCustomNode:
             node_config={**dict(custom_node_info.node_config), "energy_weight": 3.0},
         )
 
-        energy_a, _ = ScaledSumNode.forward(custom_params, inputs, custom_state, info_a)
-        energy_b, _ = ScaledSumNode.forward(custom_params, inputs, custom_state, info_b)
+        state_a = ScaledSumNode.forward(custom_params, inputs, custom_state, info_a)
+        state_b = ScaledSumNode.forward(custom_params, inputs, custom_state, info_b)
+        energy_a = jnp.sum(state_a.energy)
+        energy_b = jnp.sum(state_b.energy)
 
         assert jnp.isfinite(energy_a)
         assert jnp.isfinite(energy_b)

@@ -28,7 +28,7 @@ These methods are static because FabricPC uses a functional JAX-based design. No
 
 `forward()` is where the node does its real work, and its body is intentionally unconstrained: how you turn inputs into a prediction is up to you. But a fixed set of steps must happen inside it for the node to participate in inference and learning — these are spelled out in [Implement Forward Computation](#step-5-implement-forward-computation) below. The split is:
 
-- **Required (every node):** produce `z_mu`, record `pre_activation`, compute `error`, write those fields back, populate `energy` via the energy functional, and return `(total_energy, state)`.
+- **Required (every node):** produce `z_mu`, compute `error`, write those fields back, populate the per-sample `energy` via the energy functional, and return the updated `NodeState`.
 - **Flexible (per node):** how inputs are combined (sum, matmul, attention, embedding lookup), whether weights/biases exist, whether and which activation applies, any internal sub-structure (LayerNorm, attention, residual paths), and any extra energy terms.
 
 ## Step-by-Step: Conv2D Node
@@ -243,15 +243,17 @@ def forward(params, inputs, state, node_info):
     return state
 ```
 
+> **Note (`pre_activation` is transient):** `pre_activation` is a local variable inside `forward()` — not a `NodeState` field. Earlier versions stored it on state; the current API does not. Compute it locally, pass it to the activation, and let it go out of scope. The `NodeState` fields you can write back via `_replace()` are `z_latent`, `z_mu`, `error`, `energy`, and `latent_grad`.
+
 `forward()` is a **pure function**. It must have no side effects and must express its dependence on `params`, `inputs`, and `state.z_latent` entirely through JAX operations, because the framework differentiates it under `jax.value_and_grad` — `forward_and_latent_grads` differentiates it with respect to inputs and `z_latent`, and `forward_and_weight_grads` with respect to `params`. Side effects or Python-level control flow on traced values produce wrong gradients during inference and learning.
 
-Within that constraint, every `forward()` must perform these six steps in order:
+Within that constraint, every `forward()` must perform these five steps in order:
 
 1. **Predict `z_mu`**: produce the node's prediction of its own latent, with shape `(batch,) + node_info.shape`. *How* is up to the node — a convolution here, a matmul in `Linear`, an attention pipeline in `TransformerBlock`.
 2. **Compute the error**: `error = state.z_latent - z_mu`. The energy functionals assume this sign (latent minus prediction).
 3. **Write the fields back**: `state = state._replace(z_mu=..., error=...)`. `NodeState` is a fixed-schema NamedTuple (`z_latent, z_mu, error, energy, latent_grad`); no other fields exist or may be added.
 4. **Populate energy**: `node_class = node_info.node_class; state = node_class.energy_functional(state, node_info)`. This sets `state.energy` from `energy(z_latent, z_mu)`, so `z_mu` must already be set. Extra energy terms (for example the Hopfield attractor term in `StorkeyHopfield`) are added by replacing `state.energy` after this call.
-5. **Return**: the updated `NodeState`. The `energy` field stays per-sample (shape `(batch,)`); summation over the batch dimension is owned by `forward_and_latent_grads()`/`forward_and_weight_grads()`, which need the resulting scalar for autodiff
+5. **Return**: the updated `NodeState`. The `energy` field stays per-sample (shape `(batch,)`); summation over the batch dimension is owned by `forward_and_latent_grads()`/`forward_and_weight_grads()`, which need the resulting scalar for autodiff.
 
 The steps *between* predicting `z_mu` and writing it back are free: input aggregation, weights and biases, the choice of activation, and any internal sub-structure are all node-specific.
 
@@ -352,7 +354,7 @@ It returns `(NodeState, input_grads, self_grad)`: the updated state, gradients w
 
 ### Explicit Gradients
 
-By default, FabricPC computes gradients with JAX autodiff: it differentiates your `forward()` to obtain both the latent gradients (inference) and the weight gradients (learning). For hand-coded gradients (e.g. for efficiency or control), override `forward_and_latent_grads()` and `forward_and_weight_grads()`. These return gradients, not energy, so their signatures differ from `forward()`:
+By default, FabricPC computes gradients with JAX autodiff: it differentiates your `forward()` to obtain both the latent gradients (inference) and the weight gradients (learning). For hand-coded gradients (e.g. for efficiency or control), override `forward_and_latent_grads()` and `forward_and_weight_grads()`. These return gradients alongside the updated state, so their signatures differ from `forward()`:
 
 ```python
 class MyNode(NodeBase):
@@ -360,7 +362,7 @@ class MyNode(NodeBase):
     def forward_and_latent_grads(params, inputs, state, node_info, is_clamped):
         # Run forward() for the updated state, then compute gradients analytically.
         node_class = node_info.node_class
-        _, state = node_class.forward(params, inputs, state, node_info)
+        state = node_class.forward(params, inputs, state, node_info)
 
         # Self-latent gradient dE/dz_latent via the energy functional
         energy_obj = node_info.energy
@@ -377,7 +379,7 @@ class MyNode(NodeBase):
     @staticmethod
     def forward_and_weight_grads(params, inputs, state, node_info):
         node_class = node_info.node_class
-        _, state = node_class.forward(params, inputs, state, node_info)
+        state = node_class.forward(params, inputs, state, node_info)
 
         # Compute weight/bias gradients analytically ...
         # Returns (updated_state, NodeParams(weights=..., biases=...))

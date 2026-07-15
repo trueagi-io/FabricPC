@@ -12,7 +12,8 @@ Nodes are computational units with state and learnable parameters. Each node mai
   - `z_latent`: The latent state (optimized during inference)
   - `z_mu`: The prediction (output of the forward computation)
   - `error`: The prediction error (`z_latent - z_mu`)
-  - `energy`: The free energy (computed from the error via the energy functional)
+  - `energy`: The per-sample free energy (computed from the error via the energy functional)
+  - `latent_grad`: The gradient accumulator `dE/dz_latent` consumed by the inference update
 
 - **Configuration**:
   - `shape`: Output shape (excluding batch dimension)

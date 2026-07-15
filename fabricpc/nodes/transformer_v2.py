@@ -96,7 +96,7 @@ class EmbeddingNode(NodeBase):
         inputs: Dict[str, jnp.ndarray],
         state: NodeState,
         node_info: NodeInfo,
-    ) -> Tuple[jax.Array, NodeState]:
+    ) -> NodeState:
         edge_key = list(inputs.keys())[0]
         indices = inputs[edge_key]
 
@@ -112,11 +112,11 @@ class EmbeddingNode(NodeBase):
         state = state._replace(z_mu=z_mu, error=error)
 
         state = node_info.node_class.energy_functional(state, node_info)
-        return jnp.sum(state.energy), state
+        return state
 
     @staticmethod
     def forward_and_latent_grads(params, inputs, state, node_info, is_clamped=False):
-        _, new_state = node_info.node_class.forward(params, inputs, state, node_info)
+        new_state = node_info.node_class.forward(params, inputs, state, node_info)
         # Discrete indices: no gradient flows back through the input edge.
         input_grads = {
             edge_key: jnp.zeros_like(inp) for edge_key, inp in inputs.items()
@@ -246,7 +246,7 @@ class MhaResidualNode(NodeBase):
 
         state = state._replace(z_mu=z_mu, error=error)
         state = node_info.node_class.energy_functional(state, node_info)
-        return jnp.sum(state.energy), state
+        return state
 
 
 # ==============================================================================
@@ -310,7 +310,7 @@ class LnMlp1Node(NodeBase):
         error = state.z_latent - z_mu
         state = state._replace(z_mu=z_mu, error=error)
         state = node_info.node_class.energy_functional(state, node_info)
-        return jnp.sum(state.energy), state
+        return state
 
 
 # ==============================================================================
@@ -370,7 +370,7 @@ class Mlp2ResidualNode(NodeBase):
         error = state.z_latent - z_mu
         state = state._replace(z_mu=z_mu, error=error)
         state = node_info.node_class.energy_functional(state, node_info)
-        return jnp.sum(state.energy), state
+        return state
 
 
 # ==============================================================================
@@ -427,7 +427,7 @@ class VocabProjectionNode(NodeBase):
         error = state.z_latent - z_mu
         state = state._replace(z_mu=z_mu, error=error)
         state = node_info.node_class.energy_functional(state, node_info)
-        return jnp.sum(state.energy), state
+        return state
 
 
 # ==============================================================================

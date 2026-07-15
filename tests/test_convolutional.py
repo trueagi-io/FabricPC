@@ -61,7 +61,6 @@ def _make_state(key, batch_size, node_shape):
         z_mu=jnp.zeros_like(z_latent),
         error=jnp.zeros_like(z_latent),
         energy=jnp.zeros(batch_size),
-        pre_activation=jnp.zeros_like(z_latent),
         latent_grad=jnp.zeros_like(z_latent),
     )
 
@@ -358,7 +357,7 @@ class TestConvNodeForward:
         )
         params = NodeParams(weights={"e:in": kernel}, biases={})
         state = _make_state(jax.random.PRNGKey(0), 1, (2, 4, 1))
-        _, new_state = ConvNode.forward(params, {"e:in": x}, state, node_info)
+        new_state = ConvNode.forward(params, {"e:in": x}, state, node_info)
         assert new_state.z_mu.shape == (1, 2, 4, 1)
         assert jnp.allclose(new_state.z_mu, -4.0)
 
@@ -398,8 +397,8 @@ class TestConvNodeForward:
 
     def test_1d_forward_shape(self, setup_1d):
         params, state, node_info, inputs, padding = setup_1d
-        energy, new_state = ConvNode.forward(params, inputs, state, node_info)
-        assert energy.shape == ()
+        new_state = ConvNode.forward(params, inputs, state, node_info)
+        assert new_state.energy.shape == (state.z_latent.shape[0],)
         assert new_state.z_mu.shape == state.z_latent.shape
         assert new_state.error.shape == state.z_latent.shape
 
@@ -427,8 +426,8 @@ class TestConvNodeForward:
         state = _make_state(key, batch, (H, W, C_out))
         inputs = {"e:in": jax.random.normal(key, (batch, H, W, C_in))}
 
-        energy, new_state = ConvNode.forward(params, inputs, state, node_info)
-        assert energy.shape == ()
+        new_state = ConvNode.forward(params, inputs, state, node_info)
+        assert new_state.energy.shape == (batch,)
         assert new_state.z_mu.shape == (batch, H, W, C_out)
 
     def test_3d_forward_shape(self):
@@ -455,8 +454,8 @@ class TestConvNodeForward:
         state = _make_state(key, batch, (D, H, W, C_out))
         inputs = {"e:in": jax.random.normal(key, (batch, D, H, W, C_in))}
 
-        energy, new_state = ConvNode.forward(params, inputs, state, node_info)
-        assert energy.shape == ()
+        new_state = ConvNode.forward(params, inputs, state, node_info)
+        assert new_state.energy.shape == (batch,)
         assert new_state.z_mu.shape == (batch, D, H, W, C_out)
 
     def test_forward_energy_nonnegative_gaussian(self):
@@ -480,8 +479,8 @@ class TestConvNodeForward:
         state = _make_state(key, batch, (H, W, C_out))
         inputs = {"e:in": jax.random.normal(key, (batch, H, W, C_in))}
 
-        energy, new_state = ConvNode.forward(params, inputs, state, node_info)
-        assert float(energy) >= 0.0
+        new_state = ConvNode.forward(params, inputs, state, node_info)
+        assert float(jnp.sum(new_state.energy)) >= 0.0
 
     def test_forward_multi_input(self):
         """Two edges with different C_in each get their own kernel."""
@@ -508,7 +507,7 @@ class TestConvNodeForward:
             "a:in": jax.random.normal(key, (batch, seq, C1)),
             "b:in": jax.random.normal(key, (batch, seq, C2)),
         }
-        energy, new_state = ConvNode.forward(params, inputs, state, node_info)
+        new_state = ConvNode.forward(params, inputs, state, node_info)
         assert new_state.z_mu.shape == (batch, seq, C_out)
 
     def test_latent_grads(self):

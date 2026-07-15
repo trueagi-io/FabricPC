@@ -342,25 +342,23 @@ class NodeBase(ABC):
         How the prediction is produced is intentionally unconstrained: Linear
         does a matmul, IdentityNode sums its inputs, TransformerBlock runs an
         attention pipeline, StorkeyHopfield blends a probe with a learned weight
-        matrix. Every implementation must, however, perform these six steps in
+        matrix. Every implementation must, however, perform these five steps in
         order:
 
         1. Predict ``z_mu``: this node's prediction of its own latent, with shape
            ``(batch,) + node_info.shape``.
-        2. Record ``pre_activation``: the value before the activation function.
-           If the node applies no activation, set ``pre_activation = z_mu``.
-        3. Compute the error: ``error = state.z_latent - z_mu``. The energy
+        2. Compute the error: ``error = state.z_latent - z_mu``. The energy
            functionals assume this sign (latent minus prediction).
-        4. Write the fields back:
-           ``state = state._replace(z_mu=..., pre_activation=..., error=...)``.
+        3. Write the fields back:
+           ``state = state._replace(z_mu=..., error=...)``.
            NodeState is a fixed-schema NamedTuple; no other fields may be added.
-        5. Populate energy:
+        4. Populate energy:
            ``state = node_info.node_class.energy_functional(state, node_info)``.
            This sets ``state.energy`` from ``energy(z_latent, z_mu)``, so ``z_mu``
            must already be set. Additional energy terms (e.g. the Hopfield
            attractor term in StorkeyHopfield) are added by replacing
            ``state.energy`` after this call.
-        6. Return ``state``: the updated state
+        5. Return ``state``: the updated state
 
         muPC scaling is NOT applied here; the inference/learning callsite applies
         it. Do not scale inputs or gradients inside this method.
