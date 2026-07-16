@@ -126,7 +126,7 @@ class StorkeyHopfield(NodeBase):
         hopfield_strength: Scaling of E_hop relative to E_pc.
             If None (default), a learnable scalar initialized to 1.0.
             If a float, fixed at that value.
-        use_bias: Whether to include bias (default: True).
+        use_bias: Whether to include bias (default: False).
         enforce_symmetry: Symmetrize W via 0.5*(W+W.T) in forward (default: True).
         zero_diagonal: Zero W diagonal in forward (default: False).
         weight_init: Initializer for weights (default: XavierInitializer()).
