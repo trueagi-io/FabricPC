@@ -1,20 +1,23 @@
 # Changelog
 
-## [Unreleased]
-- Breaking: Removed pre-activation from NodeState. Nodes that compute pre-activation should use it only as an intermediate value and not store it.
-- Breaking: Moved the summation of per-sample energy from the node forward() method to the node base forward_and_latent_grads() and forward_and_weight_grads() methods. The forward methods should update the NodeState object with the per-sample energy (call to energy functional) and let the base class sum it.
-- Breaking: None is no longer accepted for activation, energy, or latent_init — NodeBase raises TypeError at construction, naming the node. weight_init=None still means a weight-free node (e.g. pooling).
-- Custom nodes that forward **kwargs without setting energy or activation now receive the NodeBase signature defaults (GaussianEnergy, IdentityActivation) instead of raising at energy computation.
-- Migrated from one-hot to integer target data for the autoregressive trainers. Targets are now one-hot encoded at the trainer when they arrive one axis short of predictions.
-- Fixed `eval_step_backprop` accuracy: the one-hot test `targets.ndim > 1 and targets.shape[-1] > 1` misread integer sequence targets (batch, seq_len) as one-hot and argmaxed over sequence positions. The test is now a rank comparison against predictions.
-- Fixed `generate_autoregressive` on v1 graphs that declare an external `causal_mask` node: generation never clamped the mask node, so attention ran with a mask latent from state initialization instead of the lower-triangular pattern used in training and eval.
-- The external causal-mask clamp is assembled in one shared helper, `causal_mask_clamps(structure, batch_size, seq_len)`; the train-clamp, PC eval, backprop, and generation paths all call it.
-- `evaluate_autoregressive` now reads `use_causal_mask` from config with a default of True, matching `train_autoregressive` and `evaluate_backprop_autoregressive`. Previously an absent key raised KeyError.
-- `create_deep_transformer` is exported from `fabricpc.nodes`, alongside the five transformer_v2 node classes it assembles. The `fabricpc.nodes.transformer_v2` import path still works.
-- Base classes are now immutable (frozen at construction); safe to use initializers, activations, and energy functionals as defaults in node constructor signatures. Removed None guards and migrated defaults from body methods to constructors.
-- Config values are validated at construction: immutable scalars (int, float, str, bool, bytes, None) and tuples of those only. A list, dict, set, or array config value raises TypeError.
-- Removed Optional annotation from node constructor arguments that were in fact always required. Node attribute objects are defaulted once, in the node __init__ signature; the single source of truth on defaults is the constructor.
-- Added ruff to pre-commit hooks for linting (formatting stays with Black). The lint scope covers fabricpc/, tests/, examples/, and scripts/; E402 is ignored in examples/ and scripts/, which configure JAX flags before importing jax.
+## [0.3.2] - 2026-07-15
+### New features
+- Convolutional and pooling nodes: `ConvNode` (unified 1D/2D/3D) and the weight-free `MaxPool`/`AvgPool`, tensors in channels-last order. Declared output shapes are validated at `initialize_params` time, before the JIT-compiled forward pass. Demo: `examples/mnist_conv_demo.py`; see `docs/user_guides/10_api_nodes.md`.
+- Autoregressive language modeling with transformer v2: `create_deep_transformer` builds muPC-scaled graphs with internal causal masking, trained end to end via `train_autoregressive`/`evaluate_autoregressive`/`generate_autoregressive`. Demo: `examples/transformer_v2_demo.py`; see `docs/user_guides/08_training_and_evaluation.md`.
+- BPE tokenization: `BpeDataLoader` (HuggingFace `tokenizers`, in the `[tfds]` extra) trains a byte-pair tokenizer on first use and caches the encoded splits. See `docs/user_guides/14_api_data.md`.
+- Two-phase Bayesian hyperparameter tuning with Optuna (`fabricpc.tuning.bayesian_tuner`): Phase 1 architecture search with pruning, Phase 2 fine-tuning of continuous hyperparameters; both phases minimize validation perplexity. See `docs/user_guides/15_api_experiments.md`.
+
+### Breaking changes
+- `pre_activation` removed from `NodeState`; `forward()` returns only the updated `NodeState` with per-sample energy, and the base gradient methods own the batch summation. Custom-node migration: `docs/user_guides/06_custom_nodes.md`.
+- `None` is no longer accepted for `activation`, `energy`, or `latent_init` — `TypeError` at construction. `weight_init=None` still declares a weight-free node.
+- Transformer v2 causal masking moved inside `MhaResidualNode` (`is_causal` flag); the external `mask` slot and `causal_mask` node are removed from the v2 builder. v1 graphs keep their external mask node.
+- `VocabProjectionNode` default energy is now `CrossEntropyEnergy` (was `KLDivergenceEnergy`).
+
+### Other significant changes
+- Kaiming and Xavier initializers compute fan on arbitrary-rank weights; unchanged for 2D `(in, out)` weights, correct for conv kernels.
+- Autoregressive trainers migrated from one-hot to integer targets: loaders yield `int32` token ids of shape `(batch, seq_len)`; one-hot encoding happens in the training step. One-hot targets still work.
+- Activations, energy functionals, and initializers are frozen at construction and validate their config values as immutable; node defaults live once, in the `__init__` signature.
+- Added ruff to pre-commit for linting (formatting stays with Black). Run bash `pre-commit install` to enable.
 
 ## [0.3.1] - 2026-05-04
 Internal infrastructure release: unified autodiff gradient path, muPC scaling lifted to callsites, and a package restructure that resolves circular import.
