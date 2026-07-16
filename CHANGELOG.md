@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.3.2] - 2026-07-15
+## [0.3.2] - 2026-07-16
 ### New features
 - Convolutional and pooling nodes: `ConvNode` (unified 1D/2D/3D) and the weight-free `MaxPool`/`AvgPool`, tensors in channels-last order. Declared output shapes are validated at `initialize_params` time, before the JIT-compiled forward pass. Demo: `examples/mnist_conv_demo.py`; see `docs/user_guides/10_api_nodes.md`.
 - Autoregressive language modeling with transformer v2: `create_deep_transformer` builds muPC-scaled graphs with internal causal masking, trained end to end via `train_autoregressive`/`evaluate_autoregressive`/`generate_autoregressive`. Demo: `examples/transformer_v2_demo.py`; see `docs/user_guides/08_training_and_evaluation.md`.
