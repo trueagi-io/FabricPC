@@ -74,7 +74,7 @@ Instances are frozen after `super().__init__(**config)`: all configuration must 
 
 State initializers set the initial latent states for all nodes before inference begins.
 
-All state initializers extend `StateInitBase` from `fabricpc.graph.state_initializer`.
+All state initializers extend `StateInitBase` from `fabricpc.graph_initialization.state_initializer`.
 
 ### FeedforwardStateInit (Default)
 
@@ -83,7 +83,7 @@ Runs a forward pass through the network in topological order and sets `z_latent 
 ```python
 from fabricpc.graph_initialization.state_initializer import FeedforwardStateInit
 
-structure = graph(..., state_init=FeedforwardStateInit())
+structure = graph(..., graph_state_initializer=FeedforwardStateInit())
 ```
 
 Requires `params` (used during forward pass).
@@ -95,7 +95,7 @@ All nodes use the graph-level initializer (typically `NormalInitializer`).
 ```python
 from fabricpc.graph_initialization.state_initializer import GlobalStateInit
 
-structure = graph(..., state_init=GlobalStateInit())
+structure = graph(..., graph_state_initializer=GlobalStateInit())
 ```
 
 ### NodeDistributionStateInit
@@ -105,5 +105,5 @@ Each node uses its own `latent_init` initializer.
 ```python
 from fabricpc.graph_initialization.state_initializer import NodeDistributionStateInit
 
-structure = graph(..., state_init=NodeDistributionStateInit())
+structure = graph(..., graph_state_initializer=NodeDistributionStateInit())
 ```

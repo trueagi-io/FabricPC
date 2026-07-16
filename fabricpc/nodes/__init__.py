@@ -25,6 +25,7 @@ from fabricpc.nodes.transformer_v2 import (
     LnMlp1Node,
     Mlp2ResidualNode,
     VocabProjectionNode,
+    create_deep_transformer,
 )
 from fabricpc.nodes.storkey_hopfield import StorkeyHopfield
 from fabricpc.nodes.skip_connection import SkipConnection
@@ -52,6 +53,7 @@ __all__ = [
     "LnMlp1Node",
     "Mlp2ResidualNode",
     "VocabProjectionNode",
+    "create_deep_transformer",
     "StorkeyHopfield",
     "SkipConnection",
     "LinearResidual",

@@ -656,14 +656,14 @@ def evaluate_autoregressive(
         params: Trained parameters
         structure: Graph structure
         test_loader: Test data loader
-        config: Evaluation config (use_causal_mask)
+        config: Evaluation config with use_causal_mask (default True)
         rng_key: Random key
         debug: If True, print detailed diagnostics for first batch
 
     Returns:
         Dictionary of metrics
     """
-    use_causal_mask = config["use_causal_mask"]
+    use_causal_mask = config.get("use_causal_mask", True)
 
     output_node = structure.task_map.get("y")
     if output_node is None:

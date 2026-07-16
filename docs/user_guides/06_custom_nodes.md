@@ -7,8 +7,12 @@ FabricPC's built-in nodes cover many common use cases, but you may need custom n
 Built-in nodes include:
 - `Linear`: Fully-connected layers
 - `IdentityNode`: Passthrough nodes
+- `SkipConnection`, `LinearResidual`: Residual paths and residual blocks
+- `ConvNode`: 1D/2D/3D convolution
+- `MaxPool`, `AvgPool`: Windowed and global pooling
 - `StorkeyHopfield`: Associative memory
 - `TransformerBlock`: Multi-head attention and feedforward
+- Transformer v2 (`EmbeddingNode`, `MhaResidualNode`, `LnMlp1Node`, `Mlp2ResidualNode`, `VocabProjectionNode`): decomposed transformer stages
 
 Create a custom node when you need:
 - Gating mechanisms (LSTM, GRU)

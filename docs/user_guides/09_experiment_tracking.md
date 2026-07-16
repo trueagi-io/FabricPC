@@ -26,6 +26,7 @@ from fabricpc.utils.dashboarding import (
     create_tracking_callbacks,
 )
 from fabricpc.training import train_pcn, evaluate_pcn
+import optax
 
 # Create tracking configuration
 tracking_config = TrackingConfig(
@@ -44,8 +45,9 @@ tracker, iter_cb, epoch_cb = create_tracking_callbacks(
 )
 
 # Train with tracking
+optimizer = optax.adamw(1e-3)
 trained_params, _, _ = train_pcn(
-    params, structure, train_loader, train_config, rng_key,
+    params, structure, train_loader, optimizer, train_config, rng_key,
     iter_callback=iter_cb,
     epoch_callback=epoch_cb,
 )

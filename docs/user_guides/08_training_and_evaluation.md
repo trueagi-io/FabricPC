@@ -47,6 +47,8 @@ Returns `{"energy": float, "accuracy": float}`.
 
 **Note on energy**: For feedforward DAGs with `FeedforwardStateInit`, evaluation energy will be near zero because `z_latent` starts equal to `z_mu`. Use accuracy (or other task-specific metrics) to assess model quality.
 
+Next-token models use `evaluate_autoregressive` instead, which reports perplexity (see [Autoregressive Language Modeling](#autoregressive-language-modeling)).
+
 ## Understanding Training Energy
 
 Energy is the sum of per-node energies across the batch. It decreases during training as the network learns to predict its own states. Energy is **not** directly comparable to cross-entropy loss — it measures internal prediction consistency, not task performance.
@@ -109,6 +111,78 @@ metrics_bp = evaluate_backprop(trained_params_bp, structure, test_loader, config
 
 This is useful for validating that the PC network architecture is capable, independently of PC-specific dynamics.
 
+## Autoregressive Language Modeling
+
+Next-token models train with `train_autoregressive`. The loader contract differs from `train_pcn`: both `x` and `y` are `(batch, seq_len)` int32 token ids, with `y` being `x` shifted one position left (see [Data Loaders](14_api_data.md)); one-hot encoding of the target happens inside the training step.
+
+### train_autoregressive
+
+```python
+from fabricpc.training import train_autoregressive
+
+trained_params, energy_history, epoch_results = train_autoregressive(
+    params=params,
+    structure=structure,
+    train_loader=train_loader,
+    optimizer=optimizer,
+    config={"num_epochs": 5},
+    rng_key=train_key,
+)
+```
+
+Same core signature as `train_pcn` (`train_pcn` additionally accepts `use_tqdm` and `pmap_single_device`). Returns `(trained_params, energy_history, epoch_results)`.
+
+**Config keys:**
+- `num_epochs` — supports fractional values (e.g. `1.5` trains half of the second epoch)
+- `use_causal_mask` (default `True`) — clamps a lower-triangular attention mask on graphs whose task map declares a `"causal_mask"` node (the v1 `TransformerBlock` pattern). The decomposed transformer masks internally via `is_causal`, so its task map has no such node and nothing is clamped.
+
+**Epoch callback** — called as `epoch_callback(epoch_idx, params, structure, config, rng_key, energy=avg_energy, ce_loss=avg_ce_loss)`, where `energy` is the epoch's average training energy and `ce_loss` its average per-token cross-entropy:
+
+```python
+def my_epoch_callback(epoch_idx, params, structure, config, rng_key, energy=None, ce_loss=None):
+    print(f"Epoch {epoch_idx}: energy={energy:.4f} ce={ce_loss:.4f}")
+
+trained_params, _, _ = train_autoregressive(..., epoch_callback=my_epoch_callback)
+```
+
+### evaluate_autoregressive
+
+```python
+from fabricpc.training import evaluate_autoregressive
+
+metrics = evaluate_autoregressive(trained_params, structure, val_loader, config, eval_key)
+print(f"Perplexity: {metrics['perplexity']:.2f}")
+```
+
+Returns `{"loss", "perplexity", "accuracy", "num_batches"}` — average per-token cross-entropy, perplexity, next-token accuracy, and the number of evaluated batches. `use_causal_mask` follows the same default as training.
+
+**Perplexity** is the effective number of tokens the model chooses among at each step: a model with perplexity 20 is as uncertain as a uniform choice over 20 tokens. It is computed from the mean per-token cross-entropy `CE` over the evaluation set as `perplexity = exp(CE)`.
+
+### generate_autoregressive
+
+```python
+from fabricpc.training import generate_autoregressive
+
+tokens = generate_autoregressive(
+    trained_params,
+    structure,
+    prompt=prompt_ids,       # int32 token ids, e.g. from a loader batch
+    max_new_tokens=200,
+    rng_key=gen_key,
+    temperature=0.8,
+    top_k=40,
+)
+print(loader.decode(tokens))
+```
+
+- `temperature` divides the logits before sampling: below 1.0 concentrates probability on the most likely tokens, above 1.0 flattens the distribution.
+- `top_k` keeps only the k most probable tokens.
+- `top_p` keeps the smallest token set whose cumulative probability reaches p.
+
+Generation slides a context window of the model's `seq_len`: once the sequence exceeds it, the oldest tokens drop out of the context.
+
+The backprop counterparts `train_backprop_autoregressive` and `evaluate_backprop_autoregressive` share these interfaces. End-to-end example: `examples/transformer_v2_demo.py` (`--mode pc|backprop`, `--tokenizer char|bpe`); hyperparameter search: [Experiment Framework API](15_api_experiments.md).
+
 ## Multi-GPU Training
 
 `train_pcn` and `evaluate_pcn` automatically detect available devices and use
@@ -135,9 +209,12 @@ For rigorous comparisons across multiple trials, use the experiment framework:
 
 ```python
 from fabricpc.experiments import ExperimentArm, ABExperiment
+from fabricpc.training import train_pcn, evaluate_pcn, train_backprop, evaluate_backprop
 
-arm_a = ExperimentArm(name="PC", model_factory=create_model, train_fn=train_pcn, ...)
-arm_b = ExperimentArm(name="Backprop", model_factory=create_model, train_fn=train_backprop, ...)
+arm_a = ExperimentArm(name="PC", model_factory=create_model, train_fn=train_pcn,
+                      eval_fn=evaluate_pcn, optimizer=optimizer, train_config=config)
+arm_b = ExperimentArm(name="Backprop", model_factory=create_model, train_fn=train_backprop,
+                      eval_fn=evaluate_backprop, optimizer=optimizer, train_config=config)
 
 experiment = ABExperiment(arm_a=arm_a, arm_b=arm_b, metric="accuracy",
                           data_loader_factory=loader_fn, n_trials=5)

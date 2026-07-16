@@ -8,7 +8,7 @@ Built on JAX for GPU and multi-GPU acceleration with local (node-level) automati
 
 ## What It Does
 
-FabricPC supports arbitrary graph topologies: feedforward, recurrent, skip connections, and cyclic architectures. Heterogeneous components such as linear nodes, transformer blocks, and Storkey-Hopfield associative memory coexist within the same energy-minimization graph. The same graph topology can be trained by predictive coding (`train_pcn`) or by backpropagation (`train_backprop`), so controlled PC-vs-backprop comparisons reuse one model definition instead of two. See `examples/PC_backprop_compare.py`.
+FabricPC supports arbitrary graph topologies: feedforward, recurrent, skip connections, and cyclic architectures. Heterogeneous components such as linear, convolutional, and pooling nodes, transformer blocks, and Storkey-Hopfield associative memory coexist within the same energy-minimization graph. The same graph topology can be trained by predictive coding (`train_pcn`) or by backpropagation (`train_backprop`), so controlled PC-vs-backprop comparisons reuse one model definition instead of two. See `examples/PC_backprop_compare.py`.
 
 Internally, everything is organized around three abstractions: nodes (state and computation), edges (connections between nodes), and updates (inference and learning algorithms).
 
@@ -75,7 +75,12 @@ params = initialize_params(structure, rng_key)
 
 ## Demos
 
-The [`examples`](examples/) folder includes working demonstrations across image classification, sequence modeling, depth scaling (`examples/scaling/`), associative memory, and architectural probes. Start with [`mnist_demo.py`](examples/mnist_demo.py) (over 98% accuracy on MNIST) and explore from there.
+The [`examples`](examples/) folder includes working demonstrations across image classification, sequence modeling, depth scaling (`examples/scaling/`), associative memory, and architectural probes. Start with [`mnist_demo.py`](examples/mnist_demo.py) (over 98% accuracy on MNIST) and explore from there:
+
+- [`mnist_conv_demo.py`](examples/mnist_conv_demo.py) — convolutional MNIST classifier with `ConvNode` and `MaxPool`
+- [`resnet18_cifar10_demo.py`](examples/resnet18_cifar10_demo.py) — ResNet-18 as a PC graph, with global average pooling
+- [`transformer_v2_demo.py`](examples/transformer_v2_demo.py) — character- or BPE-level language modeling with text generation
+- [`transformer_tuning.py`](examples/transformer_tuning.py) — two-phase hyperparameter search minimizing validation perplexity
 
 ## Documentation
 
@@ -85,9 +90,9 @@ User guides, API reference, and tutorials live in [`docs/user_guides`](docs/user
 
 ### Custom Nodes
 
-Create custom node types by subclassing `NodeBase`. Implement the `forward()` and `initialize_params()` methods. Nodes have a single output. Define slots for incoming connections. Slots are named arguments of the node's `forward()` method and are referenced in edges when building the graph.
+Create custom node types by subclassing `NodeBase`. Implement the `get_slots()`, `initialize_params()`, and `forward()` methods. Nodes have a single output. Slots define incoming connections and are referenced in edges when building the graph.
 
-See [`docs/user_guides/06_custom_nodes.md`](docs/user_guides/06_custom_nodes.md) for the node contract and an example of Conv2D implementation.
+See [`docs/user_guides/06_custom_nodes.md`](docs/user_guides/06_custom_nodes.md) for the node contract and a Conv2D teaching example (the production node is `fabricpc.nodes.ConvNode`).
 
 ## Contributing
 

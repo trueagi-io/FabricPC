@@ -11,6 +11,7 @@ All data loaders are in `fabricpc.utils.data`.
 | `Cifar10Loader` | CIFAR-10 | 32x32x3 | 10 | `tfds` |
 | `Cifar100Loader` | CIFAR-100 | 32x32x3 | 100 | `tfds` |
 | `CharDataLoader` | TinyShakespeare | — | vocab_size | `tfds` |
+| `BpeDataLoader` | TinyShakespeare (BPE) | — | 11711 (default) | `tfds` (includes `tokenizers`) |
 | `FewShotLoader` | Any TFDS dataset | varies | varies | `tfds` |
 | `NoisyTestLoader` | Wraps any loader | same as base | same | — |
 
@@ -80,14 +81,50 @@ loader = CharDataLoader(
     max_samples=None,    # cap sequences for fast tuning
 )
 
-for x_indices, y_onehot in loader:
+for x_indices, y_indices in loader:
     # x_indices: ndarray[batch, seq_len] int32
-    # y_onehot: ndarray[batch, seq_len, vocab_size] float32
+    # y_indices: ndarray[batch, seq_len] int32 — x shifted one position left
     pass
 
 # Decode indices to text
 text = loader.decode(x_indices[0])
 ```
+
+Both `x` and `y` are integer token ids; one-hot encoding of the target happens inside the training step (see [Training and Evaluation](08_training_and_evaluation.md)).
+
+## BpeDataLoader
+
+Subword text loader for language modeling: byte-pair encoding on TinyShakespeare. One token covers a word piece, so the same text becomes a shorter sequence over a larger vocabulary than character-level. Yields the same int32 `(x, y)` id pairs as `CharDataLoader`.
+
+```python
+from fabricpc.utils.data import BpeDataLoader
+
+loader = BpeDataLoader(
+    split="train",       # "train", "validation", or "test"
+    seq_len=128,         # tokens per input sequence
+    batch_size=64,
+)
+
+for x_indices, y_indices in loader:
+    # x_indices, y_indices: ndarray[batch, seq_len] int32
+    pass
+
+text = loader.decode(x_indices[0])
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `split` | `str` | required | `"train"`, `"validation"`, or `"test"` |
+| `seq_len` | `int` | required | Tokens per input sequence |
+| `batch_size` | `int` | required | Sequences per batch |
+| `shuffle` | `bool` | `True` | Shuffle sequence order each epoch |
+| `seed` | `int` | `None` | Random seed for shuffling |
+| `max_samples` | `int` | `None` | Cap sequences for fast tuning |
+| `bpe_data_dir` | `str` | `"data/bpe_tokenized"` | Cache directory for tokenizer and token arrays |
+| `vocab_size` | `int` | `11711` | BPE vocabulary size |
+| `verbose` | `bool` | `True` | Print tokenization progress |
+
+On first use the loader trains a HuggingFace `tokenizers` BPE tokenizer on TinyShakespeare and caches `tokenizer.json` plus one `{split}.npy` token array per split under `bpe_data_dir`; later runs load the cache. Requires the optional `tokenizers>=0.15.0` dependency (part of the `tfds` install group) and raises `ImportError` with an install hint when it is missing.
 
 ## FewShotLoader
 
@@ -129,7 +166,7 @@ noisy = NoisyTestLoader(base_loader=base, noise_std=2.0, seed=42)
 
 ## Using Custom Data
 
-`train_pcn()` accepts any iterable yielding batches in one of two formats:
+`train_pcn()` accepts any iterable yielding batches in one of two formats. `train_autoregressive()` uses the same loader contract with integer-id targets: both `x` and `y` are `(batch, seq_len)` int32 token ids.
 
 **Tuple format** (recommended):
 ```python

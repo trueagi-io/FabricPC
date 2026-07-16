@@ -99,12 +99,12 @@ Uniform distribution over a specified range.
 ```python
 from fabricpc.core.initializers import UniformInitializer
 
-weight_init = UniformInitializer(minval=-0.1, maxval=0.1)
+weight_init = UniformInitializer(min_val=-0.1, max_val=0.1)
 ```
 
 Weights are drawn from:
 ```
-W ~ U(minval, maxval)
+W ~ U(min_val, max_val)
 ```
 
 ## muPC: The Recommended Default
@@ -218,7 +218,10 @@ Each node class implements `get_weight_fan_in()` to report the input dimension o
 | Linear (`flatten_input=False`) | `source_shape[-1]` | Last-axis features |
 | Linear (`flatten_input=True`) | `prod(source_shape)` | All dims flattened |
 | LinearResidual | Same as Linear | Only "in" slot has weights |
+| ConvNode | `C_in * prod(kernel_size)` | Input values per output unit |
+| MaxPool / AvgPool | 1 | No weight matrix |
 | TransformerBlock | `embed_dim` | Last axis of input shape |
+| Transformer v2 weighted nodes | `source_shape[-1]` | Base-class default (`embed_dim` or `ff_dim`) |
 | IdentityNode | 1 | No weight matrix |
 | SkipConnection | 1 | No weight matrix |
 
@@ -275,7 +278,10 @@ Nodes like h1, h2, h3 (no skip slots) do not increment L.
 |----------|---|--------|
 | Pure sequential chain | 1 | No depth factor: `a = gain / sqrt(fan_in * K_slot)` |
 | ResNet with D blocks | D | Each block's compute path scaled by `1/sqrt(L)` |
+| Decomposed transformer, depth d | 2d | Two skip-bearing nodes per block |
 | Mixed architecture | max skip depth | Computed from the longest skip-connection path |
+
+In the decomposed transformer (see [Nodes API](10_api_nodes.md)), each block contributes two nodes with a skip-bearing slot — `MhaResidualNode` via `"skip"` and `Mlp2ResidualNode` via `"residual"` — so a depth-`d` model has residual depth `L = 2d`.
 
 With L in the denominator, each residual block contributes `O(1/L)` variance. Over L blocks, total variance grows as `(1 + 1/L)^L`, which is bounded by approximately **e** (~2.72) — stable regardless of depth.
 
@@ -479,7 +485,7 @@ structure = graph(
     edges=[...],
     task_map=...,
     inference=...,
-    state_init=FeedforwardStateInit(),
+    graph_state_initializer=FeedforwardStateInit(),
 )
 ```
 
@@ -503,7 +509,7 @@ structure = graph(
     edges=[...],
     task_map=...,
     inference=...,
-    state_init=GlobalStateInit(initializer=NormalInitializer(mean=0.0, std=0.1)),
+    graph_state_initializer=GlobalStateInit(initializer=NormalInitializer(mean=0.0, std=0.1)),
 )
 ```
 
@@ -536,7 +542,7 @@ structure = graph(
     edges=[...],
     task_map=...,
     inference=...,
-    state_init=NodeDistributionStateInit(),
+    graph_state_initializer=NodeDistributionStateInit(),
 )
 ```
 
@@ -572,7 +578,7 @@ structure = graph(
     task_map=...,
     inference=InferenceSGD(eta_infer=0.05, infer_steps=20),
     scaling=MuPCConfig(),
-    state_init=FeedforwardStateInit(),
+    graph_state_initializer=FeedforwardStateInit(),
 )
 ```
 

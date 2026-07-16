@@ -1,17 +1,19 @@
 # Changelog
 
 ## [Unreleased]
-- Removed pre-activation from NodeState. Nodes that compute pre-activation should use it only as an intermediate value and not store it.
-- Moved the summation of per-sample energy from the node forward() method to the node base forward_and_latent_grads() and forward_and_weight_grads() methods. The forward methods should update the NodeState object with the per-sample energy (call to energy functional) and let the base class sum it.
-- Fixed incomplete one-hot-to-integer target migration in the backprop autoregressive path: `evaluate_backprop_autoregressive`'s debug diagnostics multiplied integer token ids (batch, seq_len) against log-probabilities (batch, seq_len, vocab), raising a broadcast error on the first evaluated batch when debug=True. Targets are now one-hot encoded when they arrive one axis short of predictions, the same contract as `compute_loss`.
+- Breaking: Removed pre-activation from NodeState. Nodes that compute pre-activation should use it only as an intermediate value and not store it.
+- Breaking: Moved the summation of per-sample energy from the node forward() method to the node base forward_and_latent_grads() and forward_and_weight_grads() methods. The forward methods should update the NodeState object with the per-sample energy (call to energy functional) and let the base class sum it.
+- Breaking: None is no longer accepted for activation, energy, or latent_init — NodeBase raises TypeError at construction, naming the node. weight_init=None still means a weight-free node (e.g. pooling).
+- Custom nodes that forward **kwargs without setting energy or activation now receive the NodeBase signature defaults (GaussianEnergy, IdentityActivation) instead of raising at energy computation.
+- Migrated from one-hot to integer target data for the autoregressive trainers. Targets are now one-hot encoded at the trainer when they arrive one axis short of predictions.
 - Fixed `eval_step_backprop` accuracy: the one-hot test `targets.ndim > 1 and targets.shape[-1] > 1` misread integer sequence targets (batch, seq_len) as one-hot and argmaxed over sequence positions. The test is now a rank comparison against predictions.
 - Fixed `generate_autoregressive` on v1 graphs that declare an external `causal_mask` node: generation never clamped the mask node, so attention ran with a mask latent from state initialization instead of the lower-triangular pattern used in training and eval.
 - The external causal-mask clamp is assembled in one shared helper, `causal_mask_clamps(structure, batch_size, seq_len)`; the train-clamp, PC eval, backprop, and generation paths all call it.
+- `evaluate_autoregressive` now reads `use_causal_mask` from config with a default of True, matching `train_autoregressive` and `evaluate_backprop_autoregressive`. Previously an absent key raised KeyError.
+- `create_deep_transformer` is exported from `fabricpc.nodes`, alongside the five transformer_v2 node classes it assembles. The `fabricpc.nodes.transformer_v2` import path still works.
 - Base classes are now immutable (frozen at construction); safe to use initializers, activations, and energy functionals as defaults in node constructor signatures. Removed None guards and migrated defaults from body methods to constructors.
 - Config values are validated at construction: immutable scalars (int, float, str, bool, bytes, None) and tuples of those only. A list, dict, set, or array config value raises TypeError.
 - Removed Optional annotation from node constructor arguments that were in fact always required. Node attribute objects are defaulted once, in the node __init__ signature; the single source of truth on defaults is the constructor.
-- Breaking: None is no longer accepted for activation, energy, or latent_init — NodeBase raises TypeError at construction, naming the node. weight_init=None still means a weight-free node (e.g. pooling).
-- Custom nodes that forward **kwargs without setting energy or activation now receive the NodeBase signature defaults (GaussianEnergy, IdentityActivation) instead of raising at energy computation.
 - Added ruff to pre-commit hooks for linting (formatting stays with Black). The lint scope covers fabricpc/, tests/, examples/, and scripts/; E402 is ignored in examples/ and scripts/, which configure JAX flags before importing jax.
 
 ## [0.3.1] - 2026-05-04

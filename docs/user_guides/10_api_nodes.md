@@ -216,6 +216,122 @@ prev ─────────┤  slot("skip") ──────────
 
 ---
 
+## ConvNode
+
+`fabricpc.nodes.ConvNode`
+
+Convolution node: `z_mu = activation(conv(x, kernel) + b)`. Each output position is predicted from a local window of the input feature map. One class covers 1D, 2D, and 3D convolution; the spatial rank is inferred from `len(shape) - 1`. Layout is channels-last: `(batch, spatial..., channels)`.
+
+```python
+from fabricpc.nodes import ConvNode
+
+conv1 = ConvNode(
+    shape=(28, 28, 32),      # output (H, W, C_out); padding "SAME" preserves 28x28
+    name="conv1",
+    kernel_size=(3, 3),
+    stride=(1, 1),
+    padding="SAME",
+)
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `shape` | `Tuple[int, ...]` | required | Output shape excluding batch: `(spatial..., C_out)` |
+| `name` | `str` | required | Node name |
+| `kernel_size` | `Tuple[int, ...]` | required | Window extent per spatial axis |
+| `stride` | `Tuple[int, ...]` | all ones | Step per spatial axis |
+| `padding` | `str` or pairs | `"SAME"` | `"SAME"`, `"VALID"`, or explicit `(low, high)` pairs per spatial axis |
+| `activation` | `ActivationBase` | `ReLUActivation()` | Activation function |
+| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
+| `use_bias` | `bool` | `True` | Whether to include a per-channel bias |
+| `weight_init` | `InitializerBase` | `KaimingInitializer()` | Kernel initializer |
+| `bias_init` | `InitializerBase` | `ZerosInitializer()` | Bias initializer |
+| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+
+**Slots:** `"in"` (multi-input)
+
+**Weight shape:** `(*kernel_size, C_in, C_out)` — one kernel per incoming edge; contributions from multiple edges are summed. Dilation is not supported.
+
+**Output shape validation:** the declared `shape` is checked against kernel, stride, and padding at `initialize_params`; a mismatch raises `ValueError` naming the node and the expected shape. Per spatial axis with input extent `n`, kernel extent `k`, and stride `s`: `"SAME"` gives `ceil(n / s)`; `"VALID"` gives `floor((n - k) / s) + 1`.
+
+**muPC fan_in:** `C_in * prod(kernel_size)` — the number of input values contributing to each output unit.
+
+---
+
+## MaxPool
+
+`fabricpc.nodes.MaxPool`
+
+Max-pooling node: `z_mu = activation(windowed_max(x))`. Reduces spatial extent by taking the maximum over each window; no learnable parameters.
+
+```python
+from fabricpc.nodes import MaxPool
+
+pool1 = MaxPool(
+    shape=(14, 14, 32),      # output after 2x2 non-overlapping windows on 28x28
+    name="pool1",
+    window_shape=(2, 2),
+)
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `shape` | `Tuple[int, ...]` | required | Output shape excluding batch: `(spatial..., C)` |
+| `name` | `str` | required | Node name |
+| `window_shape` | `Tuple[int, ...]` | required | Window extent per spatial axis |
+| `stride` | `Tuple[int, ...]` | `window_shape` | Step per spatial axis; the default gives non-overlapping windows |
+| `padding` | `str` or pairs | `"VALID"` | `"SAME"`, `"VALID"`, or explicit `(low, high)` pairs. Note: default differs from ConvNode's `"SAME"` |
+| `activation` | `ActivationBase` | `IdentityActivation()` | Activation function |
+| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
+| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+
+**Slots:** `"in"` (multi-input)
+
+Explicit padding that covers a full window on any axis is rejected at `initialize_params`: max pooling pads with negative infinity, and a window containing only padding would output negative infinity.
+
+**muPC fan_in:** Always returns `1` (weightless node).
+
+---
+
+## AvgPool
+
+`fabricpc.nodes.AvgPool`
+
+Average-pooling node: `z_mu = activation(windowed_mean(x))`. Two modes: windowed (like MaxPool, with the mean instead of the maximum) and global (`global_pool=True`), which averages over all spatial axes at once, `(batch, spatial..., C) -> (batch, C)`.
+
+```python
+from fabricpc.nodes import AvgPool
+
+# Global average pooling: collapse the spatial grid to one vector per channel.
+# Standard bridge from a convolutional stack to a classifier head.
+avgpool = AvgPool(shape=(256,), name="avgpool", global_pool=True)
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `shape` | `Tuple[int, ...]` | required | Output shape excluding batch. Rank-1 `(C,)` required when `global_pool=True`; construction raises `ValueError` otherwise |
+| `name` | `str` | required | Node name |
+| `window_shape` | `Tuple[int, ...]` | `None` | Window extent per spatial axis (windowed mode) |
+| `stride` | `Tuple[int, ...]` | `window_shape` | Step per spatial axis |
+| `padding` | `str` or pairs | `"VALID"` | `"SAME"`, `"VALID"`, or explicit `(low, high)` pairs |
+| `global_pool` | `bool` | `False` | Average over all spatial axes instead of windows |
+| `count_include_pad` | `bool` | `True` | Divide by the full window volume; `False` divides by the count of real (non-padding) elements |
+| `activation` | `ActivationBase` | `IdentityActivation()` | Activation function |
+| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
+| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+
+**Slots:** `"in"` (multi-input)
+
+**muPC fan_in:** Always returns `1` (weightless node).
+
+---
+
 ## TransformerBlock
 
 `fabricpc.nodes.TransformerBlock`
@@ -226,8 +342,10 @@ Multi-head self-attention + feedforward MLP in a single node. Uses Rotary Positi
 from fabricpc.nodes import TransformerBlock
 
 block = TransformerBlock(
-    shape=(128,), n_heads=8, d_model=128, d_ff=512,
-    max_seq_len=256, name="transformer",
+    shape=(256, 128),        # (seq_len, embed_dim)
+    num_heads=8,
+    ff_dim=512,
+    name="transformer",
 )
 ```
 
@@ -235,7 +353,7 @@ block = TransformerBlock(
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `shape` | `Tuple[int, ...]` | required | Output shape `(features,)` |
+| `shape` | `Tuple[int, ...]` | required | Output shape `(seq_len, embed_dim)` |
 | `name` | `str` | required | Node name |
 | `activation` | `ActivationBase` | `IdentityActivation()` | Output activation function |
 | `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
@@ -262,21 +380,173 @@ x → LayerNorm → MHA → + → LayerNorm → FFN → +
 
 ## Decomposed Transformer (v2)
 
-Fine-grained transformer components in `fabricpc.nodes.transformer_v2`. Each component is a separate node for deeper PC inference.
+Fine-grained transformer components, exported from `fabricpc.nodes` (defined in `fabricpc.nodes.transformer_v2`). Each block stage is a separate PC node, so inference assigns a latent state and a prediction error to the attention and MLP stages individually instead of to a whole block.
 
 - **`EmbeddingNode`** — Token embedding lookup
-- **`MhaResidualNode`** — Multi-head attention with residual connection
+- **`MhaResidualNode`** — Multi-head attention with the block's first residual added inside the node
 - **`LnMlp1Node`** — LayerNorm + first MLP projection
-- **`Mlp2ResidualNode`** — Second MLP projection with residual
-- **`VocabProjectionNode`** — Project back to vocabulary dimension
+- **`Mlp2ResidualNode`** — Second MLP projection with the block's second residual added inside the node
+- **`VocabProjectionNode`** — Projection to vocabulary logits
 
 ```
-                         ┌───────────────────────────── one transformer block ────────────┐
+                         ┌──────────────────────── one transformer block ─────────────────┐
                          │                                                                │
-tokens → EmbeddingNode ──┼──→ MhaResidualNode(+) ──→ LnMlp1Node ──→ Mlp2ResidualNode(+) ──┼──→ VocabProjectionNode → logits
-                         │    │      (skip)   ↑                     │      (skip)    ↑    │
-                         │    └───────────────┘                     └────────────────┘    │
+tokens → EmbeddingNode ──┼──→ MhaResidualNode ──────→ LnMlp1Node ──→ Mlp2ResidualNode ────┼──→ VocabProjectionNode → logits
+                    │    │    ("in", scaled) ↑   │                   ("in", scaled) ↑     │
+                    │    │                   │   │                                  │     │
+                    └────┼───→ ("skip") ─────┘   └──────→ ("residual") ─────────────┘     │
                          └────────────────────────────────────────────────────────────────┘
 ```
 
-See `fabricpc.nodes.transformer_v2` module for detailed API.
+Each block wires two unscaled bypass edges: the previous block's output feeds both `MhaResidualNode` slots (`"in"` and `"skip"`), and the attention output feeds both the MLP path (`LnMlp1Node`) and `Mlp2ResidualNode`'s `"residual"` slot. Causal masking happens inside `MhaResidualNode` via `is_causal`; no mask node or mask edge exists in the graph.
+
+### create_deep_transformer
+
+`fabricpc.nodes.create_deep_transformer`
+
+Builds the complete depth-`d` language-model graph: embedding, `d` blocks of the three block nodes, and the vocabulary projection.
+
+```python
+from fabricpc.nodes import create_deep_transformer
+from fabricpc.core.inference import InferenceSGD
+
+structure = create_deep_transformer(
+    depth=4,
+    embed_dim=128,
+    num_heads=8,
+    mlp_dim=512,
+    seq_len=256,
+    vocab_size=11711,
+    inference=InferenceSGD(eta_infer=0.1, infer_steps=20),
+)
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `depth` | `int` | required | Number of transformer blocks |
+| `embed_dim` | `int` | required | Embedding and residual-stream width |
+| `num_heads` | `int` | required | Attention heads per block |
+| `mlp_dim` | `int` | required | Hidden width of the block MLP |
+| `seq_len` | `int` | required | Sequence length |
+| `vocab_size` | `int` | required | Vocabulary size |
+| `inference` | `InferenceBase` | required | Inference algorithm for latent updates |
+| `weight_init` | `dict` | `None` | Block-weight initializer spec, e.g. `{"type": "normal", "std": 0.05}` or `{"type": "xavier"}`; `None` gives `NormalInitializer(std=0.02)` |
+
+Returns a `GraphStructure` with `TaskMap(x=input_ids, y=logits)` — clamp `x` with int32 token ids `(batch, seq_len)`, read logits from `y` — plus `MuPCConfig(include_output=False)` and `FeedforwardStateInit()`.
+
+**Initialization:** `weight_init` covers the block weights only. The builder overrides two nodes regardless: the embedding uses `NormalInitializer(std=1.0)` because muPC scaling is disabled on the discrete lookup edge and unit-normal keeps each token's embedding at order-1 variance, and the vocabulary projection uses `Normal(std=sqrt(1/embed_dim))` because each logit is a dot product over `embed_dim` features and this keeps initial logit variance at order 1. Nodes constructed directly get the class defaults in the tables below, not these overrides.
+
+### EmbeddingNode
+
+Token-embedding lookup: `z_mu = E[token_ids]`, where `E` is the `(vocab_size, embed_dim)` embedding table. Input is int32 token ids `(batch, seq_len)`; output is `(batch, seq_len, embed_dim)`. Token ids are discrete, so no gradient flows back through the input edge.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `shape` | `Tuple[int, int]` | required | `(seq_len, embed_dim)` |
+| `name` | `str` | required | Node name |
+| `vocab_size` | `int` | required | Rows of the embedding table |
+| `embed_dim` | `int` | required | Columns of the embedding table |
+| `weight_init` | `InitializerBase` | `NormalInitializer(std=0.02)` | Embedding-table initializer |
+| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
+
+**Slots:** `"in"` (single-input, `is_variance_scalable=False` — muPC leaves the token-id edge unscaled)
+
+### MhaResidualNode
+
+Pre-norm multi-head self-attention with the residual added inside the node: `z_mu = x_skip + W_o @ MHA(LayerNorm(x_in))`, where `x_in` is the `"in"` slot input and `x_skip` the `"skip"` slot input. With `is_causal=True` a lower-triangular mask is applied to the attention scores inside the node. With `use_rope=True` rotary position embeddings are applied to queries and keys.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `shape` | `Tuple[int, int]` | required | `(seq_len, embed_dim)` |
+| `name` | `str` | required | Node name |
+| `embed_dim` | `int` | required | Residual-stream width |
+| `num_heads` | `int` | required | Attention heads; head dimension is `embed_dim / num_heads` |
+| `use_rope` | `bool` | `True` | Apply rotary position embeddings to Q and K |
+| `rope_theta` | `float` | `10000.0` | Base frequency for RoPE |
+| `is_causal` | `bool` | `True` | Apply the lower-triangular mask inside attention |
+| `weight_init` | `InitializerBase` | `XavierInitializer()` | Initializer for `W_q`, `W_k`, `W_v`, `W_o` |
+| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
+
+**Slots:**
+- `"in"` (single-input, `is_variance_scalable=True`): attention-branch input, muPC-scaled.
+- `"skip"` (single-input, `is_variance_scalable=False`, `is_skip_connection=True`): residual bypass, unscaled.
+
+**muPC fan_in:** `source_shape[-1]` (base-class default) — `embed_dim` for the `"in"` edge.
+
+### LnMlp1Node
+
+LayerNorm followed by the first MLP projection: `z_mu = activation(W_ff1 @ LayerNorm(x) + b_ff1)`.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `shape` | `Tuple[int, int]` | required | `(seq_len, ff_dim)` |
+| `name` | `str` | required | Node name |
+| `embed_dim` | `int` | required | Input width (LayerNorm and `W_ff1` rows) |
+| `ff_dim` | `int` | required | Hidden width (`W_ff1` columns) |
+| `activation` | `ActivationBase` | `GeluActivation()` | Activation after the projection |
+| `weight_init` | `InitializerBase` | `KaimingInitializer()` | Initializer for `W_ff1` |
+| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
+
+**Slots:** `"in"` (single-input)
+
+**muPC fan_in:** `source_shape[-1]` (base-class default) — `embed_dim`.
+
+### Mlp2ResidualNode
+
+Second MLP projection with the block residual added inside the node: `z_mu = x_residual + W_ff2 @ x_in + b_ff2`, where `x_in` is the `LnMlp1Node` output and `x_residual` the attention output.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `shape` | `Tuple[int, int]` | required | `(seq_len, embed_dim)` |
+| `name` | `str` | required | Node name |
+| `embed_dim` | `int` | required | Output width (`W_ff2` columns) |
+| `ff_dim` | `int` | required | Input width (`W_ff2` rows) |
+| `weight_init` | `InitializerBase` | `XavierInitializer()` | Initializer for `W_ff2` |
+| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
+
+**Slots:**
+- `"in"` (single-input, `is_variance_scalable=True`): MLP path, muPC-scaled.
+- `"residual"` (single-input, `is_variance_scalable=False`, `is_skip_connection=True`): residual bypass, unscaled.
+
+**muPC fan_in:** `source_shape[-1]` (base-class default) — `ff_dim` for the `"in"` edge.
+
+### VocabProjectionNode
+
+Projection to vocabulary logits: `z_mu = activation(W_out @ x + b_out)` with a softmax default activation. The default energy is `CrossEntropyEnergy` — unlike every other built-in node, which defaults to `GaussianEnergy` — so clamping one-hot targets on this node makes its energy the cross-entropy training loss.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `shape` | `Tuple[int, int]` | required | `(seq_len, vocab_size)` |
+| `name` | `str` | required | Node name |
+| `vocab_size` | `int` | required | Output width (`W_out` columns) |
+| `embed_dim` | `int` | required | Input width (`W_out` rows) |
+| `activation` | `ActivationBase` | `SoftmaxActivation()` | Output activation |
+| `weight_init` | `InitializerBase` | `XavierInitializer()` | Initializer for `W_out` |
+| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+| `energy` | `EnergyFunctional` | `CrossEntropyEnergy()` | Energy functional |
+
+**Slots:** `"in"` (single-input)
+
+**muPC fan_in:** `source_shape[-1]` (base-class default) — `embed_dim`.
+
+### muPC residual depth
+
+A depth-`d` model has residual depth `L = 2d`: each block contributes two nodes with a skip-bearing slot (`MhaResidualNode` via `"skip"`, `Mlp2ResidualNode` via `"residual"`), and muPC counts one per node along the longest path. See [Initialization and Scaling](05_initialization_and_scaling.md).
+
+**See also:** `examples/transformer_v2_demo.py` (`--mode pc|backprop`, `--tokenizer char|bpe`) for end-to-end training and generation, and [Training and Evaluation](08_training_and_evaluation.md) for the autoregressive training API.

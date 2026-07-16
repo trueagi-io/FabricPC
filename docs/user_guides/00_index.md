@@ -12,11 +12,11 @@ FabricPC is a flexible, performant predictive coding library built on JAX. It im
 Step-by-step guides for building and training predictive coding networks.
 
 - [How Predictive Coding Works](03_how_predictive_coding_works.md) — PC concepts mapped to FabricPC code
-- [Building Models](04_building_models.md) — Nodes, edges, graphs, and all node types
+- [Building Models](04_building_models.md) — Nodes, edges, graphs, and all node types, including convolutional and pooling nodes
 - [Initialization and Scaling](05_initialization_and_scaling.md) — Weight init, state init, and muPC scaling
 - [Custom Nodes](06_custom_nodes.md) — Writing your own node types
 - [Optimizers](07_optimizers.md) — Optax integration, chaining transforms, and natural gradients
-- [Training and Evaluation](08_training_and_evaluation.md) — Training loops, evaluation, callbacks, and multi-GPU
+- [Training and Evaluation](08_training_and_evaluation.md) — Training loops, evaluation, callbacks, multi-GPU, and autoregressive language modeling (training, perplexity, generation)
 - [Experiment Tracking](09_experiment_tracking.md) — Monitoring training with Aim dashboards
 
 ## API Reference
@@ -27,8 +27,8 @@ Comprehensive reference for all library components.
 - [Activations and Energy Functionals](11_api_activations_and_energy.md) — Activation functions and energy formulations
 - [Inference Algorithms](12_api_inference.md) — Inference loop algorithms
 - [Initializers](13_api_initializers.md) — Weight and state initializers
-- [Data Loaders](14_api_data.md) — Built-in datasets and custom data
-- [Experiment Framework](15_api_experiments.md) — A/B experiments, statistics, and tuning
+- [Data Loaders](14_api_data.md) — Built-in datasets, character-level and BPE text loaders, and custom data
+- [Experiment Framework](15_api_experiments.md) — A/B experiments, statistics, and two-phase hyperparameter tuning
 
 ## Help
 

@@ -218,6 +218,41 @@ for i in range(num_blocks):
     prev = res
 ```
 
+### Convolution (ConvNode)
+
+A convolution node predicts each output location from a local window of the input feature map: one kernel per incoming edge, contributions summed, then bias and activation. One class covers 1D, 2D, and 3D convolution — the spatial rank is inferred from `len(shape) - 1`, with channels-last layout `(batch, spatial..., channels)`.
+
+You declare the output shape; the framework validates it against kernel size, stride, and padding at parameter initialization and raises `ValueError` naming the node on a mismatch.
+
+```python
+from fabricpc.nodes import ConvNode, MaxPool
+
+conv1 = ConvNode(shape=(28, 28, 32), kernel_size=(3, 3), name="conv1")  # default "SAME" padding preserves 28x28
+pool1 = MaxPool(shape=(14, 14, 32), window_shape=(2, 2), name="pool1")
+conv2 = ConvNode(shape=(14, 14, 64), kernel_size=(3, 3), name="conv2")
+
+edges = [
+    Edge(source=pixels, target=conv1.slot("in")),
+    Edge(source=conv1, target=pool1.slot("in")),
+    Edge(source=pool1, target=conv2.slot("in")),
+]
+```
+
+Full example: `examples/mnist_conv_demo.py`. Constructor tables: [Nodes API](10_api_nodes.md).
+
+### Pooling (MaxPool, AvgPool)
+
+Pooling reduces spatial size without learnable weights: `MaxPool` takes the maximum over each window, `AvgPool` the mean. Stride defaults to the window shape, giving non-overlapping windows. Global average pooling (`AvgPool` with `global_pool=True` and rank-1 `shape=(C,)`) collapses the whole spatial grid to one vector per channel — the standard bridge from a convolutional stack to a classifier head, as in `examples/resnet18_cifar10_demo.py`:
+
+```python
+from fabricpc.nodes import AvgPool
+
+avgpool = AvgPool(shape=(256,), name="avgpool", global_pool=True)
+# (batch, H, W, 256) -> (batch, 256), then a Linear classifier head
+```
+
+Pooling nodes are weightless, so their muPC fan_in is 1 and muPC applies no attenuation to their incoming edges. Constructor tables: [Nodes API](10_api_nodes.md).
+
 ### TransformerBlock
 
 A multi-head self-attention block with feedforward MLP.
@@ -235,10 +270,9 @@ The TransformerBlock implements:
 from fabricpc.nodes import TransformerBlock
 
 block = TransformerBlock(
-    shape=(128,),           # d_model
-    n_heads=8,
-    d_model=128,
-    d_ff=512,               # feedforward dimension
+    shape=(256, 128),       # (seq_len, embed_dim)
+    num_heads=8,
+    ff_dim=512,             # feedforward hidden dimension
     name="attn",
 )
 
@@ -251,24 +285,36 @@ Edge(source=mask_node, target=block.slot("mask"))
 
 ### Decomposed Transformer (v2)
 
-Fine-grained transformer components for deeper PC inference. Instead of a monolithic block, the transformer computation is broken into separate nodes:
+Fine-grained transformer components for deeper PC inference. Instead of a monolithic block, each stage is its own node with its own latent state and prediction error:
 
-- `EmbeddingNode`: Token and position embeddings
-- `MhaResidualNode`: Multi-head attention with residual connection
-- `LnMlp1Node`: Layer norm and first MLP layer
-- `Mlp2ResidualNode`: Second MLP layer with residual connection
-- `VocabProjectionNode`: Final projection to vocabulary
+- `EmbeddingNode`: token embedding lookup only — positional information comes from RoPE inside `MhaResidualNode`
+- `MhaResidualNode`: multi-head attention, adding the block's first residual inside the node; causal masking is applied internally via `is_causal`, so no mask node or mask edge exists
+- `LnMlp1Node`: LayerNorm and first MLP projection
+- `Mlp2ResidualNode`: second MLP projection, adding the block's second residual inside the node
+- `VocabProjectionNode`: projection to vocabulary logits
 
 ```
-                         ┌───────────────────────────── one transformer block ────────────┐
+                         ┌──────────────────────── one transformer block ─────────────────┐
                          │                                                                │
-tokens → EmbeddingNode ──┼──→ MhaResidualNode(+) ──→ LnMlp1Node ──→ Mlp2ResidualNode(+) ──┼──→ VocabProjectionNode → logits
-                         │    │      (skip)   ↑                     │      (skip)    ↑    │
-                         │    └───────────────┘                     └────────────────┘    │
+tokens → EmbeddingNode ──┼──→ MhaResidualNode ──────→ LnMlp1Node ──→ Mlp2ResidualNode ────┼──→ VocabProjectionNode → logits
+                    │    │    ("in", scaled) ↑   │                   ("in", scaled) ↑     │
+                    │    │                   │   │                                  │     │
+                    └────┼───→ ("skip") ─────┘   └──────→ ("residual") ─────────────┘     │
                          └────────────────────────────────────────────────────────────────┘
 ```
 
-This decomposition allows PC inference to optimize each stage separately, potentially enabling more fine-grained credit assignment.
+Models are normally assembled with the builder rather than by hand:
+
+```python
+from fabricpc.nodes import create_deep_transformer
+
+structure = create_deep_transformer(
+    depth=4, embed_dim=128, num_heads=8, mlp_dim=512,
+    seq_len=256, vocab_size=vocab_size, inference=inference,
+)
+```
+
+Full constructor signatures and slot details: [Nodes API](10_api_nodes.md).
 
 ## Connecting Nodes with Edges
 
@@ -475,7 +521,7 @@ IdentityNode(shape=(28, 28, 1), name="mnist_input")
 **Sequences**:
 ```python
 # Shape: (seq_len, features)
-TransformerBlock(shape=(100, 128), n_heads=8, d_model=128, d_ff=512, name="transformer")
+TransformerBlock(shape=(100, 128), num_heads=8, ff_dim=512, name="transformer")
 # Input/output: (batch, 100, 128)
 ```
 
@@ -490,10 +536,12 @@ The batch dimension is always implicitly first and handled automatically by the 
 
 ### Conv Node Shape Flow
 
-For convolutional nodes, the channels-last convention determines how inputs, kernels, and outputs line up. The kernel layout is `(kH, kW, C_in, C_out)`, and the spatial dimensions shrink (or are preserved, with `padding="SAME"`) according to the kernel size, stride, and padding:
+For convolutional nodes, the channels-last convention determines how inputs, kernels, and outputs line up. The kernel layout is `(*kernel_size, C_in, C_out)` — for 2D, `(kH, kW, C_in, C_out)` — and the spatial dimensions shrink (or are preserved, with `padding="SAME"`) according to the kernel size, stride, and padding. The worked example below uses `padding="VALID"` at stride 1, so each spatial extent shrinks by `kernel - 1`; ConvNode's default `"SAME"` would preserve 28:
 
 ```
 Input:  (batch, H_in, W_in, C_in)     e.g., (32, 28, 28, 1)
 Kernel: (kH, kW, C_in, C_out)         e.g., (3, 3, 1, 64)
-Output: (batch, H_out, W_out, C_out)  e.g., (32, 26, 26, 64)
+Output: (batch, H_out, W_out, C_out)  e.g., (32, 26, 26, 64)   # "VALID": 28 - 3 + 1 = 26
 ```
+
+See the [Convolution section](#convolution-convnode) above and the [Nodes API](10_api_nodes.md) for the output-shape formulas.

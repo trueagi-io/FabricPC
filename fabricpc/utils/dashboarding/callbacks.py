@@ -114,7 +114,7 @@ def create_tracking_callbacks(
         )
 
         trained_params, _, _ = train_pcn(
-            params, structure, train_loader, train_config, rng_key,
+            params, structure, train_loader, optimizer, train_config, rng_key,
             iter_callback=iter_cb,
             epoch_callback=epoch_cb,
         )
