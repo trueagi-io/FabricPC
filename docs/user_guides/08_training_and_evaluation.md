@@ -222,4 +222,4 @@ results = experiment.run()
 results.print_summary()  # Paired t-test, Cohen's d, effect sizes
 ```
 
-See the [Experiment Framework API](15_api_experiments.md) for full details.
+For more than two arms, `PlannedMultiContrastExperiment` runs N arms with constructor-declared planned contrasts; `ABExperiment` is its 2-arm wrapper. See the [Experiment Framework API](15_api_experiments.md) for full details.

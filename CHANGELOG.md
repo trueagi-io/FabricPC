@@ -6,6 +6,8 @@
 - Autoregressive language modeling with transformer v2: `create_deep_transformer` builds muPC-scaled graphs with internal causal masking, trained end to end via `train_autoregressive`/`evaluate_autoregressive`/`generate_autoregressive`. Demo: `examples/transformer_v2_demo.py`; see `docs/user_guides/08_training_and_evaluation.md`.
 - BPE tokenization: `BpeDataLoader` (HuggingFace `tokenizers`, in the `[tfds]` extra) trains a byte-pair tokenizer on first use and caches the encoded splits. See `docs/user_guides/14_api_data.md`.
 - Two-phase Bayesian hyperparameter tuning with Optuna (`fabricpc.tuning.bayesian_tuner`): Phase 1 architecture search with pruning, Phase 2 fine-tuning of continuous hyperparameters; both phases minimize validation perplexity. See `docs/user_guides/15_api_experiments.md`.
+- `PlannedMultiContrastExperiment`: N-arm experiment runner with paired arms — every arm sees identical data and batch order per trial seed — and constructor-declared planned contrasts (paired t-test + Cohen's d). `ABExperiment` is now a thin 2-arm wrapper; its API is unchanged. See `docs/user_guides/15_api_experiments.md`.
+- Four-arm StorkeyHopfield study in `examples/storkey_hopfield_demo.py`: accuracy gains accumulate with each Linear→StorkeyHopfield substitution under input noise, up to +13.0 pp over the MLP baseline at the noisiest setting; near zero on clean inputs.
 
 ### Breaking changes
 - `pre_activation` removed from `NodeState`; `forward()` returns only the updated `NodeState` with per-sample energy, and the base gradient methods own the batch summation. Custom-node migration: `docs/user_guides/06_custom_nodes.md`.
@@ -16,6 +18,7 @@
 ### Other significant changes
 - Kaiming and Xavier initializers compute fan on arbitrary-rank weights; unchanged for 2D `(in, out)` weights, correct for conv kernels.
 - Autoregressive trainers migrated from one-hot to integer targets: loaders yield `int32` token ids of shape `(batch, seq_len)`; one-hot encoding happens in the training step. One-hot targets still work.
+- `FewShotLoader` now yields the final partial batch; it was previously dropped.
 - Activations, energy functionals, and initializers are frozen at construction and validate their config values as immutable; node defaults live once, in the `__init__` signature.
 - Added ruff to pre-commit for linting (formatting stays with Black). Run bash `pre-commit install` to enable.
 

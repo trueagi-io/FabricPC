@@ -28,7 +28,7 @@ Comprehensive reference for all library components.
 - [Inference Algorithms](12_api_inference.md) — Inference loop algorithms
 - [Initializers](13_api_initializers.md) — Weight and state initializers
 - [Data Loaders](14_api_data.md) — Built-in datasets, character-level and BPE text loaders, and custom data
-- [Experiment Framework](15_api_experiments.md) — A/B experiments, statistics, and two-phase hyperparameter tuning
+- [Experiment Framework](15_api_experiments.md) — paired experiments with planned contrasts, statistics, and two-phase hyperparameter tuning
 
 ## Help
 

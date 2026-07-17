@@ -1,12 +1,12 @@
 # Experiment Framework API
 
-## A/B Experiments
+## Paired Multi-Arm Experiments (incl. A/B Experiments)
 
 `fabricpc.experiments.ab_experiment`
 
 ### ExperimentArm
 
-Defines one condition in an A/B experiment.
+Defines one condition (arm) of an experiment. Shared by both runners below.
 
 ```python
 from fabricpc.experiments import ExperimentArm
@@ -30,9 +30,50 @@ arm = ExperimentArm(
 | `optimizer` | `optax.GradientTransformation` | Optimizer |
 | `train_config` | `dict` | Training configuration |
 
+### PlannedMultiContrastExperiment
+
+Runs N arms across paired trials with constructor-declared planned contrasts. Pairing holds by construction: within each trial, every arm receives freshly constructed loaders from `data_loader_factory(trial_seed)` and the same model RNG seed, so all arms see identical data and batch order whenever the factory is deterministic in its seed argument. Per-arm results are therefore independent of arm order and of which arm subset is run. Trial *i* uses seed `seed_offset + i * 1000`.
+
+```python
+from fabricpc.experiments import PlannedMultiContrastExperiment
+
+runner = PlannedMultiContrastExperiment(
+    arms=[arm_mlp, arm_1hopfield, arm_2hopfield],
+    contrasts=[("1hopfield", "MLP"), ("2hopfield", "1hopfield")],
+    metric="accuracy",
+    data_loader_factory=make_loaders,   # (seed) -> (train_loader, test_loader)
+    n_trials=10,
+)
+
+results = runner.run()
+for c in results.contrast_results():
+    print(c.arm_a, c.arm_b, c.mean_diff, c.p_value, c.cohens_d)
+
+total = results.delta("2hopfield", "MLP")   # reported-only delta, no test
+print(total.mean, total.se)
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `arms` | `List[ExperimentArm]` | Arms to run, each once per trial; names must be unique |
+| `contrasts` | `List[Tuple[str, str]]` | `(arm_a_name, arm_b_name)` pairs declaring the planned-contrast family; each name must reference an arm in `arms` |
+| `metric` | `str` | Key in each arm's eval-result dict (e.g., `"accuracy"`) |
+| `data_loader_factory` | `Callable` | `(seed) -> (train_loader, test_loader)`; must be deterministic in its seed, otherwise the arms are not paired |
+| `n_trials` | `int` | Number of paired trials (default 10); the tests require ≥ 2 |
+| `seed_offset` | `int` | Base seed offset (default 0) |
+| `verbose` | `bool` | Forward `verbose=True` to each arm's `train_fn` |
+
+**`run()` returns `PlannedMultiContrastResults`:**
+
+- `contrast_results()` — one `ContrastResult` per declared contrast, in declaration order: `mean_diff`, `se_diff` (SE of the per-trial paired difference), `t_statistic`, `p_value`, `significant_at_05`, `cohens_d`, `n`. Each contrast is a two-sided paired t-test plus paired Cohen's d on the per-trial difference vector. With `n_trials < 2` the test statistics are NaN and `significant_at_05` is `False`.
+- `delta(arm_a, arm_b)` — `DescriptiveDelta` (`mean`, `std`, `se`, `n`) for any arm pair. Carries no test statistics, so a reported-only delta cannot be misread as a planned contrast.
+- `per_arm_metrics(name)` / `per_arm_times(name)` — per-trial metric values / training times as `np.ndarray`.
+
+Full runnable version: `examples/storkey_hopfield_demo.py` (four arms, three planned contrasts, one reported-only delta).
+
 ### ABExperiment
 
-Runs two arms across multiple trials with statistical analysis.
+Two-arm wrapper around `PlannedMultiContrastExperiment` with the single contrast `(arm_a.name, arm_b.name)`; same trial loop, same pairing. Returns `ABResults` with the legacy reporting API.
 
 ```python
 from fabricpc.experiments import ABExperiment
@@ -71,6 +112,8 @@ results.print_summary()
 
 `fabricpc.experiments.statistics`
 
+Standalone paired-analysis functions on numpy arrays; the runners above use them internally. Each returns a frozen dataclass.
+
 ```python
 from fabricpc.experiments.statistics import (
     descriptive_stats,
@@ -79,11 +122,14 @@ from fabricpc.experiments.statistics import (
     estimate_required_n,
 )
 
-stats_a = descriptive_stats(arm_a_metrics)   # {"mean", "std", "min", "max", "median"}
-t_stat, p_val = paired_ttest(arm_a_metrics, arm_b_metrics)
-d = cohens_d(arm_a_metrics, arm_b_metrics)
-n = estimate_required_n(arm_a_metrics, arm_b_metrics)
+stats = descriptive_stats(a_vals)     # DescriptiveStats: mean, std, se, min, max, n
+ttest = paired_ttest(a_vals, b_vals)  # PairedTestResult: t_statistic, p_value,
+                                      #   mean_difference, significant_at_05, n
+effect = cohens_d(a_vals, b_vals)     # EffectSize: d, magnitude
+n_req = estimate_required_n(effect.d) # trials for p<0.05 at 80% power; 999999 when d ~ 0
 ```
+
+`paired_ttest` raises `ValueError` when the arrays differ in length or hold fewer than 2 samples. `cohens_d` uses the standard deviation of the per-trial differences as the denominator (paired design); `magnitude` is one of `"negligible"`, `"small"`, `"medium"`, `"large"`.
 
 ---
 
