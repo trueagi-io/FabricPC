@@ -133,6 +133,13 @@ the remaining Linear layers. Even there the second increment stays
 positive -- adding the late Hopfield on top of the early one helps,
 although the late position alone underperforms. The descriptive total
 effect (2hopfield - MLP) peaks at +13.0 pp at K=500, n=2.0.
+
+Quick run results (default args, RTX3090, cuda13, jax 0.10.2)
+  Cell summary:
+    MLP       : 58.32%
+    1hopfield : 62.86%
+    1hopfield-late: 61.68%
+    2hopfield : 64.26%
 """
 
 from jax_setup import set_jax_flags_before_importing_jax
