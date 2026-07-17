@@ -163,17 +163,22 @@ Returns `{"loss", "perplexity", "accuracy", "num_batches"}` — average per-toke
 ```python
 from fabricpc.training import generate_autoregressive
 
+x_indices, _ = next(iter(loader))
+prompt = x_indices[0]        # one sequence: 1-D int32 token ids, shape (seq_len,)
+
 tokens = generate_autoregressive(
     trained_params,
     structure,
-    prompt=prompt_ids,       # int32 token ids, e.g. from a loader batch
+    prompt=prompt,
     max_new_tokens=200,
     rng_key=gen_key,
     temperature=0.8,
     top_k=40,
 )
-print(loader.decode(tokens))
+print(loader.decode(tokens))  # tokens: shape (seq_len + 200,)
 ```
+
+The prompt is 1-D `(prompt_len,)` for a single sequence or 2-D `(batch, prompt_len)` for a batch; the returned tokens match (`(prompt_len + max_new_tokens,)` or `(batch, prompt_len + max_new_tokens)`). `loader.decode` accepts one 1-D sequence, so decode a batched result row by row.
 
 - `temperature` divides the logits before sampling: below 1.0 concentrates probability on the most likely tokens, above 1.0 flattens the distribution.
 - `top_k` keeps only the k most probable tokens.

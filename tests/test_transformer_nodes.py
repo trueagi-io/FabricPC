@@ -29,8 +29,8 @@ from fabricpc.nodes.transformer_v2 import (
     MhaResidualNode,
     LnMlp1Node,
     Mlp2ResidualNode,
-    create_deep_transformer,
 )
+from fabricpc.models import create_deep_transformer
 
 
 @pytest.fixture

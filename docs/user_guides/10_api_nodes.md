@@ -220,7 +220,7 @@ prev ─────────┤  slot("skip") ──────────
 
 `fabricpc.nodes.ConvNode`
 
-Convolution node: `z_mu = activation(conv(x, kernel) + b)`. Each output position is predicted from a local window of the input feature map. One class covers 1D, 2D, and 3D convolution; the spatial rank is inferred from `len(shape) - 1`. Layout is channels-last: `(batch, spatial..., channels)`.
+Convolution node: `z_mu = activation(conv(x, kernel) + b)`, where `x` is the input feature map arriving on the `"in"` slot, `kernel` the node's convolution kernel, and `b` the per-channel bias. Each output position is predicted from a local window of the input feature map. One class covers 1D, 2D, and 3D convolution; the spatial rank is inferred from `len(shape) - 1`. Layout is channels-last: `(batch, spatial..., channels)`.
 
 ```python
 from fabricpc.nodes import ConvNode
@@ -380,7 +380,7 @@ x → LayerNorm → MHA → + → LayerNorm → FFN → +
 
 ## Decomposed Transformer (v2)
 
-Fine-grained transformer components, exported from `fabricpc.nodes` (defined in `fabricpc.nodes.transformer_v2`). Each block stage is a separate PC node, so inference assigns a latent state and a prediction error to the attention and MLP stages individually instead of to a whole block.
+Fine-grained transformer components, exported from `fabricpc.nodes`; the graph builder `create_deep_transformer` lives in `fabricpc.models`. Each sub-block stage is a separate PC node, so inference assigns a latent state and a prediction error to the attention and MLP stages individually instead of to a whole block.
 
 - **`EmbeddingNode`** — Token embedding lookup
 - **`MhaResidualNode`** — Multi-head attention with the block's first residual added inside the node
@@ -400,14 +400,28 @@ tokens → EmbeddingNode ──┼──→ MhaResidualNode ──────�
 
 Each block wires two unscaled bypass edges: the previous block's output feeds both `MhaResidualNode` slots (`"in"` and `"skip"`), and the attention output feeds both the MLP path (`LnMlp1Node`) and `Mlp2ResidualNode`'s `"residual"` slot. Causal masking happens inside `MhaResidualNode` via `is_causal`; no mask node or mask edge exists in the graph.
 
+Symbols used in the node formulas below:
+
+| Symbol | Meaning |
+|--------|---------|
+| `z_mu` | The node's prediction for its latent state, computed by its forward pass |
+| `x_in` | Input arriving on the node's `"in"` slot (the muPC-scaled path) |
+| `x_skip`, `x_residual` | Inputs on the unscaled bypass slots of `MhaResidualNode` / `Mlp2ResidualNode` |
+| `E` | The `(vocab_size, embed_dim)` embedding table |
+| `W_q`, `W_k`, `W_v`, `W_o` | Attention projection weights inside `MhaResidualNode` |
+| `W_ff1`, `b_ff1` | First MLP projection weight and bias (`LnMlp1Node`) |
+| `W_ff2`, `b_ff2` | Second MLP projection weight and bias (`Mlp2ResidualNode`) |
+| `W_out`, `b_out` | Vocabulary projection weight and bias (`VocabProjectionNode`) |
+| `d` | Number of transformer blocks (the builder's `depth`) |
+
 ### create_deep_transformer
 
-`fabricpc.nodes.create_deep_transformer`
+`fabricpc.models.create_deep_transformer`
 
 Builds the complete depth-`d` language-model graph: embedding, `d` blocks of the three block nodes, and the vocabulary projection.
 
 ```python
-from fabricpc.nodes import create_deep_transformer
+from fabricpc.models import create_deep_transformer
 from fabricpc.core.inference import InferenceSGD
 
 structure = create_deep_transformer(
@@ -483,7 +497,7 @@ Pre-norm multi-head self-attention with the residual added inside the node: `z_m
 
 ### LnMlp1Node
 
-LayerNorm followed by the first MLP projection: `z_mu = activation(W_ff1 @ LayerNorm(x) + b_ff1)`.
+LayerNorm followed by the first MLP projection: `z_mu = activation(W_ff1 @ LayerNorm(x_in) + b_ff1)`, where `x_in` is the `"in"` slot input — the block's `MhaResidualNode` output.
 
 **Parameters:**
 
@@ -526,7 +540,7 @@ Second MLP projection with the block residual added inside the node: `z_mu = x_r
 
 ### VocabProjectionNode
 
-Projection to vocabulary logits: `z_mu = activation(W_out @ x + b_out)` with a softmax default activation. The default energy is `CrossEntropyEnergy` — unlike every other built-in node, which defaults to `GaussianEnergy` — so clamping one-hot targets on this node makes its energy the cross-entropy training loss.
+Projection to vocabulary logits: `z_mu = activation(W_out @ x_in + b_out)`, where `x_in` is the `"in"` slot input — the final block's `Mlp2ResidualNode` output — and the default activation is softmax. The default energy is `CrossEntropyEnergy` — unlike every other built-in node, which defaults to `GaussianEnergy` — so clamping one-hot targets on this node makes its energy the cross-entropy training loss.
 
 **Parameters:**
 
@@ -545,8 +559,4 @@ Projection to vocabulary logits: `z_mu = activation(W_out @ x + b_out)` with a s
 
 **muPC fan_in:** `source_shape[-1]` (base-class default) — `embed_dim`.
 
-### muPC residual depth
-
-A depth-`d` model has residual depth `L = 2d`: each block contributes two nodes with a skip-bearing slot (`MhaResidualNode` via `"skip"`, `Mlp2ResidualNode` via `"residual"`), and muPC counts one per node along the longest path. See [Initialization and Scaling](05_initialization_and_scaling.md).
-
-**See also:** `examples/transformer_v2_demo.py` (`--mode pc|backprop`, `--tokenizer char|bpe`) for end-to-end training and generation, and [Training and Evaluation](08_training_and_evaluation.md) for the autoregressive training API.
+**See also:** the muPC residual depth of this architecture (`L = 2d`) is derived in [Initialization and Scaling](05_initialization_and_scaling.md); `examples/transformer_v2_demo.py` (`--mode pc|backprop`, `--tokenizer char|bpe`) for end-to-end training and generation; [Training and Evaluation](08_training_and_evaluation.md) for the autoregressive training API.

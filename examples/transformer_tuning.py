@@ -19,7 +19,7 @@ set_jax_flags_before_importing_jax()
 import optuna
 from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.inference import InferenceSGDNormClip
-from fabricpc.nodes.transformer_v2 import create_deep_transformer
+from fabricpc.models import create_deep_transformer
 from fabricpc.tuning.bayesian_tuner import BayesianTuner
 from fabricpc.utils.data import CharDataLoader, BpeDataLoader
 from optuna.storages import JournalStorage, JournalFileStorage

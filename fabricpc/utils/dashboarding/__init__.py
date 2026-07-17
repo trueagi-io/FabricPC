@@ -4,26 +4,8 @@ This package provides experiment tracking capabilities using Aim.
 All components are designed for lazy loading - Aim is only imported
 when actually used.
 
-Example:
-    from fabricpc.utils.dashboarding import (
-        AimExperimentTracker,
-        TrackingConfig,
-        create_tracking_callbacks,
-    )
-
-    tracker, iter_cb, epoch_cb = create_tracking_callbacks(
-        config=TrackingConfig(experiment_name="my_experiment"),
-        structure=structure,
-        hparams=train_config,
-    )
-
-    trained_params, _, _ = train_pcn(
-        params, structure, train_loader, optimizer, train_config, rng_key,
-        iter_callback=iter_cb,
-        epoch_callback=epoch_cb,
-    )
-
-    tracker.close()
+Usage example: docs/user_guides/09_experiment_tracking.md (the canonical,
+contract-tested copy).
 """
 
 from fabricpc.utils.dashboarding._aim_available import (

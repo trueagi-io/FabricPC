@@ -10,7 +10,7 @@ import optuna
 import pytest
 
 from fabricpc.core.inference import InferenceSGDNormClip
-from fabricpc.nodes.transformer_v2 import create_deep_transformer
+from fabricpc.models import create_deep_transformer
 from fabricpc.graph_initialization import initialize_params
 from fabricpc.tuning.bayesian_tuner import BayesianTuner
 import fabricpc.tuning.bayesian_tuner as tuner_mod

@@ -5,8 +5,9 @@ and checks it against the installed fabricpc API:
 
 1. Parse gate: a block tagged ``python`` must parse as Python.
 2. Import check: every top-level import statement in a block must execute.
-   Missing third-party optional dependencies are tolerated; a missing fabricpc
-   module or symbol is a failure.
+   A missing module is tolerated only when it is one of the project's declared
+   optional dependencies (``TOLERATED_MISSING``); any other missing module —
+   fabricpc, a core dependency, or a typo'd name — is a failure.
 3. Signature check: for calls whose callee resolves to a fabricpc callable
    (through the block's imports, or through a variable assigned from a
    fabricpc class), every keyword argument must exist in the callable's
@@ -14,13 +15,12 @@ and checks it against the installed fabricpc API:
    expansion, the full binding (positional arity and required arguments) is
    checked as well.
 
-A block is exempted by placing ``<!-- doc-snippet: skip -->`` on the line
-before its opening fence.
+A block is exempted by placing ``<!-- doc-snippet: skip -->`` on the nearest
+non-blank line above its opening fence.
 """
 
 import ast
 import inspect
-import re
 import sys
 from pathlib import Path
 
@@ -32,41 +32,65 @@ DOC_FILES = sorted((REPO_ROOT / "docs" / "user_guides").glob("*.md")) + [
 ]
 
 SKIP_MARKER = "<!-- doc-snippet: skip -->"
-FENCE_RE = re.compile(r"^```(\w*)\s*$")
+
+# Import names of the optional-dependency groups in pyproject.toml ([tfds],
+# [experiments], [viz]). Only these may be absent without failing the import
+# check; a missing core dependency or a typo'd module name is a doc defect.
+TOLERATED_MISSING = {
+    "aim",
+    "kaleido",
+    "pandas",
+    "plotly",
+    "scipy",
+    "tensorflow",
+    "tensorflow_datasets",
+    "tokenizers",
+}
 
 # Ensure repo-root modules used in snippets (e.g. jax_setup) are importable.
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
+def _skip_marker_precedes(lines, fence_idx):
+    """True when the nearest non-blank line above lines[fence_idx] is the marker."""
+    for j in range(fence_idx - 1, -1, -1):
+        stripped = lines[j].strip()
+        if stripped:
+            return stripped == SKIP_MARKER
+    return False
+
+
 def extract_python_blocks(path):
-    """Return [(start_line, source)] for python-tagged fenced blocks."""
+    """Return [(start_line, source)] for python-tagged fenced blocks.
+
+    Any line whose stripped form starts with ``` toggles a fence, so an
+    opening fence carrying an info string (e.g. ```python title=x) cannot
+    desynchronize extraction; its language is the first word after the
+    backticks.
+    """
     blocks = []
     lines = path.read_text().splitlines()
     in_block = False
     block_lang = None
     block_start = 0
+    block_skipped = False
     buf = []
-    skip_next = False
-    for i, line in enumerate(lines, start=1):
-        m = FENCE_RE.match(line.strip()) if line.strip().startswith("```") else None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
         if not in_block:
-            if line.strip() == SKIP_MARKER:
-                skip_next = True
-                continue
-            if m:
+            if stripped.startswith("```"):
                 in_block = True
-                block_lang = m.group(1)
-                block_start = i + 1
+                info = stripped[3:].strip()
+                block_lang = info.split()[0] if info else ""
+                block_start = i + 2  # 1-based line after the fence
+                block_skipped = _skip_marker_precedes(lines, i)
                 buf = []
-            elif line.strip():
-                skip_next = False
         else:
-            if line.strip().startswith("```"):
-                if block_lang == "python" and not skip_next:
+            if stripped.startswith("```"):
+                if block_lang == "python" and not block_skipped:
                     blocks.append((block_start, "\n".join(buf)))
                 in_block = False
-                skip_next = False
             else:
                 buf.append(line)
     return blocks
@@ -83,13 +107,12 @@ def _exec_import(stmt, namespace, failures, label):
         exec(code, namespace)
     except ModuleNotFoundError as e:
         top = (e.name or "").split(".")[0]
-        if top == "fabricpc" or top == "jax_setup":
+        if top not in TOLERATED_MISSING:
             failures.append(f"{label}: import failed: {e}")
-        # Optional third-party dependency absent in this environment: tolerated.
     except ImportError as e:
-        src = ast.unparse(stmt)
-        if "fabricpc" in src:
-            failures.append(f"{label}: import failed: {e}")
+        # The module imported but the requested symbol is missing: always a
+        # doc defect (an absent module raises ModuleNotFoundError above).
+        failures.append(f"{label}: import failed: {e}")
     except Exception as e:  # noqa: BLE001 - any other error is a doc defect
         failures.append(f"{label}: import raised {type(e).__name__}: {e}")
 
@@ -217,3 +240,23 @@ def test_doc_snippets(doc_path):
         rel = doc_path.relative_to(REPO_ROOT)
         failures.extend(check_block(source, f"{rel}:{start_line}"))
     assert not failures, "\n".join(failures)
+
+
+def test_typoed_import_is_reported():
+    failures = check_block("import optx\nopt = optx.adamw(1e-3)\n", "typo")
+    assert failures, "a misspelled third-party import must be reported"
+
+
+def test_info_string_fence_does_not_desync(tmp_path):
+    md = tmp_path / "doc.md"
+    md.write_text("```python title=example.py\nx = 1\n```\n\n```python\ny = 2\n```\n")
+    assert extract_python_blocks(md) == [(2, "x = 1"), (6, "y = 2")]
+
+
+def test_skip_marker_exempts_only_the_next_block(tmp_path):
+    md = tmp_path / "doc.md"
+    md.write_text(
+        f"{SKIP_MARKER}\n\n```python\nskipped = True\n```\n\n"
+        "```python\nchecked = True\n```\n"
+    )
+    assert extract_python_blocks(md) == [(8, "checked = True")]

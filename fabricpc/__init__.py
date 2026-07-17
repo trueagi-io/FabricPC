@@ -43,9 +43,6 @@ from importlib.metadata import version
 __version__ = version("fabricpc")
 
 # Submodules (for advanced use)
-# nodes must precede graph_assembly: graph_assembly imports nodes.base,
-# and nodes.transformer_v2 imports back from graph_assembly. Loading nodes
-# first ensures nodes.base is fully initialized before graph_assembly runs.
 from fabricpc import (
     core,
     graph_initialization,
@@ -53,6 +50,7 @@ from fabricpc import (
     training,
     utils,
     graph_assembly,
+    models,
     experiments,
 )
 
@@ -76,6 +74,7 @@ __all__ = [
     "core",
     "graph_assembly",
     "graph_initialization",
+    "models",
     "nodes",
     "training",
     "utils",

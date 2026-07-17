@@ -104,22 +104,8 @@ def create_tracking_callbacks(
     Returns:
         Tuple of (tracker, iter_callback, epoch_callback).
 
-    Example:
-        tracker, iter_cb, epoch_cb = create_tracking_callbacks(
-            config=TrackingConfig(experiment_name="mnist"),
-            structure=structure,
-            eval_fn=evaluate_pcn,
-            eval_loader=test_loader,
-            hparams=train_config,
-        )
-
-        trained_params, _, _ = train_pcn(
-            params, structure, train_loader, optimizer, train_config, rng_key,
-            iter_callback=iter_cb,
-            epoch_callback=epoch_cb,
-        )
-
-        tracker.close()
+    Usage example: docs/user_guides/09_experiment_tracking.md (the canonical,
+    contract-tested copy).
     """
     tracker = AimExperimentTracker(config or TrackingConfig(), repo=repo)
 

@@ -60,12 +60,12 @@ runs/
 .aim/
 
 # Data, checkpoints, and large artifacts
+# /models/ is root-anchored: the saved-model artifact folder, not the
+# fabricpc/models package.
 data/
 datasets/
 checkpoints/
-models/
-models/*.pt
-models/*.pth
+/models/
 *.pt
 *.pth
 

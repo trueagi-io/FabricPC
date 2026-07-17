@@ -55,7 +55,7 @@ from fabricpc.training import (
     generate_autoregressive,
 )
 from fabricpc.core.inference import InferenceSGDNormClip
-from fabricpc.nodes.transformer_v2 import create_deep_transformer
+from fabricpc.models import create_deep_transformer
 from fabricpc.utils.data import CharDataLoader, BpeDataLoader
 import optax
 import time

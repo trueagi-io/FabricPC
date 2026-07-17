@@ -17,7 +17,7 @@ from fabricpc.core.mupc import (
     compute_mupc_scalings,
     _count_skip_connections_depth,
 )
-from fabricpc.nodes.transformer_v2 import create_deep_transformer
+from fabricpc.models import create_deep_transformer
 
 
 def _build(depth):

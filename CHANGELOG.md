@@ -1,9 +1,9 @@
 # Changelog
 
-## [0.3.2] - 2026-07-16
+## [0.3.2] - 2026-07-17
 ### New features
 - Convolutional and pooling nodes: `ConvNode` (unified 1D/2D/3D) and the weight-free `MaxPool`/`AvgPool`, tensors in channels-last order. Declared output shapes are validated at `initialize_params` time, before the JIT-compiled forward pass. Demo: `examples/mnist_conv_demo.py`; see `docs/user_guides/10_api_nodes.md`.
-- Autoregressive language modeling with transformer v2: `create_deep_transformer` builds muPC-scaled graphs with internal causal masking, trained end to end via `train_autoregressive`/`evaluate_autoregressive`/`generate_autoregressive`. Demo: `examples/transformer_v2_demo.py`; see `docs/user_guides/08_training_and_evaluation.md`.
+- Autoregressive language modeling with transformer v2: `create_deep_transformer` (new `fabricpc.models` package) builds muPC-scaled graphs with internal causal masking, trained end to end via `train_autoregressive`/`evaluate_autoregressive`/`generate_autoregressive`. Demo: `examples/transformer_v2_demo.py`; see `docs/user_guides/08_training_and_evaluation.md`.
 - BPE tokenization: `BpeDataLoader` (HuggingFace `tokenizers`, in the `[tfds]` extra) trains a byte-pair tokenizer on first use and caches the encoded splits. See `docs/user_guides/14_api_data.md`.
 - Two-phase Bayesian hyperparameter tuning with Optuna (`fabricpc.tuning.bayesian_tuner`): Phase 1 architecture search with pruning, Phase 2 fine-tuning of continuous hyperparameters; both phases minimize validation perplexity. See `docs/user_guides/15_api_experiments.md`.
 - `PlannedMultiContrastExperiment`: N-arm experiment runner with paired arms — every arm sees identical data and batch order per trial seed — and constructor-declared planned contrasts (paired t-test + Cohen's d). `ABExperiment` is now a thin 2-arm wrapper; its API is unchanged. See `docs/user_guides/15_api_experiments.md`.

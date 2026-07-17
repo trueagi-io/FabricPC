@@ -242,7 +242,7 @@ Full example: `examples/mnist_conv_demo.py`. Constructor tables: [Nodes API](10_
 
 ### Pooling (MaxPool, AvgPool)
 
-Pooling reduces spatial size without learnable weights: `MaxPool` takes the maximum over each window, `AvgPool` the mean. Stride defaults to the window shape, giving non-overlapping windows. Global average pooling (`AvgPool` with `global_pool=True` and rank-1 `shape=(C,)`) collapses the whole spatial grid to one vector per channel — the standard bridge from a convolutional stack to a classifier head, as in `examples/resnet18_cifar10_demo.py`:
+Pooling reduces spatial size without learnable weights: `MaxPool` takes the maximum over each window, `AvgPool` the mean. Stride defaults to the window shape, giving non-overlapping windows. Global average pooling (`AvgPool` with `global_pool=True` and rank-1 `shape=(C,)`) collapses the whole spatial grid to one vector per channel, as in `examples/resnet18_cifar10_demo.py`:
 
 ```python
 from fabricpc.nodes import AvgPool
@@ -251,7 +251,7 @@ avgpool = AvgPool(shape=(256,), name="avgpool", global_pool=True)
 # (batch, H, W, 256) -> (batch, 256), then a Linear classifier head
 ```
 
-Pooling nodes are weightless, so their muPC fan_in is 1 and muPC applies no attenuation to their incoming edges. Constructor tables: [Nodes API](10_api_nodes.md).
+Pooling nodes are weightless, so their muPC fan_in is 1. The incoming-edge scale is still `a = gain / sqrt(fan_in * K_slot * L)` — `gain` the activation gain (1 for the identity default), `K_slot` the number of edges arriving at the slot, `L` the graph's residual depth — so fan_in = 1 removes only the weight-matrix factor. In `examples/resnet18_cifar10_demo.py` (`L = 8`) the global pool's incoming edge is scaled by `1/sqrt(8) ≈ 0.35`; the scale is exactly 1.0 only when `K_slot = 1` and `L = 1`. Constructor tables: [Nodes API](10_api_nodes.md).
 
 ### TransformerBlock
 
@@ -285,36 +285,9 @@ Edge(source=mask_node, target=block.slot("mask"))
 
 ### Decomposed Transformer (v2)
 
-Fine-grained transformer components for deeper PC inference. Instead of a monolithic block, each stage is its own node with its own latent state and prediction error:
+Fine-grained transformer components for deeper PC inference. Instead of a monolithic block, each stage is its own node with its own latent state and prediction error: `EmbeddingNode` (token lookup), then per block `MhaResidualNode` (attention plus the block's first residual; causal masking applied internally via `is_causal`, so no mask node or mask edge exists), `LnMlp1Node` (LayerNorm plus first MLP projection), and `Mlp2ResidualNode` (second MLP projection plus the block's second residual), closed by `VocabProjectionNode` (vocabulary logits).
 
-- `EmbeddingNode`: token embedding lookup only — positional information comes from RoPE inside `MhaResidualNode`
-- `MhaResidualNode`: multi-head attention, adding the block's first residual inside the node; causal masking is applied internally via `is_causal`, so no mask node or mask edge exists
-- `LnMlp1Node`: LayerNorm and first MLP projection
-- `Mlp2ResidualNode`: second MLP projection, adding the block's second residual inside the node
-- `VocabProjectionNode`: projection to vocabulary logits
-
-```
-                         ┌──────────────────────── one transformer block ─────────────────┐
-                         │                                                                │
-tokens → EmbeddingNode ──┼──→ MhaResidualNode ──────→ LnMlp1Node ──→ Mlp2ResidualNode ────┼──→ VocabProjectionNode → logits
-                    │    │    ("in", scaled) ↑   │                   ("in", scaled) ↑     │
-                    │    │                   │   │                                  │     │
-                    └────┼───→ ("skip") ─────┘   └──────→ ("residual") ─────────────┘     │
-                         └────────────────────────────────────────────────────────────────┘
-```
-
-Models are normally assembled with the builder rather than by hand:
-
-```python
-from fabricpc.nodes import create_deep_transformer
-
-structure = create_deep_transformer(
-    depth=4, embed_dim=128, num_heads=8, mlp_dim=512,
-    seq_len=256, vocab_size=vocab_size, inference=inference,
-)
-```
-
-Full constructor signatures and slot details: [Nodes API](10_api_nodes.md).
+Models are normally assembled with `fabricpc.models.create_deep_transformer` rather than by hand. The block wiring diagram, builder parameters, and per-node constructor tables: [Nodes API](10_api_nodes.md).
 
 ## Connecting Nodes with Edges
 
