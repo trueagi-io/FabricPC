@@ -10,9 +10,10 @@ has enough samples for the attractors to form usable class prototypes.
 
 Architecture (same depth-4 graph across all arms, hidden width = 64)::
 
-    "MLP"        pixels(784) -> 64(Linear) -> 64(Linear)          -> 64(Linear)          -> 10(softmax+CE)
-    "1hopfield"  pixels(784) -> 64(Linear) -> 64(StorkeyHopfield) -> 64(Linear)          -> 10(softmax+CE)
-    "2hopfield"  pixels(784) -> 64(Linear) -> 64(StorkeyHopfield) -> 64(StorkeyHopfield) -> 10(softmax+CE)
+    "MLP"             pixels(784) -> 64(Linear) -> 64(Linear)          -> 64(Linear)          -> 10(softmax+CE)
+    "1hopfield"       pixels(784) -> 64(Linear) -> 64(StorkeyHopfield) -> 64(Linear)          -> 10(softmax+CE)
+    "1hopfield-late"  pixels(784) -> 64(Linear) -> 64(Linear)          -> 64(StorkeyHopfield) -> 10(softmax+CE)
+    "2hopfield"       pixels(784) -> 64(Linear) -> 64(StorkeyHopfield) -> 64(StorkeyHopfield) -> 10(softmax+CE)
 
 Position 0 is always Linear (the 784 -> 64 feature-extraction projection;
 StorkeyHopfield is width-preserving and cannot reduce dimension). The
@@ -21,22 +22,26 @@ classifier head is always Linear with Softmax + CrossEntropy energy.
 Hypothesis
 ----------
 Accuracy gains are cumulative in the number of Linear -> StorkeyHopfield
-substitutions in the hidden stack. Concretely, two adjacent paired
-contrasts on the per-trial accuracy differences:
+substitutions in the hidden stack, and driven by the substitution count
+rather than the substituted position. Three planned paired contrasts on the
+per-trial accuracy differences:
 
-    substitution 1:   acc(1hopfield) - acc(MLP)       > 0
-    substitution 2:   acc(2hopfield) - acc(1hopfield) > 0
+    substitution 1:   acc(1hopfield) - acc(MLP)            > 0
+    substitution 2:   acc(2hopfield) - acc(1hopfield)      > 0
+    position:         acc(1hopfield-late) - acc(1hopfield) ~ 0
 
-are each predicted to be positive on average, and the per-cell cumulative
-claim ("substituting more layers helps further") is the conjunction: both
-contrasts positive AND each starred (two-sided paired t-test p<0.05). The
-K x noise grid is a *sensitivity analysis* of where the per-substitution
-gain is positive: it grows with input noise, requires K large enough for
-the attractors to form class prototypes (deltas grow with K and are
-typically negative at K=10 with low noise), and scarcity alone is not
-sufficient to produce a Hopfield advantage. The reported 2hopfield - MLP
-delta is the *total* effect (both substitutions combined), which is
-informative descriptively but not tested as a planned contrast.
+The 1hopfield-late arm is the position control: without it, substitution 2
+would conflate adding a second Hopfield layer with occupying position 2 for
+the first time (only the 2hopfield arm places a Hopfield layer there). The
+per-cell cumulative claim ("substituting more layers helps further") is the
+conjunction: both increment contrasts positive AND each starred (two-sided
+paired t-test p<0.05). The K x noise grid is a *sensitivity analysis* of
+where the per-substitution gain is positive: it grows with input noise,
+requires K large enough for the attractors to form class prototypes, and
+data scarcity alone is not sufficient to produce a Hopfield advantage. The
+reported 2hopfield - MLP delta is the *total* effect (both substitutions
+combined), which is informative descriptively but not tested as a planned
+contrast.
 
 Experiment grid: K (shots per class) x noise_std
     - K controls data scarcity: how many samples each arm trains on.
@@ -55,67 +60,79 @@ JAX.)
 
 Usage::
 
-    # Full default sweep: K in {500}, noise in {2.0}, n_trials=5, epochs=1.
-    # Bare invocation is intentionally fast so that JIT compilation, the
-    # tfds download, and the printed pipeline are visible in well under a
-    # minute on a GPU. The documented Results block below was produced with
-    # --n_trials 10 --num_epochs 20 on the full grid (see the explicit
-    # commands beneath it).
+    # Default sweep: all four arms, K in {500}, noise in {2.0}, n_trials=5,
+    # epochs=1. Bare invocation is intentionally fast so that JIT
+    # compilation, the tfds download, and the printed pipeline are visible
+    # in well under a minute on a GPU. The documented Results block below
+    # was produced with --n_trials 10 --num_epochs 20 on the full grid (see
+    # the explicit command beneath it).
     python examples/storkey_hopfield_demo.py
 
-    # All three arms, both planned contrasts; K x noise grid; long run:
-    python examples/storkey_hopfield_demo.py --networks 1hopfield 2hopfield \\
+    # All four arms, all three planned contrasts; K x noise grid; long run:
+    python examples/storkey_hopfield_demo.py \\
+        --networks 1hopfield 1hopfield-late 2hopfield \\
         --k_values 10,50,100,500 --noise_levels 0.0,0.5,1.0,2.0 \\
         --n_trials 10 --num_epochs 20
 
-    # 2hopfield only (total-effect contrast against MLP, no second-increment
-    # test):
+    # 2hopfield only (total-effect contrast against MLP, no increment or
+    # position tests):
     python examples/storkey_hopfield_demo.py --networks 2hopfield \\
         --k_values 50,500 --noise_levels 0.0,2.0
 
-Results (Fashion-MNIST, paired runner; --strength 2.0, n_trials=10,
-num_epochs=20). Numbers below are from the paired-runner re-run on the
-GPU server. Each trial's seed flows through all three arms and the
-train loader is reset() between arms, so the per-trial difference vector
-is a clean within-trial paired contrast. Stars are two-sided paired
-t-tests at p<0.05, uncorrected. Both heatmaps below are the *planned*
-contrasts; the total effect (2hopfield - MLP), which equals the sum of
-the two heatmap cells, is reported descriptively in the demo output but
-is not a planned contrast.
+Results (Fashion-MNIST; --strength 2.0, n_trials=10, num_epochs=20, the
+full-grid command above). Each trial's seed flows through all four arms
+and the runner rebuilds the loaders per arm from that seed, so the
+per-trial difference vector is a clean within-trial paired contrast.
+Stars are two-sided paired t-tests at p<0.05, uncorrected across
+16 cells x 3 contrasts. The heatmaps are the three *planned* contrasts;
+the total effect (2hopfield - MLP) is reported descriptively in the demo
+output but is not tested.
 
     Delta Accuracy Heatmap (1hopfield - MLP, percentage points):
 
          K  n=0.0  n=0.5  n=1.0  n=2.0
     ----------------------------------
-        10  -1.8*  -1.0   +0.4   +2.6*
-        50  -0.1   +0.8*  +3.1*  +7.6*
-       100  +0.1   +1.1*  +3.5*  +8.3*
-       500  +0.3   +1.5*  +3.6*  +7.4*
+        10  -0.9*  -0.5   +1.2*  +4.1*
+        50  -0.1   +0.8*  +3.3*  +8.1*
+       100  -0.3   +0.9*  +3.3*  +8.5*
+       500  +0.3   +1.3*  +3.3*  +7.0*
 
     Delta Accuracy Heatmap (2hopfield - 1hopfield, percentage points):
 
          K  n=0.0  n=0.5  n=1.0  n=2.0
     ----------------------------------
-        10  -2.9*  -2.7*  -1.5*  +0.7
-        50  -0.3   -0.1   +0.8*  +2.9*
-       100  +0.2   +0.5   +1.3*  +3.2*
-       500  +0.3*  +0.8*  +2.4*  +5.9*
+        10  -0.8   -0.3   +0.3   +1.9*
+        50  +0.1   +0.2   +1.1*  +2.9*
+       100  +0.3   +0.6   +1.4*  +3.1*
+       500  +0.4*  +0.8*  +2.5*  +6.0*
+
+    Delta Accuracy Heatmap (1hopfield-late - 1hopfield, percentage points):
+
+         K  n=0.0  n=0.5  n=1.0  n=2.0
+    ----------------------------------
+        10  +0.7   +0.8*  +0.2   -0.9
+        50  +0.3   -0.1   -0.8*  -3.1*
+       100  +0.2   -0.2   -1.2*  -3.0*
+       500  +0.1   -0.0   -0.2   +0.4
 
       * = significant at p<0.05 (two-sided paired t-test, uncorrected)
 
-Cumulative gain (BOTH planned contrasts starred-positive in the same
-cell) is attained in 7 of 16 cells: every cell of K in {50, 100, 500}
-crossed with n in {1.0, 2.0}, plus K=500 at n=0.5. The K=10 row is the
-clear inverse zone -- with so few examples per class the Storkey
-attractors do not form usable class prototypes and Hopfield
-substitutions cost accuracy at low noise. At clean inputs (n=0.0) both
-contrasts are near zero across the rest of the grid -- when there is
-no noise to denoise, the attractor does not pay rent.
-
-Caveat on K=10: ``FewShotLoader`` drops the remainder batch, so K=10
-trains on 64 of 100 samples per epoch (one 64-sample batch); the K=10
-row is confounded with that truncation and should be read with that
-in mind. Use a smaller batch size at low K to remove this confound.
+Cumulative gain (BOTH increment contrasts starred-positive in the same
+cell) is attained in 8 of 16 cells: K in {50, 100, 500} crossed with
+n in {1.0, 2.0}, plus K=500 at n=0.5 and K=10 at n=2.0. Both increments
+grow with noise at every K, and at clean inputs (n=0.0) both are near
+zero: with no noise to denoise, the attractor dynamics contribute
+nothing, and at K=10 the first substitution significantly costs accuracy
+(-0.9 pp). The position contrast supports count-over-position where the
+increments are largest: at K=500 and at clean inputs the single
+substitution is position-insensitive (deltas within +/-0.4 pp). At
+K in {50, 100} under noise the late placement is significantly worse
+(-0.8 to -3.1 pp): an early attractor denoises the representation
+directly after the 784 -> 64 projection, before it propagates through
+the remaining Linear layers. Even there the second increment stays
+positive -- adding the late Hopfield on top of the early one helps,
+although the late position alone underperforms. The descriptive total
+effect (2hopfield - MLP) peaks at +13.0 pp at K=500, n=2.0.
 """
 
 from jax_setup import set_jax_flags_before_importing_jax
@@ -162,6 +179,7 @@ HIDDEN_WIDTH = 64
 ARCH_CONFIGS: Dict[str, List[str]] = {
     "MLP": ["Linear", "Linear", "Linear"],
     "1hopfield": ["Linear", "StorkeyHopfield", "Linear"],
+    "1hopfield-late": ["Linear", "Linear", "StorkeyHopfield"],
     "2hopfield": ["Linear", "StorkeyHopfield", "StorkeyHopfield"],
 }
 
@@ -215,11 +233,13 @@ def parse_args():
         "--networks",
         nargs="+",
         type=str,
-        default=["1hopfield", "2hopfield"],
-        choices=["1hopfield", "2hopfield"],
+        default=["1hopfield", "1hopfield-late", "2hopfield"],
+        choices=["1hopfield", "1hopfield-late", "2hopfield"],
         help=(
             "Which Hopfield-substituted variants to run alongside the MLP "
-            "baseline. MLP is always included implicitly. Default: both."
+            "baseline. MLP is always included implicitly. Default: all three "
+            "(1hopfield-late is the position control for the second "
+            "increment)."
         ),
     )
     parser.add_argument(
@@ -345,8 +365,9 @@ def make_data_factory(k_per_class, noise_std, batch_size):
     noise levels draw independent realizations rather than rescaled copies
     of one shared noise stream.
 
-    Pairing of the *minibatch order* across arms within a trial is handled
-    by the runner via the loaders' ``reset()`` method, not here.
+    Pairing of the *minibatch order* across arms within a trial holds
+    because the runner calls this factory once per arm with the same trial
+    seed and the loaders are deterministic in their seeds.
     """
     # Stable integer fingerprint of noise_std used as RNG entropy.
     noise_level_id = int(round(noise_std * 1_000_000))
@@ -396,26 +417,41 @@ def make_data_factory(k_per_class, noise_std, batch_size):
 def build_contrasts(hopfield_arms_to_run: List[str]) -> List[Tuple[str, str]]:
     """Build the planned-contrast list from the selected Hopfield arms.
 
-    The hypothesis decomposes into two ordered adjacent increments::
+    The full hypothesis decomposes into two ordered adjacent increments plus
+    one position control::
 
         substitution 1:   1hopfield - MLP
         substitution 2:   2hopfield - 1hopfield
+        position:         1hopfield-late - 1hopfield
 
-    Special case: ``--networks 2hopfield`` alone (without 1hopfield) cannot
-    test the second increment; in that case we fall back to the total-effect
-    contrast ``2hopfield - MLP``, which is reported and starred. main()
-    prints a caveat distinguishing this case from the increment test.
+    Partial ``--networks`` selections keep each contrast adjacent in
+    substitution count where possible:
+
+    - Without 1hopfield, 1hopfield-late takes over as the single-substitution
+      arm: its contrast is against MLP, and 2hopfield contrasts against it
+      (the second increment along the position-2 path).
+    - ``--networks 2hopfield`` alone can test neither increment; it falls
+      back to the total-effect contrast ``2hopfield - MLP``, which is
+      reported and starred. main() prints a caveat distinguishing this case
+      from the increment test.
     """
-    contrasts: List[Tuple[str, str]] = []
     has_1hop = "1hopfield" in hopfield_arms_to_run
+    has_late = "1hopfield-late" in hopfield_arms_to_run
     has_2hop = "2hopfield" in hopfield_arms_to_run
+
+    contrasts: List[Tuple[str, str]] = []
     if has_1hop:
         contrasts.append(("1hopfield", "MLP"))
-    if has_2hop:
-        if has_1hop:
+        if has_2hop:
             contrasts.append(("2hopfield", "1hopfield"))
-        else:
-            contrasts.append(("2hopfield", "MLP"))
+        if has_late:
+            contrasts.append(("1hopfield-late", "1hopfield"))
+    elif has_late:
+        contrasts.append(("1hopfield-late", "MLP"))
+        if has_2hop:
+            contrasts.append(("2hopfield", "1hopfield-late"))
+    elif has_2hop:
+        contrasts.append(("2hopfield", "MLP"))
     return contrasts
 
 
@@ -452,10 +488,13 @@ def print_contrasts_table(
         return
     print()
     print("Planned contrasts (paired two-sided t-test on per-trial differences):")
+    # Delta-column width per contrast: long labels (e.g.
+    # "1hopfield-late-1hopfield D%") widen their own column only.
+    delta_widths = [max(len(f"{a}-{b} D%"), 16) for a, b in contrasts]
     cols = [f"{'K':>5}", f"{'Noise':>6}"]
-    for a, b in contrasts:
+    for (a, b), w in zip(contrasts, delta_widths):
         label = f"{a}-{b}"
-        cols.append(f"{label + ' D%':>16}")
+        cols.append(f"{label + ' D%':>{w}}")
         cols.append(f"{'p':>8}")
         cols.append(f"{'sig':>4}")
         cols.append(f"{'d':>7}")
@@ -464,10 +503,10 @@ def print_contrasts_table(
     print("-" * len(header))
     for r in grid:
         parts = [f"{r['k']:>5}", f"{r['noise']:>6.1f}"]
-        for a, b in contrasts:
+        for (a, b), w in zip(contrasts, delta_widths):
             key = f"{a}-{b}"
             delta_str = _pct(r[f"{key}_delta"])
-            parts.append(f"{delta_str:>16}")
+            parts.append(f"{delta_str:>{w}}")
             p = r[f"{key}_pval"]
             parts.append(f"{p:8.4f}" if not np.isnan(p) else f"{'n/a':>8}")
             parts.append(f"{'*' if r[f'{key}_sig'] else '':>4}")
@@ -480,9 +519,9 @@ def print_contrasts_table(
 
 def print_descriptive_total_delta(grid: List[Dict]):
     """Print the descriptive 2hopfield - MLP total-effect delta when it is
-    NOT a planned contrast (i.e. when both 1hopfield and 2hopfield are run,
-    so the planned contrasts are the two increments and the total effect is
-    reported only)."""
+    NOT a planned contrast (i.e. when 2hopfield runs alongside a
+    single-substitution arm, so 2hopfield's planned contrast is an increment
+    and the total effect is reported only)."""
     if not grid or "2hopfield-MLP_delta_descriptive" not in grid[0]:
         return
     print()
@@ -499,11 +538,12 @@ def _legend_text(n_trials: int, n_cells: int, contrasts: List[Tuple[str, str]]) 
     n_contrasts = len(contrasts)
     total_tests = n_cells * n_contrasts
     cumulative_rule = ""
-    if contrasts == [("1hopfield", "MLP"), ("2hopfield", "1hopfield")]:
+    if ("1hopfield", "MLP") in contrasts and ("2hopfield", "1hopfield") in contrasts:
         cumulative_rule = (
-            "  Per-cell criterion for 'cumulative gain': BOTH planned contrasts\n"
-            "  starred with positive deltas (intersection-union test of the\n"
-            "  conjunction, valid at level alpha under arbitrary dependence).\n"
+            "  Per-cell criterion for 'cumulative gain': BOTH increment contrasts\n"
+            "  (1hopfield-MLP and 2hopfield-1hopfield) starred with positive\n"
+            "  deltas (intersection-union test of the conjunction, valid at\n"
+            "  level alpha under arbitrary dependence).\n"
         )
     return (
         f"Legend:\n"
@@ -607,21 +647,24 @@ def main():
     print(f"K values (number of examples per class): {k_values}")
     print(f"Noise levels (std dev): {noise_levels}")
     print(f"Planned contrasts: {contrasts}")
-    if "2hopfield" in hopfield_arms_to_run and "1hopfield" not in hopfield_arms_to_run:
+    if ("2hopfield", "MLP") in contrasts:
         print()
         print(
-            "NOTE: --networks 2hopfield without 1hopfield falls back to the\n"
-            "total-effect contrast (2hopfield - MLP), not the per-substitution\n"
-            "increment. Pass '--networks 1hopfield 2hopfield' to test the two\n"
-            "ordered increments (1hopfield-MLP, 2hopfield-1hopfield) separately."
+            "NOTE: --networks 2hopfield without a single-substitution arm\n"
+            "falls back to the total-effect contrast (2hopfield - MLP), not\n"
+            "the per-substitution increment. Pass '--networks 1hopfield\n"
+            "2hopfield' (or add 1hopfield-late) to test the ordered\n"
+            "increments separately."
         )
     print()
 
     # ---- run the K x noise grid -----------------------------------------------
 
     grid_results: List[Dict] = []
+    # The 2hopfield-MLP total effect is reported descriptively whenever
+    # 2hopfield's planned contrast is an increment (i.e. not itself vs MLP).
     report_descriptive_total = (
-        "1hopfield" in hopfield_arms_to_run and "2hopfield" in hopfield_arms_to_run
+        "2hopfield" in hopfield_arms_to_run and ("2hopfield", "MLP") not in contrasts
     )
 
     for k in k_values:
@@ -653,17 +696,19 @@ def main():
                     else 0.0
                 )
 
-            # One entry per declared contrast (these get stars).
+            # One entry per declared contrast (these get stars). With a
+            # single trial the runner reports NaN test statistics, which the
+            # print helpers render as n/a.
             for c in results.contrast_results():
                 key = f"{c.arm_a}-{c.arm_b}"
                 row[f"{key}_delta"] = c.mean_diff
                 row[f"{key}_se"] = c.se_diff
-                row[f"{key}_pval"] = c.p_value if args.n_trials >= 2 else float("nan")
-                row[f"{key}_sig"] = c.significant_at_05 if args.n_trials >= 2 else False
-                row[f"{key}_d"] = c.cohens_d if args.n_trials >= 2 else float("nan")
+                row[f"{key}_pval"] = c.p_value
+                row[f"{key}_sig"] = c.significant_at_05
+                row[f"{key}_d"] = c.cohens_d
 
-            # Reported-only descriptive total effect (only when BOTH hopfield
-            # variants run AND the second increment is the planned contrast).
+            # Reported-only descriptive total effect (only when 2hopfield's
+            # planned contrast is an increment rather than vs MLP).
             if report_descriptive_total:
                 d = results.delta("2hopfield", "MLP")
                 row["2hopfield-MLP_delta_descriptive"] = d.mean

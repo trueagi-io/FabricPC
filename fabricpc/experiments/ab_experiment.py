@@ -8,13 +8,13 @@ Two public runners are provided:
 
 - :class:`PlannedMultiContrastExperiment` — N arms with constructor-declared
   planned contrasts. The single source of truth for the per-trial training
-  loop. Each trial builds loaders once via the user-supplied factory and
-  calls ``reset()`` on them before every arm, so every arm sees the same
-  minibatch stream — paired in both data subsample/noise AND in batch order.
+  loop. Within each trial, every arm gets freshly constructed loaders from
+  ``data_loader_factory(trial_seed)``, so every arm sees the same minibatch
+  stream — paired in data subsample/noise AND in batch order — provided the
+  factory is deterministic in its seed argument.
 - :class:`ABExperiment` — a thin 2-arm wrapper that delegates entirely to
   ``PlannedMultiContrastExperiment``. Preserves the historical
-  ``arm_a``/``arm_b`` / ``ABResults`` API so existing callers (the four
-  example files in ``examples/``) keep working unchanged.
+  ``arm_a``/``arm_b`` / ``ABResults`` API.
 
 Example (multi-arm, planned-contrast)::
 
@@ -189,31 +189,42 @@ class PlannedMultiContrastResults:
     def contrast_results(self) -> List[ContrastResult]:
         """One :class:`ContrastResult` per declared contrast, in declaration
         order. Each contrast is a two-sided paired t-test on the per-trial
-        difference vector, plus paired Cohen's d."""
+        difference vector, plus paired Cohen's d. With fewer than 2 trials the
+        test statistics are NaN and ``significant_at_05`` is False (a paired
+        test needs at least 2 differences), so this method is total in
+        ``n_trials``."""
         out: List[ContrastResult] = []
         for a, b in self.contrasts:
             a_vals = self.per_arm_metrics(a)
             b_vals = self.per_arm_metrics(b)
             diff = a_vals - b_vals
-            ttest = paired_ttest(a_vals, b_vals)
-            effect = cohens_d(a_vals, b_vals)
+            n = len(diff)
             mean_diff = float(np.mean(diff))
-            se_diff = (
-                float(np.std(diff, ddof=1) / np.sqrt(len(diff)))
-                if len(diff) > 1
-                else 0.0
-            )
+            if n > 1:
+                ttest = paired_ttest(a_vals, b_vals)
+                effect = cohens_d(a_vals, b_vals)
+                se_diff = float(np.std(diff, ddof=1) / np.sqrt(n))
+                t_statistic = ttest.t_statistic
+                p_value = ttest.p_value
+                significant = ttest.significant_at_05
+                d = effect.d
+            else:
+                se_diff = 0.0
+                t_statistic = float("nan")
+                p_value = float("nan")
+                significant = False
+                d = float("nan")
             out.append(
                 ContrastResult(
                     arm_a=a,
                     arm_b=b,
                     mean_diff=mean_diff,
                     se_diff=se_diff,
-                    t_statistic=ttest.t_statistic,
-                    p_value=ttest.p_value,
-                    significant_at_05=ttest.significant_at_05,
-                    cohens_d=effect.d,
-                    n=len(diff),
+                    t_statistic=t_statistic,
+                    p_value=p_value,
+                    significant_at_05=significant,
+                    cohens_d=d,
+                    n=n,
                 )
             )
         return out
@@ -236,27 +247,15 @@ class PlannedMultiContrastResults:
         )
 
 
-def _reset_loader_if_supported(loader: Any) -> None:
-    """Call ``loader.reset()`` if it exists, no-op otherwise.
-
-    Loaders in ``fabricpc.utils.data.dataloader`` implement ``reset()`` so
-    that multi-arm experiments can replay the identical batch stream across
-    arms. User-supplied loaders without a ``reset()`` are silently tolerated
-    so that legacy callers keep working (with the caveat that an arm-order
-    dependence will leak in if their iteration is stateful).
-    """
-    if hasattr(loader, "reset"):
-        loader.reset()
-
-
 class PlannedMultiContrastExperiment:
     """Runner for paired N-arm experiments with constructor-declared contrasts.
 
-    Each trial:
-      1. Builds train/test loaders once via ``data_loader_factory(trial_seed)``.
-      2. For each arm in ``arms``: calls ``reset()`` on both loaders (so every
-         arm replays the identical batch stream), trains a fresh model, and
-         evaluates it.
+    Within each trial, every arm gets freshly constructed loaders from
+    ``data_loader_factory(trial_seed)``, trains a fresh model, and is
+    evaluated. Because the factory receives the same seed for every arm of a
+    trial, all arms see identical data and identical batch order whenever the
+    factory is deterministic in its seed — the pairing holds by construction,
+    with no requirements on the loader objects themselves.
 
     The shared per-trial seed is also used as the model RNG seed for every
     arm, so the source of model-init randomness is paired across arms (the
@@ -272,10 +271,13 @@ class PlannedMultiContrastExperiment:
         metric: Key in each arm's eval-result dict to compare
             (e.g. ``"accuracy"``, ``"perplexity"``).
         data_loader_factory: Callable ``seed -> (train_loader, test_loader)``.
-            The returned loaders should expose ``reset()`` for proper pairing;
-            loaders without it are tolerated but lose the cross-arm
-            batch-stream guarantee.
-        n_trials: Number of independent paired trials.
+            Called once per arm within each trial, always with the trial's
+            seed. Must be deterministic in its seed argument: two calls with
+            the same seed must yield loaders producing identical batch
+            streams, otherwise the arms are not paired.
+        n_trials: Number of independent paired trials. Must be >= 1; the
+            paired test statistics require >= 2 (a single trial yields per-arm
+            metrics and NaN test statistics).
         seed_offset: Base seed offset. Trial i uses
             ``seed = seed_offset + i * 1000``.
         verbose: If True, forward verbose=True to each arm's train_fn.
@@ -293,6 +295,9 @@ class PlannedMultiContrastExperiment:
     ):
         if len(arms) < 1:
             raise ValueError("arms must contain at least one ExperimentArm.")
+
+        if n_trials < 1:
+            raise ValueError(f"n_trials must be >= 1; got {n_trials}.")
 
         arm_names = [a.name for a in arms]
         if len(set(arm_names)) != len(arm_names):
@@ -329,8 +334,7 @@ class PlannedMultiContrastExperiment:
         train_loader: Any,
         test_loader: Any,
     ) -> TrialResult:
-        """Run a single trial for one arm. The caller is responsible for
-        having reset the loaders, so this method does not reset them itself."""
+        """Run a single trial for one arm on the given loaders."""
         master_key = jax.random.PRNGKey(trial_seed)
         graph_key, train_key, eval_key = jax.random.split(master_key, 3)
 
@@ -375,7 +379,14 @@ class PlannedMultiContrastExperiment:
         per_arm_trials: Dict[str, List[TrialResult]] = {a.name: [] for a in self.arms}
         seeds: List[int] = []
 
-        num_epochs = self.arms[0].train_config.get("num_epochs", 1)
+        num_epochs = next(
+            (
+                arm.train_config["num_epochs"]
+                for arm in self.arms
+                if "num_epochs" in arm.train_config
+            ),
+            1,
+        )
         total_start = time.time()
 
         for trial_idx in range(self.n_trials):
@@ -384,14 +395,11 @@ class PlannedMultiContrastExperiment:
 
             print(f"--- Trial {trial_idx + 1}/{self.n_trials} (seed={trial_seed}) ---")
 
-            # Build loaders ONCE per trial; reset() per arm replays the
-            # identical batch stream so per-arm results are independent of arm
-            # order and of arm-subset selection.
-            train_loader, test_loader = self.data_loader_factory(trial_seed)
-
             for arm in self.arms:
-                _reset_loader_if_supported(train_loader)
-                _reset_loader_if_supported(test_loader)
+                # Fresh loaders per arm from the same trial seed: every arm
+                # sees the identical batch stream, so per-arm results are
+                # independent of arm order and of arm-subset selection.
+                train_loader, test_loader = self.data_loader_factory(trial_seed)
                 result = self._run_arm_trial(arm, trial_seed, train_loader, test_loader)
                 per_arm_trials[arm.name].append(result)
                 print(
@@ -577,12 +585,10 @@ class ABExperiment:
     """Paired 2-arm experiment runner — thin wrapper around
     :class:`PlannedMultiContrastExperiment`.
 
-    Preserved for backward compatibility: existing callers
-    (PC_backprop_compare, mnist_lateral_connections, mnist_cyclic_graph,
-    storkey_hopfield_diagnostic) keep working unchanged. The single
-    declared contrast is ``(arm_a.name, arm_b.name)`` and the trial loop
-    is the multi-arm runner's. ``ABResults`` is reconstructed from the
-    multi-arm results so the legacy API surface is identical.
+    Preserved for backward compatibility. The single declared contrast is
+    ``(arm_a.name, arm_b.name)`` and the trial loop is the multi-arm
+    runner's. ``ABResults`` is reconstructed from the multi-arm results so
+    the legacy API surface is identical.
 
     Args:
         arm_a: First experimental condition.

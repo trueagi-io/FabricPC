@@ -17,12 +17,23 @@ _TOKENIZERS_INSTALL_HINT = (
 )
 
 
-class MnistLoader:
-    """JAX-compatible data loader using TensorFlow Datasets.
+class _TfdsImageLoader:
+    """Shared base for TFDS image-classification loaders.
 
-    Provides the same interface as PyTorch DataLoader but uses tfds
-    data parallelism based on C++ that bypasses GIL and does not inherit GPU state.
-    Avoids os.fork warnings with JAX.
+    Loads a tfds split, builds a shuffle/batch/prefetch tf.data pipeline, and
+    yields (normalized float32 images, one-hot labels) numpy batches. Uses
+    tfds data parallelism based on C++ that bypasses GIL and does not inherit
+    GPU state; avoids os.fork warnings with JAX.
+
+    Subclasses set two class attributes:
+        _DATASET_NAME: tfds dataset name (version-pinned where needed).
+        _NUM_CLASSES: number of classes for one-hot labels.
+
+    Iteration statefulness: with ``shuffle=True`` the tf.data pipeline
+    reshuffles on every pass, so the batch order advances with each epoch of
+    one training run. Construct a fresh instance per logical training run;
+    paired experiment runners obtain per-arm instances by calling their
+    ``data_loader_factory`` once per arm.
 
     Args:
         split: Dataset split to load. Use 'train' for training data or
@@ -32,9 +43,13 @@ class MnistLoader:
         shuffle: Whether to shuffle the data each epoch.
         seed: Random seed for reproducibility. When set, ensures deterministic
               shuffling across runs and machines. If None, shuffling is random.
-        normalize_mean: Mean for normalization (default: MNIST mean).
-        normalize_std: Std for normalization (default: MNIST std).
+        tensor_format: 'NHWC' for image tensors or 'flat' for flattened rows.
+        normalize_mean: Mean for normalization (scalar or per-channel tuple).
+        normalize_std: Std for normalization (scalar or per-channel tuple).
     """
+
+    _DATASET_NAME: str
+    _NUM_CLASSES: int
 
     def __init__(
         self,
@@ -42,9 +57,9 @@ class MnistLoader:
         batch_size: int,
         shuffle: bool = True,
         seed: int = None,
-        tensor_format: str = "NHWC",  # image tensor 'flat' or 'NHWC' batch-height-width-channels
-        normalize_mean: float = 0.1307,
-        normalize_std: float = 0.3081,
+        tensor_format: str = "NHWC",
+        normalize_mean=0.0,
+        normalize_std=1.0,
     ):
         import tensorflow_datasets as tfds
         import tensorflow as tf
@@ -56,8 +71,8 @@ class MnistLoader:
         self.shuffle = shuffle
         self.seed = seed
         self.tensor_format = tensor_format
-        self.normalize_mean = normalize_mean
-        self.normalize_std = normalize_std
+        self.normalize_mean = np.asarray(normalize_mean, dtype=np.float32)
+        self.normalize_std = np.asarray(normalize_std, dtype=np.float32)
 
         # Split seed into two independent seeds for file and buffer shuffling
         file_seed, buffer_seed = split_np_seed(seed, n=2)
@@ -68,9 +83,8 @@ class MnistLoader:
             interleave_cycle_length=1,  # Sequential reading for determinism
         )
 
-        # Load dataset with pinned version for cross-machine reproducibility
         ds, info = tfds.load(
-            "mnist:3.0.1",
+            self._DATASET_NAME,
             split=split,
             with_info=True,
             as_supervised=True,
@@ -80,45 +94,23 @@ class MnistLoader:
         self.num_examples = info.splits[split].num_examples
         self._num_batches = (self.num_examples + batch_size - 1) // batch_size
 
-        # Cache the unshuffled/unbatched dataset and the shuffle seed so
-        # reset() can replay the identical epoch-shuffle stream without paying
-        # for another tfds.load.
-        self._raw_ds = ds
-        self._buffer_seed = buffer_seed
-        self._build_pipeline()
-
-    def _build_pipeline(self):
-        """(Re)build the shuffle/batch/prefetch pipeline on top of the cached
-        raw dataset. Called from __init__ and from reset()."""
-        import tensorflow as tf
-
-        ds = self._raw_ds
-        if self.shuffle:
-            ds = ds.shuffle(
-                buffer_size=self.num_examples, seed=self._buffer_seed
-            )  # mnist fits in memory (~60MB) so the buffer is the full dataset
-        ds = ds.batch(self.batch_size, drop_remainder=False)
+        if shuffle:
+            # These datasets fit in memory, so the shuffle buffer is the
+            # full split.
+            ds = ds.shuffle(buffer_size=self.num_examples, seed=buffer_seed)
+        ds = ds.batch(batch_size, drop_remainder=False)
         ds = ds.prefetch(tf.data.AUTOTUNE)
         self.ds = ds
 
-    def reset(self):
-        """Reset the iteration state so subsequent iteration replays the
-        identical batch stream from epoch 0. Required for paired multi-arm
-        experiments where every arm must see the same minibatch order."""
-        self._build_pipeline()
-
     def __iter__(self):
         for images, labels in self.ds:
-            # Convert to numpy, normalize, and flatten
             images = images.numpy().astype(np.float32) / 255.0
             images = (images - self.normalize_mean) / self.normalize_std
 
-            # images shape is (Batch, 28, 28, 1)
             if self.tensor_format == "flat":
-                images = images.reshape(images.shape[0], -1)  # Flatten to (Batch, 784)
+                images = images.reshape(images.shape[0], -1)
 
-            # One-hot encode labels
-            labels = one_hot(labels.numpy(), num_classes=10)
+            labels = one_hot(labels.numpy(), num_classes=self._NUM_CLASSES)
 
             yield images, labels
 
@@ -126,21 +118,50 @@ class MnistLoader:
         return self._num_batches
 
 
-class Cifar100Loader:
-    """JAX-compatible CIFAR-100 data loader using TensorFlow Datasets.
+class MnistLoader(_TfdsImageLoader):
+    """MNIST loader (28x28 grayscale, 10 digit classes).
 
-    Loads the CIFAR-100 dataset (32x32 RGB images, 100 fine-grained classes)
-    and yields batches of (images, one_hot_labels).
-
-    Args:
-        split: Dataset split to load ('train' or 'test').
-        batch_size: Number of samples per batch.
-        shuffle: Whether to shuffle the data each epoch.
-        seed: Random seed for reproducibility.
-        tensor_format: 'NHWC' for (batch, 32, 32, 3) or 'flat' for (batch, 3072).
-        normalize_mean: Per-channel mean for normalization (default: CIFAR-100 mean).
-        normalize_std: Per-channel std for normalization (default: CIFAR-100 std).
+    Yields (batch, 28, 28, 1) images ('NHWC') or (batch, 784) rows ('flat').
+    Defaults normalize with the MNIST per-pixel mean/std. Dataset version is
+    pinned for cross-machine reproducibility. See :class:`_TfdsImageLoader`
+    for the shared constructor arguments and iteration contract.
     """
+
+    _DATASET_NAME = "mnist:3.0.1"
+    _NUM_CLASSES = 10
+
+    def __init__(
+        self,
+        split: str,
+        batch_size: int,
+        shuffle: bool = True,
+        seed: int = None,
+        tensor_format: str = "NHWC",
+        normalize_mean: float = 0.1307,
+        normalize_std: float = 0.3081,
+    ):
+        super().__init__(
+            split=split,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            seed=seed,
+            tensor_format=tensor_format,
+            normalize_mean=normalize_mean,
+            normalize_std=normalize_std,
+        )
+
+
+class Cifar100Loader(_TfdsImageLoader):
+    """CIFAR-100 loader (32x32 RGB, 100 fine-grained classes).
+
+    Yields (batch, 32, 32, 3) images ('NHWC') or (batch, 3072) rows ('flat').
+    Defaults normalize per channel with the CIFAR-100 mean/std. See
+    :class:`_TfdsImageLoader` for the shared constructor arguments and
+    iteration contract.
+    """
+
+    _DATASET_NAME = "cifar100"
+    _NUM_CLASSES = 100
 
     def __init__(
         self,
@@ -152,92 +173,28 @@ class Cifar100Loader:
         normalize_mean: tuple = (0.5071, 0.4867, 0.4408),
         normalize_std: tuple = (0.2675, 0.2565, 0.2761),
     ):
-        import tensorflow_datasets as tfds
-        import tensorflow as tf
-
-        tf.config.set_visible_devices([], "GPU")
-
-        self.batch_size = batch_size
-        self.shuffle = shuffle
-        self.seed = seed
-        self.tensor_format = tensor_format
-        self.normalize_mean = np.array(normalize_mean, dtype=np.float32)
-        self.normalize_std = np.array(normalize_std, dtype=np.float32)
-
-        file_seed, buffer_seed = split_np_seed(seed, n=2)
-
-        read_config = tfds.ReadConfig(
-            shuffle_seed=file_seed,
-            interleave_cycle_length=1,
-        )
-
-        ds, info = tfds.load(
-            "cifar100",
+        super().__init__(
             split=split,
-            with_info=True,
-            as_supervised=True,
-            read_config=read_config,
-            shuffle_files=shuffle and seed is not None,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            seed=seed,
+            tensor_format=tensor_format,
+            normalize_mean=normalize_mean,
+            normalize_std=normalize_std,
         )
-        self.num_examples = info.splits[split].num_examples
-        self._num_batches = (self.num_examples + batch_size - 1) // batch_size
-
-        # Cache the raw dataset + shuffle seed so reset() can replay the
-        # identical batch stream from epoch 0 without re-loading from disk.
-        self._raw_ds = ds
-        self._buffer_seed = buffer_seed
-        self._build_pipeline()
-
-    def _build_pipeline(self):
-        """(Re)build the shuffle/batch/prefetch pipeline on top of the cached
-        raw dataset. Called from __init__ and from reset()."""
-        import tensorflow as tf
-
-        ds = self._raw_ds
-        if self.shuffle:
-            ds = ds.shuffle(buffer_size=self.num_examples, seed=self._buffer_seed)
-        ds = ds.batch(self.batch_size, drop_remainder=False)
-        ds = ds.prefetch(tf.data.AUTOTUNE)
-        self.ds = ds
-
-    def reset(self):
-        """Reset iteration state so subsequent iteration replays the identical
-        batch stream from epoch 0. Required for paired multi-arm experiments
-        where every arm must see the same minibatch order."""
-        self._build_pipeline()
-
-    def __iter__(self):
-        for images, labels in self.ds:
-            images = images.numpy().astype(np.float32) / 255.0
-            # Per-channel normalization: (H, W, C) broadcast
-            images = (images - self.normalize_mean) / self.normalize_std
-
-            if self.tensor_format == "flat":
-                images = images.reshape(images.shape[0], -1)
-
-            labels = one_hot(labels.numpy(), num_classes=100)
-
-            yield images, labels
-
-    def __len__(self):
-        return self._num_batches
 
 
-class Cifar10Loader:
-    """JAX-compatible CIFAR-10 data loader using TensorFlow Datasets.
+class Cifar10Loader(_TfdsImageLoader):
+    """CIFAR-10 loader (32x32 RGB, 10 classes).
 
-    Loads the CIFAR-10 dataset (32x32 RGB images, 10 classes)
-    and yields batches of (images, one_hot_labels).
-
-    Args:
-        split: Dataset split to load ('train' or 'test').
-        batch_size: Number of samples per batch.
-        shuffle: Whether to shuffle the data each epoch.
-        seed: Random seed for reproducibility.
-        tensor_format: 'NHWC' for (batch, 32, 32, 3) or 'flat' for (batch, 3072).
-        normalize_mean: Per-channel mean for normalization (default: CIFAR-10 mean).
-        normalize_std: Per-channel std for normalization (default: CIFAR-10 std).
+    Yields (batch, 32, 32, 3) images ('NHWC') or (batch, 3072) rows ('flat').
+    Defaults normalize per channel with the CIFAR-10 mean/std. See
+    :class:`_TfdsImageLoader` for the shared constructor arguments and
+    iteration contract.
     """
+
+    _DATASET_NAME = "cifar10"
+    _NUM_CLASSES = 10
 
     def __init__(
         self,
@@ -249,75 +206,15 @@ class Cifar10Loader:
         normalize_mean: tuple = (0.4914, 0.4822, 0.4465),
         normalize_std: tuple = (0.2470, 0.2435, 0.2616),
     ):
-        import tensorflow_datasets as tfds
-        import tensorflow as tf
-
-        tf.config.set_visible_devices([], "GPU")
-
-        self.batch_size = batch_size
-        self.shuffle = shuffle
-        self.seed = seed
-        self.tensor_format = tensor_format
-        self.normalize_mean = np.array(normalize_mean, dtype=np.float32)
-        self.normalize_std = np.array(normalize_std, dtype=np.float32)
-
-        file_seed, buffer_seed = split_np_seed(seed, n=2)
-
-        read_config = tfds.ReadConfig(
-            shuffle_seed=file_seed,
-            interleave_cycle_length=1,
-        )
-
-        ds, info = tfds.load(
-            "cifar10",
+        super().__init__(
             split=split,
-            with_info=True,
-            as_supervised=True,
-            read_config=read_config,
-            shuffle_files=shuffle and seed is not None,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            seed=seed,
+            tensor_format=tensor_format,
+            normalize_mean=normalize_mean,
+            normalize_std=normalize_std,
         )
-        self.num_examples = info.splits[split].num_examples
-        self._num_batches = (self.num_examples + batch_size - 1) // batch_size
-
-        # Cache the raw dataset + shuffle seed so reset() can replay the
-        # identical batch stream from epoch 0 without re-loading from disk.
-        self._raw_ds = ds
-        self._buffer_seed = buffer_seed
-        self._build_pipeline()
-
-    def _build_pipeline(self):
-        """(Re)build the shuffle/batch/prefetch pipeline on top of the cached
-        raw dataset. Called from __init__ and from reset()."""
-        import tensorflow as tf
-
-        ds = self._raw_ds
-        if self.shuffle:
-            ds = ds.shuffle(buffer_size=self.num_examples, seed=self._buffer_seed)
-        ds = ds.batch(self.batch_size, drop_remainder=False)
-        ds = ds.prefetch(tf.data.AUTOTUNE)
-        self.ds = ds
-
-    def reset(self):
-        """Reset iteration state so subsequent iteration replays the identical
-        batch stream from epoch 0. Required for paired multi-arm experiments
-        where every arm must see the same minibatch order."""
-        self._build_pipeline()
-
-    def __iter__(self):
-        for images, labels in self.ds:
-            images = images.numpy().astype(np.float32) / 255.0
-            # Per-channel normalization: (H, W, C) broadcast
-            images = (images - self.normalize_mean) / self.normalize_std
-
-            if self.tensor_format == "flat":
-                images = images.reshape(images.shape[0], -1)
-
-            labels = one_hot(labels.numpy(), num_classes=10)
-
-            yield images, labels
-
-    def __len__(self):
-        return self._num_batches
 
 
 class _TokenSequenceLoader:
@@ -569,21 +466,17 @@ class BpeDataLoader(_TokenSequenceLoader):
         return self._tok.decode([int(i) for i in indices], skip_special_tokens=True)
 
 
-class FashionMnistLoader:
-    """JAX-compatible Fashion-MNIST data loader using TensorFlow Datasets.
+class FashionMnistLoader(_TfdsImageLoader):
+    """Fashion-MNIST loader (28x28 grayscale, 10 clothing categories).
 
-    Drop-in replacement for MnistLoader with the Fashion-MNIST dataset
-    (28x28 grayscale, 10 clothing categories).
-
-    Args:
-        split: Dataset split ('train' or 'test').
-        batch_size: Number of samples per batch.
-        shuffle: Whether to shuffle the data each epoch.
-        seed: Random seed for reproducibility.
-        tensor_format: 'NHWC' for (batch, 28, 28, 1) or 'flat' for (batch, 784).
-        normalize_mean: Mean for normalization (default: Fashion-MNIST mean).
-        normalize_std: Std for normalization (default: Fashion-MNIST std).
+    Drop-in replacement for MnistLoader. Yields (batch, 28, 28, 1) images
+    ('NHWC') or (batch, 784) rows ('flat'). Defaults normalize with the
+    Fashion-MNIST per-pixel mean/std. See :class:`_TfdsImageLoader` for the
+    shared constructor arguments and iteration contract.
     """
+
+    _DATASET_NAME = "fashion_mnist"
+    _NUM_CLASSES = 10
 
     def __init__(
         self,
@@ -595,83 +488,33 @@ class FashionMnistLoader:
         normalize_mean: float = 0.2860,
         normalize_std: float = 0.3530,
     ):
-        import tensorflow_datasets as tfds
-        import tensorflow as tf
-
-        tf.config.set_visible_devices([], "GPU")
-
-        self.batch_size = batch_size
-        self.shuffle = shuffle
-        self.seed = seed
-        self.tensor_format = tensor_format
-        self.normalize_mean = normalize_mean
-        self.normalize_std = normalize_std
-
-        file_seed, buffer_seed = split_np_seed(seed, n=2)
-
-        read_config = tfds.ReadConfig(
-            shuffle_seed=file_seed,
-            interleave_cycle_length=1,
-        )
-
-        ds, info = tfds.load(
-            "fashion_mnist",
+        super().__init__(
             split=split,
-            with_info=True,
-            as_supervised=True,
-            read_config=read_config,
-            shuffle_files=shuffle and seed is not None,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            seed=seed,
+            tensor_format=tensor_format,
+            normalize_mean=normalize_mean,
+            normalize_std=normalize_std,
         )
-        self.num_examples = info.splits[split].num_examples
-        self._num_batches = (self.num_examples + batch_size - 1) // batch_size
-
-        # Cache the raw dataset + shuffle seed so reset() can replay the
-        # identical batch stream from scratch without a fresh tfds.load.
-        self._raw_ds = ds
-        self._buffer_seed = buffer_seed
-        self._build_pipeline()
-
-    def _build_pipeline(self):
-        """(Re)build the shuffle/batch/prefetch pipeline. Called from __init__
-        and from reset()."""
-        import tensorflow as tf
-
-        ds = self._raw_ds
-        if self.shuffle:
-            ds = ds.shuffle(buffer_size=self.num_examples, seed=self._buffer_seed)
-        ds = ds.batch(self.batch_size, drop_remainder=False)
-        ds = ds.prefetch(tf.data.AUTOTUNE)
-        self.ds = ds
-
-    def reset(self):
-        """Reset iteration state so subsequent iteration replays the identical
-        batch stream from epoch 0. Required for paired multi-arm experiments
-        where every arm must see the same minibatch order."""
-        self._build_pipeline()
-
-    def __iter__(self):
-        for images, labels in self.ds:
-            images = images.numpy().astype(np.float32) / 255.0
-            images = (images - self.normalize_mean) / self.normalize_std
-
-            if self.tensor_format == "flat":
-                images = images.reshape(images.shape[0], -1)
-
-            labels = one_hot(labels.numpy(), num_classes=10)
-
-            yield images, labels
-
-    def __len__(self):
-        return self._num_batches
 
 
 class FewShotLoader:
     """Class-balanced K-shot data loader using TensorFlow Datasets.
 
-    Loads a full dataset, subsamples exactly K examples per class
-    (deterministically via seed), and yields shuffled minibatches.
-    Both arms in an A/B experiment receive identical training data
-    when given the same seed.
+    Subsamples exactly K examples per class (deterministically via seed) and
+    yields shuffled minibatches, including a final partial batch when the
+    sample count is not a multiple of batch_size. Both arms in a paired
+    experiment receive identical training data when given the same seed.
+
+    The full split is loaded once per process and memoized in a class-level
+    cache keyed on (dataset_name, split); constructions after the first
+    reuse the cached raw arrays, so building one loader per arm per trial in
+    paired experiments costs only the K-shot subsample.
+
+    Iteration statefulness: with ``shuffle=True`` the shuffle order advances
+    with each pass (epoch). Construct a fresh instance per logical training
+    run; two same-seed instances yield identical epoch-shuffle streams.
 
     Args:
         dataset_name: TFDS dataset name (e.g., 'fashion_mnist', 'mnist:3.0.1').
@@ -686,6 +529,32 @@ class FewShotLoader:
         normalize_std: Std for normalization.
     """
 
+    # (dataset_name, split) -> (raw images, int32 labels); raw dtype as
+    # loaded (uint8 for the MNIST/CIFAR families), pre-normalization.
+    _raw_split_cache = {}
+
+    @classmethod
+    def _load_raw_split(cls, dataset_name: str, split: str):
+        key = (dataset_name, split)
+        if key not in cls._raw_split_cache:
+            import tensorflow_datasets as tfds
+            import tensorflow as tf
+
+            tf.config.set_visible_devices([], "GPU")
+
+            ds = tfds.load(dataset_name, split=split, as_supervised=True)
+            all_images = []
+            all_labels = []
+            for img, label in ds:
+                all_images.append(img.numpy())
+                all_labels.append(int(label.numpy()))
+
+            cls._raw_split_cache[key] = (
+                np.asarray(all_images),
+                np.asarray(all_labels, dtype=np.int32),
+            )
+        return cls._raw_split_cache[key]
+
     def __init__(
         self,
         dataset_name: str,
@@ -699,11 +568,6 @@ class FewShotLoader:
         normalize_mean: float = 0.2860,
         normalize_std: float = 0.3530,
     ):
-        import tensorflow_datasets as tfds
-        import tensorflow as tf
-
-        tf.config.set_visible_devices([], "GPU")
-
         self.batch_size = batch_size
         self.shuffle = shuffle
         self.seed = seed
@@ -713,23 +577,13 @@ class FewShotLoader:
         self.num_classes = num_classes
         self._epoch = 0
 
-        # Load entire dataset into memory
-        ds = tfds.load(dataset_name, split=split, as_supervised=True)
-        all_images = []
-        all_labels = []
-        for img, label in ds:
-            all_images.append(img.numpy())
-            all_labels.append(int(label.numpy()))
-
-        all_images = np.array(all_images, dtype=np.float32) / 255.0
-        all_images = (all_images - self.normalize_mean) / self.normalize_std
-        all_labels = np.array(all_labels, dtype=np.int32)
+        raw_images, raw_labels = self._load_raw_split(dataset_name, split)
 
         # Class-balanced subsampling
         rng = np.random.default_rng(seed)
         selected_indices = []
         for c in range(num_classes):
-            class_indices = np.where(all_labels == c)[0]
+            class_indices = np.where(raw_labels == c)[0]
             if len(class_indices) < k_per_class:
                 chosen = class_indices  # use all if fewer than K
             else:
@@ -737,17 +591,13 @@ class FewShotLoader:
             selected_indices.append(chosen)
         selected_indices = np.concatenate(selected_indices)
 
-        self.images = all_images[selected_indices]
-        self.labels = all_labels[selected_indices]
+        # Normalize only the selected subsample; the cached raw arrays stay
+        # untouched for other constructions.
+        images = raw_images[selected_indices].astype(np.float32) / 255.0
+        self.images = (images - self.normalize_mean) / self.normalize_std
+        self.labels = raw_labels[selected_indices]
         self.num_samples = len(selected_indices)
-        self._num_batches = self.num_samples // batch_size
-
-    def reset(self):
-        """Reset the epoch counter so subsequent iteration replays the
-        identical epoch-shuffle stream from epoch 0. Required for paired
-        multi-arm experiments: each arm must see the same minibatch order,
-        otherwise the per-arm accuracies depend on arm position in the list."""
-        self._epoch = 0
+        self._num_batches = (self.num_samples + batch_size - 1) // batch_size
 
     def __iter__(self):
         indices = np.arange(self.num_samples)
@@ -759,7 +609,7 @@ class FewShotLoader:
             rng.shuffle(indices)
         self._epoch += 1
 
-        for start in range(0, self.num_samples - self.batch_size + 1, self.batch_size):
+        for start in range(0, self.num_samples, self.batch_size):
             batch_idx = indices[start : start + self.batch_size]
             images = self.images[batch_idx]
 
@@ -789,14 +639,6 @@ class NoisyTestLoader:
         self.base_loader = base_loader
         self.noise_std = noise_std
         self.seed = seed
-
-    def reset(self):
-        """No-op for this wrapper (noise RNG is reseeded inside __iter__ from
-        self.seed each pass, so it is already idempotent). Forwards to the
-        wrapped base loader's reset() if it has one, so multi-arm runners can
-        call reset() uniformly across train and test loaders."""
-        if hasattr(self.base_loader, "reset"):
-            self.base_loader.reset()
 
     def __iter__(self):
         rng = np.random.default_rng(self.seed)
