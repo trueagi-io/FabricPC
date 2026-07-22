@@ -37,6 +37,21 @@ dependencies = [
     "optuna",
 ]
 
+[project.scripts]
+transformer = "examples.transformer_demo:main"
+transformer-v2 = "examples.transformer_v2_demo:main"
+transformer-tune = "examples.transformer_tuning:main"
+mnist = "examples.mnist_demo:main"
+mnist-cyclic = "examples.mnist_cyclic_graph:main"
+mnist-lateral = "examples.mnist_lateral_connections:main"
+mnist-conv = "examples.mnist_conv_demo:main"
+resnet18 = "examples.resnet18_cifar10_demo:main"
+mupc = "examples.mupc_demo:main"
+hopfield = "examples.storkey_hopfield_demo:main"
+hopfield-recall = "examples.storkey_hopfield_recall:main"
+pc-vs-bp = "examples.PC_backprop_compare:main"
+jpc-resnet = "examples.jpc_fc_resnet_compare:main"
+
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
@@ -91,7 +106,7 @@ py-modules = ["jax_setup"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["fabricpc*"]
+include = ["fabricpc*", "examples*"]
 
 [tool.black]
 line-length = 88
