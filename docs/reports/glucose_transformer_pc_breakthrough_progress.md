@@ -1,71 +1,118 @@
 # Glucose PC Optuna progress report
 
-Generated: `2026-07-23T22:08:26.811225+00:00`  
-Study: `glucose_transformer_pc_epochs_v2`  
+Generated: `2026-07-23T22:08:27.091736+00:00`  
+Study: `glucose_transformer_pc_breakthrough`  
 Mode: predictive coding (PC) only
 
 ## Summary
 
 | Metric | Value |
 |--------|------:|
-| Trials recorded | 3 |
-| Complete | 0 |
-| Pruned | 0 |
+| Trials recorded | 24 |
+| Complete | 13 |
+| Pruned | 11 |
 | Failed | 0 |
-| Running | 3 |
+| Running | 0 |
+| Best complete trial | 7 |
+| Best val MAE (mg/dL) | 19.8760 |
 
 ## What helped (auto-generated from top trials)
 
-- **seq_len=128** dominates top 5 (2/3)
-- **depth=1** dominates top 5 (2/3)
-- **num_heads**: mixed (2×1, 1×1, 4×1)
-- **lr**: range 0.0003751–0.002485, median 0.000378
-- **eta_infer**: range 1.134e-05–0.0002705, median 1.31e-05
-- **weight_init_std**: range 0.01307–0.02295, median 0.01499
-- **infer_steps**: 19×2, 18×1
-- **grad_clip**: 2.0×2, 1.0×1
+- **seq_len=64** dominates top 5 (5/5)
+- **depth=1** dominates top 5 (5/5)
+- **num_heads=1** dominates top 5 (5/5)
+- **readout=flatten** dominates top 5 (5/5)
+- **lr**: range 0.002667–0.003691, median 0.003533
+- **eta_infer**: range 9.998e-06–2.207e-05, median 1.68e-05
+- **weight_init_std**: range 0.01519–0.01879, median 0.01684
+- **infer_steps**: 12×2, 16×1, 14×1, 15×1
+- **grad_clip**: 0.5×4, 1.0×1
 
 ## Top model architectures
 
-### #1 — Trial 1 (MAE 20.673)
-
-- **Geometry**: seq_len=128, depth=1, heads=2
-- **Readout**: None
-- **All params**: seq_len=128, depth=1, num_heads=2, lr=0.002485, eta_infer=1.134e-05, infer_steps=19, max_infer_norm=1, grad_clip=2, weight_init_std=0.02295
-
-### #2 — Trial 0 (MAE 23.886)
+### #1 — Trial 7 (MAE 19.876)
 
 - **Geometry**: seq_len=64, depth=1, heads=1
-- **Readout**: None
-- **All params**: seq_len=64, depth=1, num_heads=1, lr=0.0003751, eta_infer=0.0002705, infer_steps=19, max_infer_norm=5, grad_clip=1, weight_init_std=0.01499
+- **Readout**: flatten
+- **All params**: seq_len=64, depth=1, num_heads=1, lr=0.003691, eta_infer=1.68e-05, infer_steps=12, max_infer_norm=1, grad_clip=0.5, weight_init_std=0.01531, readout=flatten, seed_offset=19
 
-### #3 — Trial 2 (MAE 27.937)
+### #2 — Trial 12 (MAE 20.011)
 
-- **Geometry**: seq_len=128, depth=3, heads=4
-- **Readout**: None
-- **All params**: seq_len=128, depth=3, num_heads=4, lr=0.000378, eta_infer=1.31e-05, infer_steps=18, max_infer_norm=5, grad_clip=2, weight_init_std=0.01307
+- **Geometry**: seq_len=64, depth=1, heads=1
+- **Readout**: flatten
+- **All params**: seq_len=64, depth=1, num_heads=1, lr=0.003533, eta_infer=2.207e-05, infer_steps=12, max_infer_norm=1, grad_clip=1, weight_init_std=0.01519, readout=flatten, seed_offset=21
+
+### #3 — Trial 14 (MAE 20.361)
+
+- **Geometry**: seq_len=64, depth=1, heads=1
+- **Readout**: flatten
+- **All params**: seq_len=64, depth=1, num_heads=1, lr=0.002667, eta_infer=9.998e-06, infer_steps=16, max_infer_norm=1, grad_clip=0.5, weight_init_std=0.01879, readout=flatten, seed_offset=21
+
+### #4 — Trial 0 (MAE 20.388)
+
+- **Geometry**: seq_len=64, depth=1, heads=1
+- **Readout**: flatten
+- **All params**: seq_len=64, depth=1, num_heads=1, lr=0.002975, eta_infer=1.281e-05, infer_steps=14, max_infer_norm=1, grad_clip=0.5, weight_init_std=0.01684, readout=flatten, seed_offset=21
+
+### #5 — Trial 13 (MAE 20.866)
+
+- **Geometry**: seq_len=64, depth=1, heads=1
+- **Readout**: flatten
+- **All params**: seq_len=64, depth=1, num_heads=1, lr=0.003681, eta_infer=1.787e-05, infer_steps=15, max_infer_norm=1, grad_clip=0.5, weight_init_std=0.01722, readout=flatten, seed_offset=11
 
 ## Complete-trial leaderboard
 
 | Trial | Best MAE | MARD% | Geometry | LR | η_infer | Infer steps | Grad clip |
 |------:|---------:|------:|----------|---:|--------:|------------:|----------:|
-| 1 | 20.673 | 16.84 | 128/d1/h2 | 0.002485 | 1.134e-05 | 19 | 2.0 |
-| 0 | 23.886 | 18.60 | 64/d1/h1 | 0.0003751 | 0.0002705 | 19 | 1.0 |
-| 2 | 27.937 | 22.61 | 128/d3/h4 | 0.000378 | 1.31e-05 | 18 | 2.0 |
+| 7 | 19.876 | 15.40 | 64/d1/h1 | 0.003691 | 1.68e-05 | 12 | 0.5 |
+| 12 | 20.011 | 15.13 | 64/d1/h1 | 0.003533 | 2.207e-05 | 12 | 1.0 |
+| 14 | 20.361 | 15.52 | 64/d1/h1 | 0.002667 | 9.998e-06 | 16 | 0.5 |
+| 0 | 20.388 | 15.75 | 64/d1/h1 | 0.002975 | 1.281e-05 | 14 | 0.5 |
+| 13 | 20.866 | 16.79 | 64/d1/h1 | 0.003681 | 1.787e-05 | 15 | 0.5 |
+| 17 | 21.253 | 16.08 | 64/d1/h1 | 0.003647 | 2.032e-05 | 13 | 1.0 |
+| 5 | 21.934 | 16.90 | 64/d1/h1 | 0.0035 | 1.05e-05 | 15 | 0.5 |
+| 16 | 21.986 | 17.06 | 64/d1/h1 | 0.003424 | 1.604e-05 | 12 | 1.0 |
+| 2 | 22.034 | 16.85 | 64/d1/h1 | 0.002975 | 1.281e-05 | 14 | 0.5 |
+| 8 | 22.629 | 18.58 | 64/d1/h1 | 0.003447 | 1.452e-05 | 16 | 0.5 |
+| 4 | 42.874 | 34.34 | 64/d1/h1 | 0.0026 | 1.5e-05 | 14 | 0.5 |
+| 3 | 42.921 | 33.98 | 64/d1/h1 | 0.0032 | 1.15e-05 | 16 | 0.5 |
+| 1 | 43.022 | 34.08 | 64/d1/h1 | 0.002975 | 1.281e-05 | 14 | 0.5 |
 
 ## Best MAE by trial
 
 | Trial | State | Best MAE (mg/dL) |
 |------:|-------|-----------------:|
-| 0 | RUNNING | 23.886 |
-| 1 | RUNNING | 20.673 |
-| 2 | RUNNING | 27.937 |
+| 0 | COMPLETE | 20.388 |
+| 1 | COMPLETE | 43.022 |
+| 2 | COMPLETE | 22.034 |
+| 3 | COMPLETE | 42.921 |
+| 4 | COMPLETE | 42.874 |
+| 5 | COMPLETE | 21.934 |
+| 6 | PRUNED | 21.414 |
+| 7 | COMPLETE | 19.876 |
+| 8 | COMPLETE | 22.629 |
+| 9 | PRUNED | 20.908 |
+| 10 | PRUNED | 20.590 |
+| 11 | PRUNED | 25.080 |
+| 12 | COMPLETE | 20.011 |
+| 13 | COMPLETE | 20.866 |
+| 14 | COMPLETE | 20.361 |
+| 15 | PRUNED | 20.862 |
+| 16 | COMPLETE | 21.986 |
+| 17 | COMPLETE | 21.253 |
+| 18 | PRUNED | 23.831 |
+| 19 | PRUNED | 43.884 |
+| 20 | PRUNED | 43.148 |
+| 21 | PRUNED | 23.747 |
+| 22 | PRUNED | 26.347 |
+| 23 | PRUNED | 23.422 |
 
 ## Top trial MAE traces (every 200 updates)
 
-- **Trial 1** (best 20.673): 1:22.46 → 2:22.05 → 3:26.55 → 4:20.67 → 5:23.60 → 6:22.22
-- **Trial 0** (best 23.886): 1:33.65 → 2:26.78 → 3:25.37 → 4:24.03 → 5:23.97 → 6:23.89
-- **Trial 2** (best 27.937): 1:32.14 → 2:27.94
+- **Trial 7** (best 19.876): 200:29.18 → 400:24.88 → 600:27.58 → 800:22.14 → 1000:22.31 → 1200:22.91 → 1400:21.76 → 1600:21.04 → 1800:20.68 → 2000:21.86 → 2200:21.11 → 2400:21.45 → 2600:20.61 → 2800:20.37 → 3000:20.04 → 3200:20.93 → 3400:24.81 → 3600:21.94 → 3800:19.88 → 4000:21.39 → 4200:19.90
+- **Trial 12** (best 20.011): 200:30.21 → 400:23.95 → 600:23.16 → 800:25.62 → 1000:25.04 → 1200:21.20 → 1400:20.70 → 1600:21.05 → 1800:21.13 → 2000:21.30 → 2200:20.33 → 2400:22.27 → 2600:20.01 → 2800:20.31 → 3000:20.69 → 3200:21.50 → 3400:20.95 → 3600:20.44 → 3800:20.01
+- **Trial 14** (best 20.361): 200:30.63 → 400:25.64 → 600:23.54 → 800:23.05 → 1000:22.15 → 1200:25.44 → 1400:21.72 → 1600:21.63 → 1800:21.25 → 2000:22.34 → 2200:20.52 → 2400:21.21 → 2600:20.36 → 2800:20.78 → 3000:21.29 → 3200:20.75 → 3400:21.19
+- **Trial 0** (best 20.388): 200:29.59 → 400:24.91 → 600:23.38 → 800:22.68 → 1000:24.02 → 1200:23.93 → 1400:21.86 → 1600:20.93 → 1800:21.36 → 2000:21.84 → 2200:20.83 → 2400:21.70 → 2600:22.27 → 2800:20.55 → 3000:20.90 → 3200:22.43 → 3400:20.39 → 3600:23.23 → 3800:20.50 → 4000:21.23
 
 ## Hyperparameter glossary
 

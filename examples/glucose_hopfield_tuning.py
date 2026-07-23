@@ -219,33 +219,9 @@ def enqueue_hopfield_baselines(study: optuna.Study) -> None:
 
 def suggest_hopfield_dynamics(trial: optuna.Trial) -> dict[str, float | int | str]:
     """Search Hopfield placement/strength plus breakthrough-informed PC knobs."""
-    return {
-        "seq_len": trial.suggest_categorical("seq_len", [64]),
-        "depth": trial.suggest_categorical("depth", [1]),
-        "num_heads": trial.suggest_categorical("num_heads", [1]),
-        "variant": trial.suggest_categorical(
-            "variant",
-            ["baseline", "projection", "embed-storkey", "forecast-storkey"],
-        ),
-        "hopfield_strength": trial.suggest_categorical(
-            "hopfield_strength",
-            ["0.5", "1.0", "1.5", "2.0", "learnable"],
-        ),
-        "lr": trial.suggest_float("lr", 1.8e-3, 3.8e-3, log=True),
-        "eta_infer": trial.suggest_float("eta_infer", 9e-6, 2.5e-5, log=True),
-        "infer_steps": trial.suggest_int("infer_steps", 12, 18),
-        "max_infer_norm": trial.suggest_categorical(
-            "max_infer_norm", [0.5, 1.0]
-        ),
-        "grad_clip": trial.suggest_categorical("grad_clip", [0.5, 1.0]),
-        "lr_decay_epochs": trial.suggest_categorical(
-            "lr_decay_epochs", [5, 10, 15]
-        ),
-        "weight_init_std": trial.suggest_float(
-            "weight_init_std", 0.014, 0.021, log=True
-        ),
-        "seed_offset": trial.suggest_int("seed_offset", 0, 40),
-    }
+    from examples.glucose_tuning_spaces import HOPFIELD_SPACE, suggest_from_spec
+
+    return suggest_from_spec(trial, HOPFIELD_SPACE)
 
 
 def _parse_hopfield_strength(raw: str | float | int) -> float | None:

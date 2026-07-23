@@ -29,7 +29,7 @@ import typer
 
 app = typer.Typer(add_completion=False, help="Render glucose Optuna MD/HTML reports.")
 
-DEFAULT_RUN_DIR = Path("runs/glucose_tuning_epochs_v2")
+DEFAULT_RUN_DIR = Path("runs/glucose_tuning_pc_v2")
 CONFIRM_DIR = Path("runs/glucose_pc_best_confirm")
 STUDY_NAME = "glucose_transformer_pc_epochs_v2"
 
@@ -456,15 +456,23 @@ def _render_markdown(payload: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Background",
+            "",
+            "This work builds on our earlier results with conventional (non-PC) transformers for glucose",
+            "forecasting at [GlucoseDAO/glucose-forecasting](https://github.com/GlucoseDAO/glucose-forecasting).",
+            "Here we replace the standard forward pass with **predictive coding (PC)** — an inner",
+            "optimisation loop where each layer maintains its own \"belief\" about what the input should",
+            "look like, computes a prediction error, and iteratively refines its activations before the",
+            "outer weight update.",
+            "",
+            "We also explore a **Hopfield extension** — adding a content-addressable associative memory",
+            "layer (Storkey Hopfield network) that can store and recall learned glucose dynamics such as",
+            "meal responses, exercise patterns, and dawn phenomenon. The Hopfield memory gives the model",
+            "an explicit pattern-recall mechanism beyond what attention alone provides.",
+            "",
             "## How the model works",
             "",
-            "This model reads a window of continuous glucose readings and predicts the next 60 minutes.",
-            "Unlike standard neural networks that just do a forward pass, **predictive coding (PC)**",
-            "adds an inner optimisation loop: each layer maintains its own \"belief\" about what the",
-            "input should look like, computes a prediction error, and iteratively refines its",
-            "activations before the outer weight update.",
-            "",
-            "### Architecture",
+            "### Standard PC Transformer",
             "",
             "```",
             "Glucose Input (batch, seq_len, 1)",
@@ -474,43 +482,86 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             "  +--[ Transformer Block ] × depth --------+",
             "  |    Multi-Scale Self-Attention (RoPE)    |",
             "  |    at downsampling 1×, 2×, 4×           |",
-            "  |         |                               |",
             "  |    LN → MLP expand (GELU)               |",
-            "  |         |                               |",
             "  |    MLP contract + Residual skip          |",
+            "  |    PC Energy Node                        |",
             "  +------------------------------------------+",
             "       |",
-            "  Regression Output Head",
-            "  readout: flatten / mean_pool / last",
+            "  Regression Output Head → Glucose Forecast (60 min)",
+            "```",
+            "",
+            "### Hopfield PC Transformer",
+            "",
+            "```",
+            "Glucose Input (batch, seq_len, 1)",
             "       |",
-            "  Glucose Forecast (12 steps = 60 min)",
+            "  Continuous Embedding",
+            "       |",
+            "  [Storkey Hopfield Memory]  ← content-addressable pattern recall",
+            "       |                       stores learned glucose dynamics",
+            "  +--[ Transformer Block ] × depth --------+",
+            "  |    Multi-Scale MHA + Residual           |",
+            "  |    MLP + skip + PC Energy Node          |",
+            "  +------------------------------------------+",
+            "       |",
+            "  Regression Output Head → Glucose Forecast (60 min)",
             "```",
             "",
             "### PC inference loop (runs at every node)",
             "",
             "1. Predict `z_mu` from incoming activations",
             "2. Compute `error = z_latent - z_mu`",
-            "3. Compute energy from error",
-            "4. Update `z_latent` via SGD (step size = `eta_infer`, clip = `max_infer_norm`)",
+            "3. Compute energy from error (Gaussian or Huber)",
+            "4. Update `z_latent` via SGD or Adam (step size = `eta_infer`, clip = `max_infer_norm`)",
             "5. Repeat for `infer_steps` iterations",
             "",
-            "### Energy functions",
+            "### Energy functions (both searched during tuning)",
             "",
-            "- **Gaussian** (default): E = 0.5 ||error||^2 — standard MSE, penalises large errors heavily",
+            "- **Gaussian** (default): E = 0.5 ||error||^2 — standard MSE, penalises large errors quadratically",
             "- **Huber**: quadratic for small errors, linear past `huber_delta` — robust to glucose spikes/outliers",
             "",
-            "## Files",
+            "## Limitations",
             "",
-            "- `results_snapshot.json` — full trial dump",
-            "- `report_data.json` — structured payload used by this report",
-            "- `report.md` / `report.html` — human-readable views",
-            "- `best_trial.json` — Optuna study winner when the coordinator finishes",
+            "- **Single participant data** — we started only 1.5 days before the deadline, so we used",
+            "  only Livia's personal CGM data rather than training across multiple participants.",
+            "- **Glucose-only input** — only continuous glucose values are fed to the model. Carbohydrate",
+            "  intake, heart rate, step count, and other covariates available in the full dataset are not included.",
+            "- **Limited tuning budget** — the tight timeline restricted the number of Optuna trials and",
+            "  hyperparameter ranges we could explore.",
             "",
-            "Regenerate with:",
+            "## How to run",
             "",
-            "```bash",
-            "uv run python scripts/generate_glucose_tuning_report.py --format all",
-            "```",
+            "### PC Transformer tuning (this report)",
+            "",
+            "Searches both Gaussian and Huber energy, SGD and Adam inference,",
+            "IPC on/off, and all architecture params. Default: 32 trials, Hyperband pruning.",
+            "",
+            "| Task | Command |",
+            "|------|---------|",
+            "| Start tuning | `uv run glucose-transformer-tune run` |",
+            "| Custom trial count | `uv run glucose-transformer-tune run --n-trials 64` |",
+            "| More parallel workers | `uv run glucose-transformer-tune run --n-trials 64 --max-workers 4` |",
+            "| Custom run directory | `uv run glucose-transformer-tune run --run-dir runs/my_experiment --study-name my_study` |",
+            "| Adjust epochs/patience | `uv run glucose-transformer-tune run --max-epochs 20 --patience 5` |",
+            "| Resume interrupted | `uv run glucose-transformer-tune run` (Optuna journal auto-resumes) |",
+            "| Regenerate this report | `uv run python scripts/generate_glucose_tuning_report.py --format all` |",
+            "",
+            "### Hopfield variant tuning",
+            "",
+            "Separate tuner that searches Hopfield memory placement (baseline / projection /",
+            "embed-storkey / forecast-storkey) and strength. Same PC dynamics search.",
+            "",
+            "| Task | Command |",
+            "|------|---------|",
+            "| Start Hopfield tuning | `uv run glucose-hopfield-tune run` |",
+            "| Custom trial count | `uv run glucose-hopfield-tune run --n-trials 48 --max-workers 3` |",
+            "| Regenerate Hopfield report | `uv run python scripts/generate_glucose_hopfield_tuning_report.py --format all` |",
+            "",
+            "### All reports",
+            "",
+            "| Task | Command |",
+            "|------|---------|",
+            "| Generate all reports | `uv run python scripts/generate_all_glucose_reports.py --format all` |",
             "",
         ]
     )
@@ -746,111 +797,146 @@ def _svg_line_chart_detailed(
 
 
 def _svg_architecture_diagram() -> str:
-    """Inline SVG diagram of the glucose PC transformer architecture."""
+    """Inline SVG showing Standard PC Transformer vs Hopfield PC Transformer side by side."""
+    f = 'font-family="Segoe UI,sans-serif"'
+
+    # ── Left column: Standard PC Transformer ──
+    def _standard_col() -> str:
+        cx, lx, w = 230, 130, 200
+        return (
+            f'<text x="{cx}" y="60" fill="#006FEE" font-size="13" {f} '
+            f'font-weight="700" text-anchor="middle">Standard PC Transformer</text>'
+            f'<text x="{cx}" y="76" fill="#9aa7b8" font-size="10" {f} '
+            f'text-anchor="middle">No associative memory</text>'
+            # Input
+            f'<rect x="{lx}" y="90" width="{w}" height="32" rx="6" '
+            f'fill="#1a2332" stroke="#3dd68c" stroke-width="1"/>'
+            f'<text x="{cx}" y="110" fill="#3dd68c" font-size="10" {f} '
+            f'text-anchor="middle" font-weight="600">Glucose Input (seq_len, 1)</text>'
+            f'<line x1="{cx}" y1="122" x2="{cx}" y2="134" stroke="#4b5563" '
+            f'stroke-width="1" marker-end="url(#ah)"/>'
+            # Embedding
+            f'<rect x="{lx}" y="134" width="{w}" height="30" rx="6" '
+            f'fill="#1a2332" stroke="#006FEE" stroke-width="1"/>'
+            f'<text x="{cx}" y="154" fill="#006FEE" font-size="10" {f} '
+            f'text-anchor="middle" font-weight="600">Continuous Embedding</text>'
+            f'<line x1="{cx}" y1="164" x2="{cx}" y2="184" stroke="#4b5563" '
+            f'stroke-width="1" marker-end="url(#ah)"/>'
+            # Transformer block
+            f'<rect x="{lx - 10}" y="184" width="{w + 20}" height="120" rx="8" '
+            f'fill="#121820" stroke="#9aa7b8" stroke-width="1" stroke-dasharray="5,3"/>'
+            f'<text x="{lx + 6}" y="200" fill="#9aa7b8" font-size="9" {f} '
+            f'font-style="italic">× depth</text>'
+            f'<rect x="{lx + 4}" y="206" width="{w - 8}" height="26" rx="5" '
+            f'fill="#1a2332" stroke="#f5a524" stroke-width="0.8"/>'
+            f'<text x="{cx}" y="224" fill="#f5a524" font-size="9.5" {f} '
+            f'text-anchor="middle">Multi-Scale MHA + Residual</text>'
+            f'<rect x="{lx + 4}" y="238" width="{w - 8}" height="24" rx="5" '
+            f'fill="#1a2332" stroke="#9353d3" stroke-width="0.8"/>'
+            f'<text x="{cx}" y="254" fill="#9353d3" font-size="9.5" {f} '
+            f'text-anchor="middle">LN → MLP → MLP + skip</text>'
+            f'<rect x="{lx + 4}" y="268" width="{w - 8}" height="26" rx="5" '
+            f'fill="#1a1a2e" stroke="#006FEE" stroke-width="1"/>'
+            f'<text x="{cx}" y="286" fill="#006FEE" font-size="9" {f} '
+            f'text-anchor="middle" font-weight="600">PC Energy Node</text>'
+            f'<line x1="{cx}" y1="304" x2="{cx}" y2="318" stroke="#4b5563" '
+            f'stroke-width="1" marker-end="url(#ah)"/>'
+            # Readout
+            f'<rect x="{lx}" y="318" width="{w}" height="30" rx="6" '
+            f'fill="#1a2332" stroke="#3dd68c" stroke-width="1"/>'
+            f'<text x="{cx}" y="338" fill="#3dd68c" font-size="10" {f} '
+            f'text-anchor="middle" font-weight="600">Readout → Forecast</text>'
+            f'<text x="{cx}" y="366" fill="#9aa7b8" font-size="9" {f} '
+            f'text-anchor="middle">Direct path: embed → attend → predict</text>'
+        )
+
+    # ── Right column: Hopfield PC Transformer ──
+    def _hopfield_col() -> str:
+        cx, lx, w = 690, 578, 224
+        return (
+            f'<text x="{cx}" y="60" fill="#f5a524" font-size="13" {f} '
+            f'font-weight="700" text-anchor="middle">Hopfield PC Transformer</text>'
+            f'<text x="{cx}" y="76" fill="#9aa7b8" font-size="10" {f} '
+            f'text-anchor="middle">Associative memory for pattern recall</text>'
+            # Input
+            f'<rect x="{lx}" y="90" width="{w}" height="32" rx="6" '
+            f'fill="#1a2332" stroke="#3dd68c" stroke-width="1"/>'
+            f'<text x="{cx}" y="110" fill="#3dd68c" font-size="10" {f} '
+            f'text-anchor="middle" font-weight="600">Glucose Input (seq_len, 1)</text>'
+            f'<line x1="{cx}" y1="122" x2="{cx}" y2="134" stroke="#4b5563" '
+            f'stroke-width="1" marker-end="url(#ah)"/>'
+            # Embedding
+            f'<rect x="{lx}" y="134" width="{w}" height="30" rx="6" '
+            f'fill="#1a2332" stroke="#006FEE" stroke-width="1"/>'
+            f'<text x="{cx}" y="154" fill="#006FEE" font-size="10" {f} '
+            f'text-anchor="middle" font-weight="600">Continuous Embedding</text>'
+            f'<line x1="{cx}" y1="164" x2="{cx}" y2="176" stroke="#4b5563" '
+            f'stroke-width="1" marker-end="url(#ah)"/>'
+            # Hopfield memory (highlighted)
+            f'<rect x="{lx - 4}" y="176" width="{w + 8}" height="38" rx="6" '
+            f'fill="#2a1f0a" stroke="#f5a524" stroke-width="2"/>'
+            f'<text x="{cx}" y="194" fill="#f5a524" font-size="11" {f} '
+            f'text-anchor="middle" font-weight="700">Storkey Hopfield Memory</text>'
+            f'<text x="{cx}" y="208" fill="#9aa7b8" font-size="8.5" {f} '
+            f'text-anchor="middle">content-addressable pattern recall</text>'
+            f'<line x1="{cx}" y1="214" x2="{cx}" y2="228" stroke="#4b5563" '
+            f'stroke-width="1" marker-end="url(#ah)"/>'
+            # Transformer block
+            f'<rect x="{lx - 10}" y="228" width="{w + 20}" height="76" rx="8" '
+            f'fill="#121820" stroke="#9aa7b8" stroke-width="1" stroke-dasharray="5,3"/>'
+            f'<text x="{lx + 6}" y="244" fill="#9aa7b8" font-size="9" {f} '
+            f'font-style="italic">× depth</text>'
+            f'<rect x="{lx + 4}" y="250" width="{w - 8}" height="24" rx="5" '
+            f'fill="#1a2332" stroke="#f5a524" stroke-width="0.8"/>'
+            f'<text x="{cx}" y="266" fill="#f5a524" font-size="9.5" {f} '
+            f'text-anchor="middle">Multi-Scale MHA + Residual</text>'
+            f'<rect x="{lx + 4}" y="278" width="{w - 8}" height="22" rx="5" '
+            f'fill="#1a2332" stroke="#9353d3" stroke-width="0.8"/>'
+            f'<text x="{cx}" y="294" fill="#9353d3" font-size="9.5" {f} '
+            f'text-anchor="middle">MLP + skip + PC Energy Node</text>'
+            f'<line x1="{cx}" y1="304" x2="{cx}" y2="318" stroke="#4b5563" '
+            f'stroke-width="1" marker-end="url(#ah)"/>'
+            # Readout
+            f'<rect x="{lx}" y="318" width="{w}" height="30" rx="6" '
+            f'fill="#1a2332" stroke="#3dd68c" stroke-width="1"/>'
+            f'<text x="{cx}" y="338" fill="#3dd68c" font-size="10" {f} '
+            f'text-anchor="middle" font-weight="600">Readout → Forecast</text>'
+            f'<text x="{cx}" y="366" fill="#9aa7b8" font-size="9" {f} '
+            f'text-anchor="middle">Memory recalls learned glucose dynamics</text>'
+        )
+
     return (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 520" '
-        'role="img" aria-label="Glucose PC Transformer Architecture" '
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 530" '
+        'role="img" aria-label="Standard vs Hopfield PC Transformer" '
         'style="max-width:100%;height:auto;">'
-        '<rect width="920" height="520" rx="12" fill="#0f1419"/>'
-        # Title
-        '<text x="460" y="32" fill="#e7ecf3" font-size="16" '
-        'font-family="Segoe UI,sans-serif" font-weight="650" text-anchor="middle">'
-        'Glucose PC Transformer — Data Flow</text>'
-        # --- Input ---
-        '<rect x="360" y="52" width="200" height="44" rx="8" fill="#1a2332" stroke="#3dd68c" stroke-width="1.5"/>'
-        '<text x="460" y="72" fill="#3dd68c" font-size="13" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle" font-weight="600">Glucose Input</text>'
-        '<text x="460" y="88" fill="#9aa7b8" font-size="10" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle">(batch, seq_len, 1) — raw 5-min readings</text>'
-        # Arrow 1
-        '<line x1="460" y1="96" x2="460" y2="114" stroke="#4b5563" stroke-width="1.5" marker-end="url(#ah)"/>'
-        # --- Embedding ---
-        '<rect x="330" y="114" width="260" height="44" rx="8" fill="#1a2332" stroke="#006FEE" stroke-width="1.5"/>'
-        '<text x="460" y="134" fill="#006FEE" font-size="13" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle" font-weight="600">Continuous Embedding</text>'
-        '<text x="460" y="150" fill="#9aa7b8" font-size="10" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle">Linear projection → (batch, seq_len, embed_dim)</text>'
-        # Arrow 2
-        '<line x1="460" y1="158" x2="460" y2="176" stroke="#4b5563" stroke-width="1.5" marker-end="url(#ah)"/>'
-        # --- Transformer block (repeated) ---
-        '<rect x="200" y="176" width="520" height="170" rx="10" fill="#121820" '
-        'stroke="#9aa7b8" stroke-width="1" stroke-dasharray="6,3"/>'
-        '<text x="220" y="196" fill="#9aa7b8" font-size="11" font-family="Segoe UI,sans-serif" '
-        'font-style="italic">× depth (1–3 blocks)</text>'
-        # Multi-Scale MHA
-        '<rect x="250" y="206" width="420" height="40" rx="6" fill="#1a2332" stroke="#f5a524" stroke-width="1.2"/>'
-        '<text x="460" y="224" fill="#f5a524" font-size="12" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle" font-weight="600">Multi-Scale Self-Attention + Residual</text>'
-        '<text x="460" y="240" fill="#9aa7b8" font-size="9.5" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle">num_heads parallel heads at DS=1, DS=2, DS=4 with RoPE</text>'
-        # Arrow
-        '<line x1="460" y1="246" x2="460" y2="260" stroke="#4b5563" stroke-width="1.2" marker-end="url(#ah)"/>'
-        # LnMlp1
-        '<rect x="290" y="260" width="170" height="34" rx="6" fill="#1a2332" stroke="#9353d3" stroke-width="1.2"/>'
-        '<text x="375" y="278" fill="#9353d3" font-size="11" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle" font-weight="600">LN → MLP expand</text>'
-        '<text x="375" y="290" fill="#9aa7b8" font-size="9" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle">GELU, embed → mlp_dim</text>'
-        # Arrow
-        '<line x1="460" y1="277" x2="460" y2="277" stroke="none"/>'
-        '<line x1="375" y1="294" x2="375" y2="306" stroke="#4b5563" stroke-width="1.2" marker-end="url(#ah)"/>'
-        # Mlp2Residual
-        '<rect x="290" y="306" width="170" height="34" rx="6" fill="#1a2332" stroke="#9353d3" stroke-width="1.2"/>'
-        '<text x="375" y="324" fill="#9353d3" font-size="11" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle" font-weight="600">MLP contract + Residual</text>'
-        '<text x="375" y="336" fill="#9aa7b8" font-size="9" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle">mlp_dim → embed_dim + skip</text>'
-        # Skip connection arrow (from MHA to Mlp2Residual)
-        '<path d="M 670 226 L 690 226 L 690 320 L 460 320" fill="none" '
-        'stroke="#4b5563" stroke-width="1" stroke-dasharray="4,3"/>'
-        '<text x="698" y="270" fill="#4b5563" font-size="9" font-family="Segoe UI,sans-serif" '
-        'transform="rotate(90,698,270)">skip</text>'
-        # Arrow out of block
-        '<line x1="460" y1="346" x2="460" y2="362" stroke="#4b5563" stroke-width="1.5" marker-end="url(#ah)"/>'
-        # --- PC Inference overlay (right side) ---
-        '<rect x="26" y="176" width="158" height="170" rx="8" fill="#1a1a2e" stroke="#f31260" stroke-width="1"/>'
-        '<text x="105" y="196" fill="#f31260" font-size="11" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle" font-weight="600">PC Inference Loop</text>'
-        '<text x="105" y="212" fill="#9aa7b8" font-size="9.5" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle">At every node:</text>'
-        '<text x="105" y="228" fill="#e7ecf3" font-size="9.5" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle">1. Predict z_mu</text>'
-        '<text x="105" y="244" fill="#e7ecf3" font-size="9.5" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle">2. error = z − z_mu</text>'
-        '<text x="105" y="260" fill="#e7ecf3" font-size="9.5" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle">3. Compute energy</text>'
-        '<text x="105" y="276" fill="#e7ecf3" font-size="9.5" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle">4. Update z via SGD</text>'
-        '<text x="105" y="296" fill="#9aa7b8" font-size="9" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle">Repeat infer_steps×</text>'
-        '<text x="105" y="312" fill="#9aa7b8" font-size="9" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle">step size = eta_infer</text>'
-        '<text x="105" y="328" fill="#9aa7b8" font-size="9" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle">clip = max_infer_norm</text>'
-        # --- Readout ---
-        '<rect x="300" y="362" width="320" height="44" rx="8" fill="#1a2332" stroke="#3dd68c" stroke-width="1.5"/>'
-        '<text x="460" y="382" fill="#3dd68c" font-size="13" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle" font-weight="600">Regression Output Head</text>'
-        '<text x="460" y="398" fill="#9aa7b8" font-size="10" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle">readout (flatten/mean_pool/last) → GELU → Linear → (batch, horizon)</text>'
-        # Arrow to output
-        '<line x1="460" y1="406" x2="460" y2="424" stroke="#4b5563" stroke-width="1.5" marker-end="url(#ah)"/>'
-        # Output
-        '<rect x="350" y="424" width="220" height="38" rx="8" fill="#1e3a2f" stroke="#3dd68c" stroke-width="1.5"/>'
-        '<text x="460" y="442" fill="#3dd68c" font-size="13" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle" font-weight="600">Glucose Forecast</text>'
-        '<text x="460" y="456" fill="#9aa7b8" font-size="10" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle">12 steps ahead (60 min at 5-min intervals)</text>'
-        # --- Training loop annotation (bottom) ---
-        '<text x="460" y="486" fill="#9aa7b8" font-size="10" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle">Training: outer loop updates weights (lr, grad_clip) · '
-        'inner PC loop updates activations (eta_infer, infer_steps)</text>'
-        '<text x="460" y="502" fill="#9aa7b8" font-size="10" font-family="Segoe UI,sans-serif" '
-        'text-anchor="middle">LR decays via cosine schedule after lr_decay_epochs · '
-        'weight_decay adds L2 regularisation</text>'
-        # Arrowhead marker
+        '<rect width="920" height="530" rx="12" fill="#0f1419"/>'
         '<defs><marker id="ah" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">'
         '<path d="M0,0 L8,3 L0,6" fill="#4b5563"/></marker></defs>'
+        f'<text x="460" y="30" fill="#e7ecf3" font-size="15" {f} font-weight="650" '
+        f'text-anchor="middle">Standard PC Transformer vs Hopfield Extension</text>'
+        f'<text x="460" y="46" fill="#9aa7b8" font-size="10" {f} text-anchor="middle">'
+        f'Same transformer backbone — Hopfield adds associative memory for glucose pattern recall</text>'
+        '<line x1="460" y1="56" x2="460" y2="375" stroke="#243041" stroke-width="1" stroke-dasharray="6,4"/>'
+        + _standard_col()
+        + _hopfield_col()
+        # PC inference box (shared, bottom)
+        + f'<rect x="100" y="386" width="720" height="130" rx="8" fill="#121820" '
+        f'stroke="#f31260" stroke-width="1"/>'
+        f'<text x="460" y="408" fill="#f31260" font-size="12" {f} '
+        f'text-anchor="middle" font-weight="650">'
+        f'PC Inference Loop (runs at every node in both variants)</text>'
+        f'<text x="460" y="428" fill="#e7ecf3" font-size="10" {f} text-anchor="middle">'
+        f'1. Predict z_mu from inputs  →  2. error = z − z_mu  →  '
+        f'3. Compute energy  →  4. Update z via SGD/Adam</text>'
+        f'<text x="460" y="448" fill="#9aa7b8" font-size="10" {f} text-anchor="middle">'
+        f'Repeat infer_steps× · step size eta_infer · clip max_infer_norm · '
+        f'optimizer: sgd or adam (searched)</text>'
+        f'<text x="460" y="468" fill="#9aa7b8" font-size="9.5" {f} text-anchor="middle">'
+        f'Outer loop: Adam weight update (lr, grad_clip) · cosine LR decay after lr_decay_epochs</text>'
+        f'<text x="460" y="492" fill="#f5a524" font-size="10" {f} text-anchor="middle" font-weight="600">'
+        f'Why Hopfield? Content-addressable memory stores learned glucose patterns (meals, exercise,</text>'
+        f'<text x="460" y="506" fill="#f5a524" font-size="10" {f} text-anchor="middle" font-weight="600">'
+        f'dawn phenomenon) and recalls them during inference — giving the model explicit pattern memory.</text>'
         '</svg>'
     )
 
@@ -1296,26 +1382,92 @@ def _render_html(payload: dict[str, Any]) -> str:
       </table>
     </section>
     <section>
-      <h2>How the model works</h2>
+      <h2>Background</h2>
       <p style="font-size:0.85rem; color:var(--muted);">
-        This model reads a window of continuous glucose readings and predicts the next 60 minutes.
-        Unlike standard neural networks that just do a forward pass, <strong>predictive coding (PC)</strong>
-        adds an inner optimisation loop: each layer maintains its own "belief" about what the input should
-        look like, computes a prediction error, and iteratively refines its activations before the outer
-        weight update. This makes training more biologically plausible and can improve generalisation.
+        This work builds on our earlier results with conventional (non-PC) transformers for glucose forecasting
+        at <a href="https://github.com/GlucoseDAO/glucose-forecasting" style="color:var(--accent);"
+        >GlucoseDAO/glucose-forecasting</a>. Here we replace the standard forward pass with
+        <strong>predictive coding (PC)</strong> — an inner optimisation loop where each layer maintains its
+        own "belief" about what the input should look like, computes a prediction error, and iteratively
+        refines its activations before the outer weight update. This makes training more biologically
+        plausible and can improve generalisation.
       </p>
+      <p style="font-size:0.85rem; color:var(--muted);">
+        We also explore a <strong>Hopfield extension</strong> — adding a content-addressable associative
+        memory layer (Storkey Hopfield network) that can store and recall learned glucose dynamics such as
+        meal responses, exercise patterns, and dawn phenomenon. The Hopfield memory gives the model an
+        explicit pattern-recall mechanism beyond what attention alone provides.
+      </p>
+    </section>
+    <section>
+      <h2>How the model works</h2>
       <div class="chart">{_svg_architecture_diagram()}</div>
       <p style="font-size:0.85rem; color:var(--muted); margin-top:12px;">
-        The <strong>energy function</strong> determines how prediction errors are penalised at each PC node.
-        Gaussian energy (default) uses squared error — simple but sensitive to outliers like sudden glucose
-        spikes. Huber energy switches to linear penalty past a threshold (<code>huber_delta</code>),
-        making the model more robust to noisy readings.
+        The <strong>energy function</strong> at each PC node determines how prediction errors are penalised.
+        Tuning searches both Gaussian (standard MSE) and Huber (robust to outliers) energy variants,
+        along with SGD vs Adam inference optimisers and incremental PC (IPC) on/off.
       </p>
       <div class="chart">{_svg_energy_comparison()}</div>
     </section>
     <section>
-      <h2>Regenerate</h2>
-      <p><code>uv run python scripts/generate_glucose_tuning_report.py --format all</code></p>
+      <h2>Limitations</h2>
+      <ul style="font-size:0.85rem; color:var(--muted);">
+        <li><strong>Single participant data</strong> — we started only 1.5 days before the deadline,
+          so we used only Livia's personal CGM data rather than training across multiple participants.</li>
+        <li><strong>Glucose-only input</strong> — only continuous glucose values are fed to the model.
+          Carbohydrate intake, heart rate, step count, and other covariates that are available in the
+          full dataset are not included.</li>
+        <li><strong>Limited tuning budget</strong> — the tight timeline restricted the number of Optuna
+          trials and hyperparameter ranges we could explore.</li>
+      </ul>
+    </section>
+    <section>
+      <h2>How to run</h2>
+      <h3 style="font-size:0.95rem;">PC Transformer tuning (this report)</h3>
+      <p style="font-size:0.85rem; color:var(--muted);">
+        Searches both Gaussian and Huber energy, SGD and Adam inference,
+        IPC on/off, and all architecture params. Default: 32 trials, Hyperband pruning.
+      </p>
+      <table style="font-size:0.85rem;">
+        <tbody>
+          <tr><td style="color:var(--muted);">Start tuning</td>
+            <td><code>uv run glucose-transformer-tune run</code></td></tr>
+          <tr><td style="color:var(--muted);">Custom trial count</td>
+            <td><code>uv run glucose-transformer-tune run --n-trials 64</code></td></tr>
+          <tr><td style="color:var(--muted);">More parallel workers</td>
+            <td><code>uv run glucose-transformer-tune run --n-trials 64 --max-workers 4</code></td></tr>
+          <tr><td style="color:var(--muted);">Custom run directory</td>
+            <td><code>uv run glucose-transformer-tune run --run-dir runs/my_experiment --study-name my_study</code></td></tr>
+          <tr><td style="color:var(--muted);">Adjust epochs/patience</td>
+            <td><code>uv run glucose-transformer-tune run --max-epochs 20 --patience 5</code></td></tr>
+          <tr><td style="color:var(--muted);">Resume interrupted run</td>
+            <td><code>uv run glucose-transformer-tune run</code> (Optuna journal auto-resumes)</td></tr>
+          <tr><td style="color:var(--muted);">Regenerate this report</td>
+            <td><code>uv run python scripts/generate_glucose_tuning_report.py --format all</code></td></tr>
+        </tbody>
+      </table>
+      <h3 style="font-size:0.95rem; margin-top:1.2rem;">Hopfield variant tuning</h3>
+      <p style="font-size:0.85rem; color:var(--muted);">
+        Searches Hopfield memory placement (baseline / projection / embed-storkey / forecast-storkey)
+        and strength. Same PC dynamics search.
+      </p>
+      <table style="font-size:0.85rem;">
+        <tbody>
+          <tr><td style="color:var(--muted);">Start Hopfield tuning</td>
+            <td><code>uv run glucose-hopfield-tune run</code></td></tr>
+          <tr><td style="color:var(--muted);">Custom trial count</td>
+            <td><code>uv run glucose-hopfield-tune run --n-trials 48 --max-workers 3</code></td></tr>
+          <tr><td style="color:var(--muted);">Regenerate Hopfield report</td>
+            <td><code>uv run python scripts/generate_glucose_hopfield_tuning_report.py --format all</code></td></tr>
+        </tbody>
+      </table>
+      <h3 style="font-size:0.95rem; margin-top:1.2rem;">All reports</h3>
+      <table style="font-size:0.85rem;">
+        <tbody>
+          <tr><td style="color:var(--muted);">Generate all reports</td>
+            <td><code>uv run python scripts/generate_all_glucose_reports.py --format all</code></td></tr>
+        </tbody>
+      </table>
     </section>
   </main>
 </body>
@@ -1348,7 +1500,7 @@ def main(
     if ctx.invoked_subcommand is not None:
         return
 
-    if refresh:
+    if refresh and (run_dir / "optuna_journal.log").exists():
         _export_snapshot(run_dir, study_name=study_name)
 
     snapshot_path = run_dir / "results_snapshot.json"

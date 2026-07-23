@@ -106,36 +106,9 @@ def create_study(
 
 def suggest_pc_dynamics(trial: optuna.Trial) -> dict[str, float | int]:
     """Search PC dynamics and architecture factors linked to instability."""
-    dynamics: dict[str, Any] = {
-        "seq_len": trial.suggest_categorical("seq_len", [64, 128]),
-        "depth": trial.suggest_int("depth", 1, 3),
-        "num_heads": trial.suggest_categorical("num_heads", [1, 2, 4]),
-        "lr": trial.suggest_float("lr", 3e-4, 5e-3, log=True),
-        "eta_infer": trial.suggest_float("eta_infer", 1e-5, 5e-4, log=True),
-        "infer_steps": trial.suggest_int("infer_steps", 8, 24),
-        "max_infer_norm": trial.suggest_categorical(
-            "max_infer_norm", [0.5, 1.0, 5.0]
-        ),
-        "grad_clip": trial.suggest_categorical("grad_clip", [0.5, 1.0, 2.0]),
-        "lr_decay_epochs": trial.suggest_categorical(
-            "lr_decay_epochs", [5, 10, 15]
-        ),
-        "weight_init_std": trial.suggest_float(
-            "weight_init_std", 0.01, 0.03, log=True
-        ),
-        "energy": trial.suggest_categorical("energy", ["gaussian", "huber"]),
-        "ipc": trial.suggest_categorical("ipc", [True, False]),
-        "infer_optimizer": trial.suggest_categorical(
-            "infer_optimizer", ["sgd", "adam"]
-        ),
-    }
-    if dynamics["energy"] == "huber":
-        dynamics["huber_delta"] = trial.suggest_float(
-            "huber_delta", 0.1, 2.0, log=True
-        )
-    else:
-        dynamics["huber_delta"] = 1.0
-    return dynamics
+    from examples.glucose_tuning_spaces import TRANSFORMER_SPACE, suggest_from_spec
+
+    return suggest_from_spec(trial, TRANSFORMER_SPACE)
 
 
 def query_cuda_process_memory() -> dict[int, int]:

@@ -520,11 +520,16 @@ def _render_markdown(payload: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "## How the model works",
+            "## Background",
             "",
-            "This model extends the glucose PC transformer with **Hopfield associative memory** — a",
-            "content-addressable memory layer that can store and recall learned glucose patterns.",
-            "The tuning searches over where to place the Hopfield node and how strong its influence is.",
+            "This work builds on our earlier results with conventional transformers for glucose forecasting",
+            "at [GlucoseDAO/glucose-forecasting](https://github.com/GlucoseDAO/glucose-forecasting).",
+            "Here we add **predictive coding (PC)** inner loops and explore **Hopfield associative memory**",
+            "— a content-addressable memory layer that stores and recalls learned glucose dynamics (meal",
+            "responses, exercise patterns, dawn phenomenon). The Hopfield memory gives the model an explicit",
+            "pattern-recall mechanism beyond what attention alone provides.",
+            "",
+            "## How the model works",
             "",
             "### Hopfield variants searched",
             "",
@@ -542,8 +547,8 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             "       |",
             "  Continuous Embedding",
             "       |",
-            "  [Storkey Hopfield Memory]  ← associative recall of learned patterns",
-            "       |                       strength = fixed or learnable",
+            "  [Storkey Hopfield Memory]  ← content-addressable pattern recall",
+            "       |                       stores learned glucose dynamics",
             "  +--[ Transformer Block ] × depth --------+",
             "  |    Multi-Scale Self-Attention (RoPE)    |",
             "  |    LN → MLP expand (GELU)               |",
@@ -561,22 +566,49 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             "4. Update `z_latent` via SGD (step size = `eta_infer`, clip = `max_infer_norm`)",
             "5. Repeat for `infer_steps` iterations",
             "",
-            "## Files",
+            "## Limitations",
             "",
-            "| Path | Role |",
-            "|------|------|",
-            "| `results_snapshot.json` | Full trial dump (all states) |",
-            "| `report_data.json` | Structured payload |",
-            "| `report.md` / `report.html` | Human-readable views |",
-            "| `best_trial.json` | Coordinator winner summary |",
-            "| `coordinator_config.json` | Exact settings for this run |",
-            "| `trials/trial_XXXX/` | Per-trial config, history, checkpoints |",
+            "- **Single participant data** — we started only 1.5 days before the deadline, so we used",
+            "  only Livia's personal CGM data rather than training across multiple participants.",
+            "- **Glucose-only input** — only continuous glucose values are fed to the model. Carbohydrate",
+            "  intake, heart rate, step count, and other covariates available in the full dataset are not included.",
+            "- **Limited tuning budget** — the tight timeline restricted the number of Optuna trials and",
+            "  hyperparameter ranges we could explore.",
             "",
-            "Regenerate:",
+            "## How to run",
             "",
-            "```bash",
-            "uv run python scripts/generate_glucose_hopfield_tuning_report.py --format all",
-            "```",
+            "### Hopfield variant tuning (this report)",
+            "",
+            "Searches over Hopfield variant placement (baseline / projection / embed-storkey /",
+            "forecast-storkey), strength (0.5–2.0 or learnable), and all PC/architecture params.",
+            "Default: 24 trials, Hyperband pruning.",
+            "",
+            "| Task | Command |",
+            "|------|---------|",
+            "| Start tuning | `uv run glucose-hopfield-tune run` |",
+            "| Custom trial count | `uv run glucose-hopfield-tune run --n-trials 48` |",
+            "| More parallel workers | `uv run glucose-hopfield-tune run --n-trials 48 --max-workers 4` |",
+            "| Custom run directory | `uv run glucose-hopfield-tune run --run-dir runs/my_hopfield --study-name my_study` |",
+            "| Adjust epochs/patience | `uv run glucose-hopfield-tune run --max-epochs 20 --patience 5` |",
+            "| Resume interrupted | `uv run glucose-hopfield-tune run` (Optuna journal auto-resumes) |",
+            "| Regenerate this report | `uv run python scripts/generate_glucose_hopfield_tuning_report.py --format all` |",
+            "",
+            "### PC Transformer tuning (Gaussian vs Huber energy)",
+            "",
+            "Separate tuner for the base PC transformer. Searches both Gaussian and Huber energy,",
+            "SGD and Adam inference, IPC on/off, and all architecture params.",
+            "",
+            "| Task | Command |",
+            "|------|---------|",
+            "| Start transformer tuning | `uv run glucose-transformer-tune run` |",
+            "| Custom trial count | `uv run glucose-transformer-tune run --n-trials 64 --max-workers 4` |",
+            "| Regenerate transformer report | `uv run python scripts/generate_glucose_tuning_report.py --format all` |",
+            "",
+            "### All reports",
+            "",
+            "| Task | Command |",
+            "|------|---------|",
+            "| Generate all reports | `uv run python scripts/generate_all_glucose_reports.py --format all` |",
             "",
         ]
     )
@@ -1055,15 +1087,85 @@ def _render_html(payload: dict[str, Any]) -> str:
       </table>
     </section>
     <section>
-      <h2>How the model works</h2>
+      <h2>Background</h2>
       <p style="font-size:0.85rem; color:var(--muted);">
-        This study adds <strong>Hopfield associative memory</strong> to the glucose PC transformer.
-        A Hopfield layer is a content-addressable memory that stores and recalls learned glucose patterns,
-        potentially helping the model recognise recurring dynamics (meals, exercise, dawn phenomenon).
-        The tuning searches over <strong>where</strong> to place the memory (or omit it entirely) and
-        <strong>how strong</strong> its influence is.
+        This work builds on our earlier results with conventional transformers for glucose forecasting
+        at <a href="https://github.com/GlucoseDAO/glucose-forecasting" style="color:var(--accent);"
+        >GlucoseDAO/glucose-forecasting</a>. Here we add <strong>predictive coding (PC)</strong>
+        inner loops and explore <strong>Hopfield associative memory</strong> — a content-addressable
+        memory layer that stores and recalls learned glucose dynamics (meal responses, exercise
+        patterns, dawn phenomenon). The Hopfield memory gives the model an explicit pattern-recall
+        mechanism beyond what attention alone provides.
       </p>
+      <p style="font-size:0.85rem; color:var(--muted);">
+        The tuning searches over <strong>where</strong> to place the Hopfield memory (after embedding,
+        before the forecast head, or omit it entirely) and <strong>how strong</strong> its influence
+        is (fixed scaling vs learnable).
+      </p>
+    </section>
+    <section>
+      <h2>How the model works</h2>
       <div class="chart">{_svg_hopfield_architecture()}</div>
+    </section>
+    <section>
+      <h2>Limitations</h2>
+      <ul style="font-size:0.85rem; color:var(--muted);">
+        <li><strong>Single participant data</strong> — we started only 1.5 days before the deadline,
+          so we used only Livia's personal CGM data rather than training across multiple participants.</li>
+        <li><strong>Glucose-only input</strong> — only continuous glucose values are fed to the model.
+          Carbohydrate intake, heart rate, step count, and other covariates that are available in the
+          full dataset are not included.</li>
+        <li><strong>Limited tuning budget</strong> — the tight timeline restricted the number of Optuna
+          trials and hyperparameter ranges we could explore.</li>
+      </ul>
+    </section>
+    <section>
+      <h2>How to run</h2>
+      <h3 style="font-size:0.95rem;">Hopfield variant tuning (this report)</h3>
+      <p style="font-size:0.85rem; color:var(--muted);">
+        Searches over Hopfield variant placement (baseline / projection / embed-storkey / forecast-storkey),
+        strength (0.5&ndash;2.0 or learnable), and all PC/architecture params. Default: 24 trials, Hyperband pruning.
+      </p>
+      <table style="font-size:0.85rem;">
+        <tbody>
+          <tr><td style="color:var(--muted);">Start tuning</td>
+            <td><code>uv run glucose-hopfield-tune run</code></td></tr>
+          <tr><td style="color:var(--muted);">Custom trial count</td>
+            <td><code>uv run glucose-hopfield-tune run --n-trials 48</code></td></tr>
+          <tr><td style="color:var(--muted);">More parallel workers</td>
+            <td><code>uv run glucose-hopfield-tune run --n-trials 48 --max-workers 4</code></td></tr>
+          <tr><td style="color:var(--muted);">Custom run directory</td>
+            <td><code>uv run glucose-hopfield-tune run --run-dir runs/my_hopfield --study-name my_study</code></td></tr>
+          <tr><td style="color:var(--muted);">Adjust epochs/patience</td>
+            <td><code>uv run glucose-hopfield-tune run --max-epochs 20 --patience 5</code></td></tr>
+          <tr><td style="color:var(--muted);">Resume interrupted run</td>
+            <td><code>uv run glucose-hopfield-tune run</code> (Optuna journal auto-resumes)</td></tr>
+          <tr><td style="color:var(--muted);">Regenerate this report</td>
+            <td><code>uv run python scripts/generate_glucose_hopfield_tuning_report.py --format all</code></td></tr>
+        </tbody>
+      </table>
+      <h3 style="font-size:0.95rem; margin-top:1.2rem;">PC Transformer tuning (Gaussian vs Huber energy)</h3>
+      <p style="font-size:0.85rem; color:var(--muted);">
+        Separate tuner for the base PC transformer. Searches both Gaussian and Huber energy,
+        SGD and Adam inference, IPC on/off, and all architecture params.
+      </p>
+      <table style="font-size:0.85rem;">
+        <tbody>
+          <tr><td style="color:var(--muted);">Start transformer tuning</td>
+            <td><code>uv run glucose-transformer-tune run</code></td></tr>
+          <tr><td style="color:var(--muted);">Custom trial count</td>
+            <td><code>uv run glucose-transformer-tune run --n-trials 64 --max-workers 4</code></td></tr>
+          <tr><td style="color:var(--muted);">Regenerate transformer report</td>
+            <td><code>uv run python scripts/generate_glucose_tuning_report.py --format all</code></td></tr>
+        </tbody>
+      </table>
+      <h3 style="font-size:0.95rem; margin-top:1.2rem;">All reports</h3>
+      <table style="font-size:0.85rem;">
+        <tbody>
+          <tr><td style="color:var(--muted);">Generate all reports</td>
+            <td><code>uv run python scripts/generate_all_glucose_reports.py --format all</code></td></tr>
+        </tbody>
+      </table>
     </section>
   </main>
   <script>
@@ -1183,12 +1285,13 @@ def main(
         data_path = run_dir / "report_data.json"
         data_path.write_text(json.dumps(payload, indent=2))
         typer.echo(f"wrote {data_path}")
+    resolved = _resolve_study_name(run_dir, study_name)
     if "md" in wanted:
         md_text = _render_markdown(payload)
         md_path = run_dir / "report.md"
         md_path.write_text(md_text, encoding="utf-8")
         typer.echo(f"wrote {md_path}")
-        docs_md = Path("docs/reports/glucose_hopfield_optuna_progress.md")
+        docs_md = Path(f"docs/reports/{resolved}_progress.md")
         docs_md.parent.mkdir(parents=True, exist_ok=True)
         docs_md.write_text(md_text, encoding="utf-8")
         typer.echo(f"wrote {docs_md}")
@@ -1197,7 +1300,7 @@ def main(
         html_path = run_dir / "report.html"
         html_path.write_text(html_text, encoding="utf-8")
         typer.echo(f"wrote {html_path}")
-        docs_html = Path("docs/reports/glucose_hopfield_optuna_progress.html")
+        docs_html = Path(f"docs/reports/{resolved}_progress.html")
         docs_html.parent.mkdir(parents=True, exist_ok=True)
         docs_html.write_text(html_text, encoding="utf-8")
         typer.echo(f"wrote {docs_html}")

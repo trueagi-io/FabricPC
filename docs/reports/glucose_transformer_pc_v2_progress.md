@@ -1,71 +1,110 @@
 # Glucose PC Optuna progress report
 
-Generated: `2026-07-23T22:08:26.811225+00:00`  
-Study: `glucose_transformer_pc_epochs_v2`  
+Generated: `2026-07-23T22:08:27.437897+00:00`  
+Study: `glucose_transformer_pc_v2`  
 Mode: predictive coding (PC) only
 
 ## Summary
 
 | Metric | Value |
 |--------|------:|
-| Trials recorded | 3 |
-| Complete | 0 |
-| Pruned | 0 |
+| Trials recorded | 32 |
+| Complete | 4 |
+| Pruned | 28 |
 | Failed | 0 |
-| Running | 3 |
+| Running | 0 |
+| Best complete trial | 21 |
+| Best val MAE (mg/dL) | 20.6780 |
 
 ## What helped (auto-generated from top trials)
 
-- **seq_len=128** dominates top 5 (2/3)
-- **depth=1** dominates top 5 (2/3)
-- **num_heads**: mixed (2×1, 1×1, 4×1)
-- **lr**: range 0.0003751–0.002485, median 0.000378
-- **eta_infer**: range 1.134e-05–0.0002705, median 1.31e-05
-- **weight_init_std**: range 0.01307–0.02295, median 0.01499
-- **infer_steps**: 19×2, 18×1
-- **grad_clip**: 2.0×2, 1.0×1
+- **seq_len=64** dominates top 5 (4/4)
+- **depth=1** dominates top 5 (4/4)
+- **num_heads=4** dominates top 5 (4/4)
+- **lr**: range 0.002936–0.0045, median 0.004234
+- **eta_infer**: range 1.358e-05–5.414e-05, median 3.401e-05
+- **weight_init_std**: range 0.01355–0.02449, median 0.0242
+- **infer_steps**: 14×1, 17×1, 11×1, 12×1
+- **grad_clip**: 1.0×3, 0.5×1
 
 ## Top model architectures
 
-### #1 — Trial 1 (MAE 20.673)
+### #1 — Trial 21 (MAE 20.678)
 
-- **Geometry**: seq_len=128, depth=1, heads=2
+- **Geometry**: seq_len=64, depth=1, heads=4
 - **Readout**: None
-- **All params**: seq_len=128, depth=1, num_heads=2, lr=0.002485, eta_infer=1.134e-05, infer_steps=19, max_infer_norm=1, grad_clip=2, weight_init_std=0.02295
+- **All params**: seq_len=64, depth=1, num_heads=4, lr=0.004202, eta_infer=1.358e-05, infer_steps=14, max_infer_norm=0.5, grad_clip=1, weight_init_std=0.0242, weight_decay=3.381e-05
 
-### #2 — Trial 0 (MAE 23.886)
+### #2 — Trial 19 (MAE 21.220)
 
-- **Geometry**: seq_len=64, depth=1, heads=1
+- **Geometry**: seq_len=64, depth=1, heads=4
 - **Readout**: None
-- **All params**: seq_len=64, depth=1, num_heads=1, lr=0.0003751, eta_infer=0.0002705, infer_steps=19, max_infer_norm=5, grad_clip=1, weight_init_std=0.01499
+- **All params**: seq_len=64, depth=1, num_heads=4, lr=0.002936, eta_infer=3.401e-05, infer_steps=17, max_infer_norm=0.5, grad_clip=0.5, weight_init_std=0.01355, weight_decay=1.061e-05
 
-### #3 — Trial 2 (MAE 27.937)
+### #3 — Trial 23 (MAE 21.410)
 
-- **Geometry**: seq_len=128, depth=3, heads=4
+- **Geometry**: seq_len=64, depth=1, heads=4
 - **Readout**: None
-- **All params**: seq_len=128, depth=3, num_heads=4, lr=0.000378, eta_infer=1.31e-05, infer_steps=18, max_infer_norm=5, grad_clip=2, weight_init_std=0.01307
+- **All params**: seq_len=64, depth=1, num_heads=4, lr=0.0045, eta_infer=2.565e-05, infer_steps=11, max_infer_norm=1, grad_clip=1, weight_init_std=0.02449, weight_decay=8.662e-05
+
+### #4 — Trial 0 (MAE 22.139)
+
+- **Geometry**: seq_len=64, depth=1, heads=4
+- **Readout**: None
+- **All params**: seq_len=64, depth=1, num_heads=4, lr=0.004234, eta_infer=5.414e-05, infer_steps=12, max_infer_norm=1, grad_clip=1, weight_init_std=0.02284, weight_decay=8.444e-05
 
 ## Complete-trial leaderboard
 
 | Trial | Best MAE | MARD% | Geometry | LR | η_infer | Infer steps | Grad clip |
 |------:|---------:|------:|----------|---:|--------:|------------:|----------:|
-| 1 | 20.673 | 16.84 | 128/d1/h2 | 0.002485 | 1.134e-05 | 19 | 2.0 |
-| 0 | 23.886 | 18.60 | 64/d1/h1 | 0.0003751 | 0.0002705 | 19 | 1.0 |
-| 2 | 27.937 | 22.61 | 128/d3/h4 | 0.000378 | 1.31e-05 | 18 | 2.0 |
+| 21 | 20.678 | 15.95 | 64/d1/h4 | 0.004202 | 1.358e-05 | 14 | 1.0 |
+| 19 | 21.220 | 16.94 | 64/d1/h4 | 0.002936 | 3.401e-05 | 17 | 0.5 |
+| 23 | 21.410 | 16.83 | 64/d1/h4 | 0.0045 | 2.565e-05 | 11 | 1.0 |
+| 0 | 22.139 | 17.42 | 64/d1/h4 | 0.004234 | 5.414e-05 | 12 | 1.0 |
 
 ## Best MAE by trial
 
 | Trial | State | Best MAE (mg/dL) |
 |------:|-------|-----------------:|
-| 0 | RUNNING | 23.886 |
-| 1 | RUNNING | 20.673 |
-| 2 | RUNNING | 27.937 |
+| 0 | COMPLETE | 22.139 |
+| 1 | PRUNED | 33.928 |
+| 2 | PRUNED | 35.682 |
+| 3 | PRUNED | 36.305 |
+| 4 | PRUNED | 23.888 |
+| 5 | PRUNED | 34.268 |
+| 6 | PRUNED | 36.301 |
+| 7 | PRUNED | 29.870 |
+| 8 | PRUNED | 31.421 |
+| 9 | PRUNED | 31.895 |
+| 10 | PRUNED | 31.154 |
+| 11 | PRUNED | 30.473 |
+| 12 | PRUNED | 37.232 |
+| 13 | PRUNED | 31.198 |
+| 14 | PRUNED | 40.314 |
+| 15 | PRUNED | 33.438 |
+| 16 | PRUNED | 26.816 |
+| 17 | PRUNED | 24.338 |
+| 18 | PRUNED | 24.027 |
+| 19 | COMPLETE | 21.220 |
+| 20 | PRUNED | 31.282 |
+| 21 | COMPLETE | 20.678 |
+| 22 | PRUNED | 33.257 |
+| 23 | COMPLETE | 21.410 |
+| 24 | PRUNED | 24.854 |
+| 25 | PRUNED | 32.447 |
+| 26 | PRUNED | 32.893 |
+| 27 | PRUNED | 37.308 |
+| 28 | PRUNED | 31.068 |
+| 29 | PRUNED | 31.771 |
+| 30 | PRUNED | 23.872 |
+| 31 | PRUNED | 23.393 |
 
 ## Top trial MAE traces (every 200 updates)
 
-- **Trial 1** (best 20.673): 1:22.46 → 2:22.05 → 3:26.55 → 4:20.67 → 5:23.60 → 6:22.22
-- **Trial 0** (best 23.886): 1:33.65 → 2:26.78 → 3:25.37 → 4:24.03 → 5:23.97 → 6:23.89
-- **Trial 2** (best 27.937): 1:32.14 → 2:27.94
+- **Trial 21** (best 20.678): 200:28.07 → 400:25.79 → 600:22.86 → 800:21.17 → 1000:20.98 → 1200:20.68 → 1400:21.07 → 1600:25.36 → 1800:21.82 → 2000:24.44
+- **Trial 19** (best 21.220): 200:29.81 → 400:24.77 → 600:22.71 → 800:23.65 → 1000:21.62 → 1200:21.22 → 1400:22.01 → 1600:23.34 → 1800:27.98 → 2000:24.64
+- **Trial 23** (best 21.410): 200:29.20 → 400:25.53 → 600:22.32 → 800:21.51 → 1000:23.30 → 1200:21.41 → 1400:22.72 → 1600:21.65
+- **Trial 0** (best 22.139): 200:29.56 → 400:26.42 → 600:23.25 → 800:22.87 → 1000:22.14 → 1200:27.36 → 1400:26.71
 
 ## Hyperparameter glossary
 

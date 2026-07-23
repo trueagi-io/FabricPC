@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Glucose Hopfield Optuna progress</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.1.0/dist/chartjs-plugin-annotation.min.js"></script>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f14; --card: #121820; --text: #e7ecf3;
+      --muted: #9aa7b8; --line: #243041; --accent: #3dd68c;
+    }
+    body { margin:0; font-family:"Segoe UI",system-ui,sans-serif;
+      background:var(--bg); color:var(--text); line-height:1.45; }
+    main { max-width:1040px; margin:0 auto; padding:32px 20px 64px; }
+    h1,h2 { margin:0 0 12px; font-weight:650; }
+    h1 { font-size:1.8rem; } h2 { font-size:1.2rem; margin-top:28px; }
+    p,li { color:var(--muted); }
+    .stats { display:grid; grid-template-columns:repeat(5,minmax(0,1fr));
+      gap:12px; margin:20px 0; }
+    .stat { background:var(--card); border:1px solid var(--line);
+      border-radius:12px; padding:14px 16px; }
+    .stat strong { display:block; font-size:1.35rem; color:var(--text); }
+    .stat span { color:var(--muted); font-size:0.85rem; }
+    .chart { margin:16px 0; border:1px solid var(--line); border-radius:12px;
+      background:var(--card); padding:16px; }
+    table { width:100%; border-collapse:collapse; font-size:0.9rem; }
+    th,td { border-bottom:1px solid var(--line); padding:8px 10px; text-align:left; }
+    th { color:var(--muted); font-weight:600; }
+    code { color:var(--accent); }
+    .arch-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr));
+      gap:14px; margin:16px 0; }
+    .arch-card { background:var(--card); border:1px solid var(--line);
+      border-radius:12px; padding:16px; position:relative; }
+    .arch-rank { position:absolute; top:12px; right:16px; font-size:1.6rem;
+      font-weight:700; color:var(--line); }
+    .arch-trial { font-size:0.85rem; font-weight:600; color:var(--muted);
+      margin-bottom:2px; letter-spacing:0.03em; }
+    .arch-mae { font-size:1.2rem; font-weight:650; color:var(--accent); margin-bottom:6px; }
+    .arch-desc { font-size:0.95rem; color:var(--text); margin-bottom:4px; }
+    .arch-strength { font-size:0.85rem; color:var(--muted); margin-bottom:10px; }
+    .arch-params { font-size:0.8rem; }
+    .arch-params td { padding:3px 8px; border-bottom:1px solid var(--line); }
+    .arch-params td:first-child { color:var(--muted); }
+    @media (max-width:900px) { .stats { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Glucose Hopfield Optuna progress</h1>
+    <p>
+      Study <code>glucose_hopfield_pc_wsl_v1</code> ·
+      target beat <code>19.876</code> ·
+      generated <code>2026-07-23T22:08:26.429028+00:00</code>
+    </p>
+    <p>
+      Protocol: epoch-based Hyperband (mirrors glucose-transformer-tune) ·
+      workers=3 ·
+      epochs=15 ·
+      patience=4
+    </p>
+    <div class="stats">
+      <div class="stat"><strong>24</strong><span>All trials</span></div>
+      <div class="stat"><strong>16</strong><span>Complete</span></div>
+      <div class="stat"><strong>8</strong><span>Pruned</span></div>
+      <div class="stat"><strong>0</strong><span>Failed</span></div>
+      <div class="stat"><strong>20.16</strong><span>Best MAE</span></div>
+    </div>
+    <section>
+      <h2>Cross-run comparison</h2>
+      <table>
+        <thead><tr><th>Run</th><th>Best val MAE</th></tr></thead>
+        <tbody><tr><td>Transformer 1 broad</td><td>20.3776</td></tr><tr><td>Transformer 2 refined</td><td>20.6780</td></tr><tr><td>Transformer 3 local</td><td>20.8670</td></tr><tr><td>Transformer 4 breakthrough</td><td>19.8760</td></tr><tr><td><strong>Hopfield (this study)</strong></td><td><strong>20.1605</strong></td></tr></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>All trials (every state)</h2>
+      <p style="font-size:0.85rem;">
+        <span style="color:#3dd68c;">&#9632;</span>&nbsp;Beat target&ensp;
+        <span style="color:#006FEE;">&#9632;</span>&nbsp;Complete&ensp;
+        <span style="color:#f5a524;">&#9632;</span>&nbsp;Pruned&ensp;
+        <span style="color:#f31260;">&#9632;</span>&nbsp;Failed&ensp;
+        <span style="color:#4b5563;">&#9632;</span>&nbsp;No MAE
+      </p>
+      <div class="chart"><canvas id="barChart" height="120"></canvas></div>
+      <table>
+        <thead>
+          <tr><th>Trial</th><th>State</th><th>Best MAE</th>
+          <th>variant</th><th>strength</th><th>reason</th></tr>
+        </thead>
+        <tbody><tr><td>0</td><td>COMPLETE</td><td>21.494</td><td>baseline</td><td>1.0</td><td>no validation MAE improvement for 4 epochs</td></tr><tr><td>1</td><td>COMPLETE</td><td>25.020</td><td>projection</td><td>1.0</td><td>validation MAE regressed over 10% twice</td></tr><tr><td>2</td><td>PRUNED</td><td>43.611</td><td>embed-storkey</td><td>1.0</td><td>HyperbandPruner at epoch 3</td></tr><tr><td>3</td><td>COMPLETE</td><td>45.465</td><td>embed-storkey</td><td>2.0</td><td>no validation MAE improvement for 4 epochs</td></tr><tr><td>4</td><td>PRUNED</td><td>45.380</td><td>embed-storkey</td><td>learnable</td><td>HyperbandPruner at epoch 3</td></tr><tr><td>5</td><td>COMPLETE</td><td>67.431</td><td>forecast-storkey</td><td>1.0</td><td>validation MAE regressed over 10% twice</td></tr><tr><td>6</td><td>COMPLETE</td><td>43.528</td><td>embed-storkey</td><td>1.5</td><td>no validation MAE improvement for 4 epochs</td></tr><tr><td>7</td><td>PRUNED</td><td>44.566</td><td>embed-storkey</td><td>2.0</td><td>HyperbandPruner at epoch 3</td></tr><tr><td>8</td><td>COMPLETE</td><td>20.487</td><td>baseline</td><td>learnable</td><td>no validation MAE improvement for 4 epochs</td></tr><tr><td>9</td><td>PRUNED</td><td>25.633</td><td>projection</td><td>2.0</td><td>HyperbandPruner at epoch 3</td></tr><tr><td>10</td><td>COMPLETE</td><td>21.049</td><td>baseline</td><td>0.5</td><td>no validation MAE improvement for 4 epochs</td></tr><tr><td>11</td><td>PRUNED</td><td>24.526</td><td>projection</td><td>learnable</td><td>HyperbandPruner at epoch 3</td></tr><tr><td>12</td><td>PRUNED</td><td>22.243</td><td>baseline</td><td>1.5</td><td>HyperbandPruner at epoch 3</td></tr><tr><td>13</td><td>COMPLETE</td><td>27.651</td><td>projection</td><td>1.0</td><td>validation MAE regressed over 10% twice</td></tr><tr><td>14</td><td>COMPLETE</td><td>20.406</td><td>baseline</td><td>learnable</td><td>no validation MAE improvement for 4 epochs</td></tr><tr><td>15</td><td>COMPLETE</td><td>624.772</td><td>forecast-storkey</td><td>0.5</td><td>validation MAE regressed over 10% twice</td></tr><tr><td>16</td><td>COMPLETE</td><td>20.305</td><td>baseline</td><td>learnable</td><td>no validation MAE improvement for 4 epochs</td></tr><tr><td>17</td><td>COMPLETE</td><td>20.925</td><td>baseline</td><td>learnable</td><td>validation MAE regressed over 10% twice</td></tr><tr><td>18</td><td>COMPLETE</td><td>21.333</td><td>baseline</td><td>learnable</td><td>no validation MAE improvement for 4 epochs</td></tr><tr><td>19</td><td>COMPLETE</td><td>21.702</td><td>baseline</td><td>2.0</td><td>no validation MAE improvement for 4 epochs</td></tr><tr><td>20</td><td>COMPLETE</td><td>20.160</td><td>baseline</td><td>learnable</td><td>no validation MAE improvement for 4 epochs</td></tr><tr><td>21</td><td>PRUNED</td><td>985.832</td><td>forecast-storkey</td><td>learnable</td><td>HyperbandPruner at epoch 3</td></tr><tr><td>22</td><td>PRUNED</td><td>39.328</td><td>projection</td><td>0.5</td><td>HyperbandPruner at epoch 3</td></tr><tr><td>23</td><td>COMPLETE</td><td>20.416</td><td>baseline</td><td>learnable</td><td>no validation MAE improvement for 4 epochs</td></tr></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Within-trial epoch stages</h2>
+      <div class="chart"><canvas id="lineChart" height="120"></canvas></div>
+    </section>
+    <section>
+      <h2>Complete-trial leaderboard</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Trial</th><th>Best MAE</th><th>Δ vs 19.876</th>
+            <th>variant</th><th>strength</th><th>LR</th>
+            <th>η_infer</th><th>steps</th>
+          </tr>
+        </thead>
+        <tbody><tr><td>20</td><td>20.160</td><td>0.284</td><td>baseline</td><td>learnable</td><td>0.002464</td><td>1.016e-05</td><td>17</td></tr><tr><td>16</td><td>20.305</td><td>0.429</td><td>baseline</td><td>learnable</td><td>0.003077</td><td>1.256e-05</td><td>16</td></tr><tr><td>14</td><td>20.406</td><td>0.530</td><td>baseline</td><td>learnable</td><td>0.003543</td><td>1.377e-05</td><td>16</td></tr><tr><td>23</td><td>20.416</td><td>0.540</td><td>baseline</td><td>learnable</td><td>0.00368</td><td>1.58e-05</td><td>16</td></tr><tr><td>8</td><td>20.487</td><td>0.611</td><td>baseline</td><td>learnable</td><td>0.003525</td><td>1.466e-05</td><td>16</td></tr><tr><td>17</td><td>20.925</td><td>1.049</td><td>baseline</td><td>learnable</td><td>0.003783</td><td>2.286e-05</td><td>17</td></tr><tr><td>10</td><td>21.049</td><td>1.173</td><td>baseline</td><td>0.5</td><td>0.003352</td><td>1.267e-05</td><td>13</td></tr><tr><td>18</td><td>21.333</td><td>1.457</td><td>baseline</td><td>learnable</td><td>0.003256</td><td>1.61e-05</td><td>14</td></tr><tr><td>0</td><td>21.494</td><td>1.618</td><td>baseline</td><td>1.0</td><td>0.003691</td><td>1.68e-05</td><td>12</td></tr><tr><td>19</td><td>21.702</td><td>1.826</td><td>baseline</td><td>2.0</td><td>0.003792</td><td>1.775e-05</td><td>16</td></tr><tr><td>1</td><td>25.020</td><td>5.144</td><td>projection</td><td>1.0</td><td>0.003691</td><td>1.68e-05</td><td>12</td></tr><tr><td>13</td><td>27.651</td><td>7.775</td><td>projection</td><td>1.0</td><td>0.003306</td><td>2.121e-05</td><td>18</td></tr><tr><td>6</td><td>43.528</td><td>23.652</td><td>embed-storkey</td><td>1.5</td><td>0.003533</td><td>2.207e-05</td><td>12</td></tr><tr><td>3</td><td>45.465</td><td>25.589</td><td>embed-storkey</td><td>2.0</td><td>0.003691</td><td>1.68e-05</td><td>12</td></tr><tr><td>5</td><td>67.431</td><td>47.555</td><td>forecast-storkey</td><td>1.0</td><td>0.003691</td><td>1.68e-05</td><td>12</td></tr><tr><td>15</td><td>624.772</td><td>604.896</td><td>forecast-storkey</td><td>0.5</td><td>0.003085</td><td>1.3e-05</td><td>12</td></tr></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Top model architectures</h2>
+      <p style="font-size:0.85rem; color:var(--muted);">
+        Full hyperparameter configurations of the top 5 performing models,
+        showing which network variants and parameter combinations work best.
+      </p>
+      <div class="arch-grid"><div class="arch-card"><div class="arch-rank">#1</div><div class="arch-trial">Trial 20</div><div class="arch-mae">MAE 20.160</div><div class="arch-desc">Pure transformer (no Hopfield node)</div><div class="arch-strength">Hopfield strength: learnable (optimised during training)</div><table class="arch-params"><tr><td>seq_len</td><td>64</td></tr><tr><td>depth</td><td>1</td></tr><tr><td>num_heads</td><td>1</td></tr><tr><td>variant</td><td>baseline</td></tr><tr><td>hopfield_strength</td><td>learnable</td></tr><tr><td>lr</td><td>0.002464</td></tr><tr><td>eta_infer</td><td>1.016e-05</td></tr><tr><td>infer_steps</td><td>17</td></tr><tr><td>max_infer_norm</td><td>1</td></tr><tr><td>grad_clip</td><td>0.5</td></tr><tr><td>lr_decay_epochs</td><td>5</td></tr><tr><td>weight_init_std</td><td>0.01417</td></tr><tr><td>seed_offset</td><td>33</td></tr></table></div><div class="arch-card"><div class="arch-rank">#2</div><div class="arch-trial">Trial 16</div><div class="arch-mae">MAE 20.305</div><div class="arch-desc">Pure transformer (no Hopfield node)</div><div class="arch-strength">Hopfield strength: learnable (optimised during training)</div><table class="arch-params"><tr><td>seq_len</td><td>64</td></tr><tr><td>depth</td><td>1</td></tr><tr><td>num_heads</td><td>1</td></tr><tr><td>variant</td><td>baseline</td></tr><tr><td>hopfield_strength</td><td>learnable</td></tr><tr><td>lr</td><td>0.003077</td></tr><tr><td>eta_infer</td><td>1.256e-05</td></tr><tr><td>infer_steps</td><td>16</td></tr><tr><td>max_infer_norm</td><td>1</td></tr><tr><td>grad_clip</td><td>0.5</td></tr><tr><td>lr_decay_epochs</td><td>5</td></tr><tr><td>weight_init_std</td><td>0.01632</td></tr><tr><td>seed_offset</td><td>23</td></tr></table></div><div class="arch-card"><div class="arch-rank">#3</div><div class="arch-trial">Trial 14</div><div class="arch-mae">MAE 20.406</div><div class="arch-desc">Pure transformer (no Hopfield node)</div><div class="arch-strength">Hopfield strength: learnable (optimised during training)</div><table class="arch-params"><tr><td>seq_len</td><td>64</td></tr><tr><td>depth</td><td>1</td></tr><tr><td>num_heads</td><td>1</td></tr><tr><td>variant</td><td>baseline</td></tr><tr><td>hopfield_strength</td><td>learnable</td></tr><tr><td>lr</td><td>0.003543</td></tr><tr><td>eta_infer</td><td>1.377e-05</td></tr><tr><td>infer_steps</td><td>16</td></tr><tr><td>max_infer_norm</td><td>1</td></tr><tr><td>grad_clip</td><td>0.5</td></tr><tr><td>lr_decay_epochs</td><td>5</td></tr><tr><td>weight_init_std</td><td>0.01717</td></tr><tr><td>seed_offset</td><td>29</td></tr></table></div><div class="arch-card"><div class="arch-rank">#4</div><div class="arch-trial">Trial 23</div><div class="arch-mae">MAE 20.416</div><div class="arch-desc">Pure transformer (no Hopfield node)</div><div class="arch-strength">Hopfield strength: learnable (optimised during training)</div><table class="arch-params"><tr><td>seq_len</td><td>64</td></tr><tr><td>depth</td><td>1</td></tr><tr><td>num_heads</td><td>1</td></tr><tr><td>variant</td><td>baseline</td></tr><tr><td>hopfield_strength</td><td>learnable</td></tr><tr><td>lr</td><td>0.00368</td></tr><tr><td>eta_infer</td><td>1.58e-05</td></tr><tr><td>infer_steps</td><td>16</td></tr><tr><td>max_infer_norm</td><td>1</td></tr><tr><td>grad_clip</td><td>0.5</td></tr><tr><td>lr_decay_epochs</td><td>5</td></tr><tr><td>weight_init_std</td><td>0.01573</td></tr><tr><td>seed_offset</td><td>13</td></tr></table></div><div class="arch-card"><div class="arch-rank">#5</div><div class="arch-trial">Trial 8</div><div class="arch-mae">MAE 20.487</div><div class="arch-desc">Pure transformer (no Hopfield node)</div><div class="arch-strength">Hopfield strength: learnable (optimised during training)</div><table class="arch-params"><tr><td>seq_len</td><td>64</td></tr><tr><td>depth</td><td>1</td></tr><tr><td>num_heads</td><td>1</td></tr><tr><td>variant</td><td>baseline</td></tr><tr><td>hopfield_strength</td><td>learnable</td></tr><tr><td>lr</td><td>0.003525</td></tr><tr><td>eta_infer</td><td>1.466e-05</td></tr><tr><td>infer_steps</td><td>16</td></tr><tr><td>max_infer_norm</td><td>1</td></tr><tr><td>grad_clip</td><td>0.5</td></tr><tr><td>lr_decay_epochs</td><td>5</td></tr><tr><td>weight_init_std</td><td>0.01661</td></tr><tr><td>seed_offset</td><td>33</td></tr></table></div></div>
+    </section>
+    <section>
+      <h2>Hyperparameter glossary</h2>
+      <p style="font-size:0.85rem; color:var(--muted);">
+        What each tuned parameter controls in the Hopfield predictive-coding model.
+      </p>
+      <table>
+        <thead><tr><th>Parameter</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>seq_len</code></td><td style="color:var(--muted);">Input sequence length (number of 5-min glucose readings fed to the model). Longer = more history but heavier.</td></tr><tr><td><code>depth</code></td><td style="color:var(--muted);">Number of transformer blocks stacked. More depth = more capacity but slower inference and higher memory.</td></tr><tr><td><code>num_heads</code></td><td style="color:var(--muted);">Number of parallel attention heads in multi-scale self-attention.</td></tr><tr><td><code>variant</code></td><td style="color:var(--muted);">Hopfield memory placement: &#x27;baseline&#x27; (no Hopfield), &#x27;embed-storkey&#x27; (after embedding), &#x27;forecast-storkey&#x27; (before forecast head), &#x27;projection&#x27; (linear memory).</td></tr><tr><td><code>hopfield_strength</code></td><td style="color:var(--muted);">Hopfield interaction strength. &#x27;learnable&#x27; = optimised during training; a number = fixed scaling factor for the associative memory.</td></tr><tr><td><code>lr</code></td><td style="color:var(--muted);">Outer learning rate for weight updates (Adam/AdamW). Controls how fast weights move each step.</td></tr><tr><td><code>eta_infer</code></td><td style="color:var(--muted);">PC inference learning rate. Step size for the inner-loop SGD that updates latent activations to minimise prediction errors.</td></tr><tr><td><code>infer_steps</code></td><td style="color:var(--muted);">Number of PC inference iterations per forward pass. More steps = tighter energy minimisation but slower training.</td></tr><tr><td><code>max_infer_norm</code></td><td style="color:var(--muted);">Maximum gradient norm during PC inference. Clips the inner-loop update to prevent latent activations from exploding.</td></tr><tr><td><code>grad_clip</code></td><td style="color:var(--muted);">Global gradient clipping threshold for weight updates. Stabilises training by capping large gradients.</td></tr><tr><td><code>lr_decay_epochs</code></td><td style="color:var(--muted);">Epoch at which the learning rate starts cosine decay toward zero. Later = longer warm phase at full LR.</td></tr><tr><td><code>weight_init_std</code></td><td style="color:var(--muted);">Standard deviation for weight initialisation (Normal). Smaller = more conservative start; interacts with depth.</td></tr><tr><td><code>seed_offset</code></td><td style="color:var(--muted);">Random seed offset for reproducibility and diversity across trials with otherwise similar configs.</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Background</h2>
+      <p style="font-size:0.85rem; color:var(--muted);">
+        This work builds on our earlier results with conventional transformers for glucose forecasting
+        at <a href="https://github.com/GlucoseDAO/glucose-forecasting" style="color:var(--accent);"
+        >GlucoseDAO/glucose-forecasting</a>. Here we add <strong>predictive coding (PC)</strong>
+        inner loops and explore <strong>Hopfield associative memory</strong> — a content-addressable
+        memory layer that stores and recalls learned glucose dynamics (meal responses, exercise
+        patterns, dawn phenomenon). The Hopfield memory gives the model an explicit pattern-recall
+        mechanism beyond what attention alone provides.
+      </p>
+      <p style="font-size:0.85rem; color:var(--muted);">
+        The tuning searches over <strong>where</strong> to place the Hopfield memory (after embedding,
+        before the forecast head, or omit it entirely) and <strong>how strong</strong> its influence
+        is (fixed scaling vs learnable).
+      </p>
+    </section>
+    <section>
+      <h2>How the model works</h2>
+      <div class="chart"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 560" role="img" aria-label="Glucose Hopfield PC Architecture Variants" style="max-width:100%;height:auto;"><rect width="920" height="560" rx="12" fill="#0f1419"/><defs><marker id="ah" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#4b5563"/></marker></defs><text x="460" y="30" fill="#e7ecf3" font-size="16" font-family="Segoe UI,sans-serif" font-weight="650" text-anchor="middle">Hopfield Variant Architectures (all share PC inference at every node)</text><text x="155" y="60" fill="#9aa7b8" font-size="12" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">baseline</text><text x="155" y="74" fill="#4b5563" font-size="9.5" font-family="Segoe UI,sans-serif" text-anchor="middle">(no Hopfield — control)</text><text x="385" y="60" fill="#f5a524" font-size="12" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">embed-storkey</text><text x="385" y="74" fill="#4b5563" font-size="9.5" font-family="Segoe UI,sans-serif" text-anchor="middle">(memory after embedding)</text><text x="615" y="60" fill="#f5a524" font-size="12" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">forecast-storkey</text><text x="615" y="74" fill="#4b5563" font-size="9.5" font-family="Segoe UI,sans-serif" text-anchor="middle">(memory before head)</text><text x="820" y="60" fill="#9353d3" font-size="12" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">projection</text><text x="820" y="74" fill="#4b5563" font-size="9.5" font-family="Segoe UI,sans-serif" text-anchor="middle">(linear memory)</text><rect x="80" y="88" width="150" height="30" rx="6" fill="#1a2332" stroke="#3dd68c" stroke-width="1"/><text x="155" y="108" fill="#3dd68c" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Glucose Input</text><line x1="155" y1="118" x2="155" y2="132" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="80" y="132" width="150" height="30" rx="6" fill="#1a2332" stroke="#006FEE" stroke-width="1"/><text x="155" y="152" fill="#006FEE" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Embedding</text><line x1="155" y1="162" x2="155" y2="196" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="60" y="196" width="190" height="120" rx="8" fill="#121820" stroke="#9aa7b8" stroke-width="1" stroke-dasharray="5,3"/><text x="76" y="214" fill="#9aa7b8" font-size="9" font-family="Segoe UI,sans-serif" font-style="italic">x depth</text><rect x="78" y="220" width="154" height="26" rx="5" fill="#1a2332" stroke="#f5a524" stroke-width="0.8"/><text x="155" y="238" fill="#f5a524" font-size="9" font-family="Segoe UI,sans-serif" text-anchor="middle">Multi-Scale MHA</text><rect x="78" y="254" width="154" height="26" rx="5" fill="#1a2332" stroke="#9353d3" stroke-width="0.8"/><text x="155" y="272" fill="#9353d3" font-size="9" font-family="Segoe UI,sans-serif" text-anchor="middle">MLP + Residual</text><rect x="78" y="288" width="154" height="20" rx="5" fill="#1a2332" stroke="#9353d3" stroke-width="0.8"/><text x="155" y="302" fill="#9353d3" font-size="9" font-family="Segoe UI,sans-serif" text-anchor="middle">MLP contract + skip</text><line x1="155" y1="316" x2="155" y2="330" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="80" y="330" width="150" height="30" rx="6" fill="#1a2332" stroke="#3dd68c" stroke-width="1"/><text x="155" y="350" fill="#3dd68c" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Forecast Head</text><rect x="310" y="88" width="150" height="30" rx="6" fill="#1a2332" stroke="#3dd68c" stroke-width="1"/><text x="385" y="108" fill="#3dd68c" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Glucose Input</text><line x1="385" y1="118" x2="385" y2="132" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="310" y="132" width="150" height="30" rx="6" fill="#1a2332" stroke="#006FEE" stroke-width="1"/><text x="385" y="152" fill="#006FEE" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Embedding</text><line x1="385" y1="162" x2="385" y2="176" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="298" y="176" width="174" height="34" rx="6" fill="#2a1f0a" stroke="#f5a524" stroke-width="2"/><text x="385" y="194" fill="#f5a524" font-size="11" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="700">Storkey Hopfield</text><text x="385" y="206" fill="#9aa7b8" font-size="8" font-family="Segoe UI,sans-serif" text-anchor="middle">associative memory recall</text><line x1="385" y1="210" x2="385" y2="224" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="290" y="224" width="190" height="92" rx="8" fill="#121820" stroke="#9aa7b8" stroke-width="1" stroke-dasharray="5,3"/><text x="306" y="242" fill="#9aa7b8" font-size="9" font-family="Segoe UI,sans-serif" font-style="italic">x depth</text><rect x="308" y="248" width="154" height="24" rx="5" fill="#1a2332" stroke="#f5a524" stroke-width="0.8"/><text x="385" y="264" fill="#f5a524" font-size="9" font-family="Segoe UI,sans-serif" text-anchor="middle">Multi-Scale MHA</text><rect x="308" y="278" width="154" height="24" rx="5" fill="#1a2332" stroke="#9353d3" stroke-width="0.8"/><text x="385" y="294" fill="#9353d3" font-size="9" font-family="Segoe UI,sans-serif" text-anchor="middle">MLP + Residual</text><line x1="385" y1="316" x2="385" y2="330" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="310" y="330" width="150" height="30" rx="6" fill="#1a2332" stroke="#3dd68c" stroke-width="1"/><text x="385" y="350" fill="#3dd68c" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Forecast Head</text><rect x="540" y="88" width="150" height="30" rx="6" fill="#1a2332" stroke="#3dd68c" stroke-width="1"/><text x="615" y="108" fill="#3dd68c" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Glucose Input</text><line x1="615" y1="118" x2="615" y2="132" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="540" y="132" width="150" height="30" rx="6" fill="#1a2332" stroke="#006FEE" stroke-width="1"/><text x="615" y="152" fill="#006FEE" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Embedding</text><line x1="615" y1="162" x2="615" y2="196" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="520" y="196" width="190" height="92" rx="8" fill="#121820" stroke="#9aa7b8" stroke-width="1" stroke-dasharray="5,3"/><text x="536" y="214" fill="#9aa7b8" font-size="9" font-family="Segoe UI,sans-serif" font-style="italic">x depth</text><rect x="538" y="220" width="154" height="24" rx="5" fill="#1a2332" stroke="#f5a524" stroke-width="0.8"/><text x="615" y="238" fill="#f5a524" font-size="9" font-family="Segoe UI,sans-serif" text-anchor="middle">Multi-Scale MHA</text><rect x="538" y="250" width="154" height="24" rx="5" fill="#1a2332" stroke="#9353d3" stroke-width="0.8"/><text x="615" y="268" fill="#9353d3" font-size="9" font-family="Segoe UI,sans-serif" text-anchor="middle">MLP + Residual</text><line x1="615" y1="288" x2="615" y2="302" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="528" y="302" width="174" height="34" rx="6" fill="#2a1f0a" stroke="#f5a524" stroke-width="2"/><text x="615" y="320" fill="#f5a524" font-size="11" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="700">Storkey Hopfield</text><text x="615" y="332" fill="#9aa7b8" font-size="8" font-family="Segoe UI,sans-serif" text-anchor="middle">pattern match before forecast</text><line x1="615" y1="336" x2="615" y2="350" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="540" y="350" width="150" height="30" rx="6" fill="#1a2332" stroke="#3dd68c" stroke-width="1"/><text x="615" y="370" fill="#3dd68c" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Forecast Head</text><rect x="745" y="88" width="150" height="30" rx="6" fill="#1a2332" stroke="#3dd68c" stroke-width="1"/><text x="820" y="108" fill="#3dd68c" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Glucose Input</text><line x1="820" y1="118" x2="820" y2="132" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="745" y="132" width="150" height="30" rx="6" fill="#1a2332" stroke="#006FEE" stroke-width="1"/><text x="820" y="152" fill="#006FEE" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Embedding</text><line x1="820" y1="162" x2="820" y2="196" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="725" y="196" width="190" height="92" rx="8" fill="#121820" stroke="#9aa7b8" stroke-width="1" stroke-dasharray="5,3"/><text x="741" y="214" fill="#9aa7b8" font-size="9" font-family="Segoe UI,sans-serif" font-style="italic">x depth</text><rect x="743" y="220" width="154" height="24" rx="5" fill="#1a2332" stroke="#f5a524" stroke-width="0.8"/><text x="820" y="238" fill="#f5a524" font-size="9" font-family="Segoe UI,sans-serif" text-anchor="middle">Multi-Scale MHA</text><rect x="743" y="250" width="154" height="24" rx="5" fill="#1a2332" stroke="#9353d3" stroke-width="0.8"/><text x="820" y="268" fill="#9353d3" font-size="9" font-family="Segoe UI,sans-serif" text-anchor="middle">MLP + Residual</text><line x1="820" y1="288" x2="820" y2="302" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="733" y="302" width="174" height="34" rx="6" fill="#1a1232" stroke="#9353d3" stroke-width="2"/><text x="820" y="320" fill="#9353d3" font-size="11" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="700">Projection Memory</text><text x="820" y="332" fill="#9aa7b8" font-size="8" font-family="Segoe UI,sans-serif" text-anchor="middle">lightweight linear recall</text><line x1="820" y1="336" x2="820" y2="350" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="745" y="350" width="150" height="30" rx="6" fill="#1a2332" stroke="#3dd68c" stroke-width="1"/><text x="820" y="370" fill="#3dd68c" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Forecast Head</text><rect x="60" y="400" width="800" height="140" rx="10" fill="#121820" stroke="#f31260" stroke-width="1"/><text x="460" y="424" fill="#f31260" font-size="13" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="650">Predictive Coding (PC) Inference — runs at EVERY node above</text><text x="460" y="448" fill="#e7ecf3" font-size="11" font-family="Segoe UI,sans-serif" text-anchor="middle">Each node maintains a latent belief z, predicts z_mu from inputs, computes error = z - z_mu</text><text x="460" y="470" fill="#e7ecf3" font-size="11" font-family="Segoe UI,sans-serif" text-anchor="middle">Inner loop: update z via SGD for infer_steps iterations (step size eta_infer, clip max_infer_norm)</text><text x="460" y="492" fill="#e7ecf3" font-size="11" font-family="Segoe UI,sans-serif" text-anchor="middle">Outer loop: update weights via Adam (step size lr, clip grad_clip)</text><text x="460" y="516" fill="#9aa7b8" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle">hopfield_strength controls how strongly the memory influences activations — "learnable" lets the model optimise it during training</text></svg></div>
+    </section>
+    <section>
+      <h2>Limitations</h2>
+      <ul style="font-size:0.85rem; color:var(--muted);">
+        <li><strong>Single participant data</strong> — we started only 1.5 days before the deadline,
+          so we used only Livia's personal CGM data rather than training across multiple participants.</li>
+        <li><strong>Glucose-only input</strong> — only continuous glucose values are fed to the model.
+          Carbohydrate intake, heart rate, step count, and other covariates that are available in the
+          full dataset are not included.</li>
+        <li><strong>Limited tuning budget</strong> — the tight timeline restricted the number of Optuna
+          trials and hyperparameter ranges we could explore.</li>
+      </ul>
+    </section>
+    <section>
+      <h2>How to run</h2>
+      <h3 style="font-size:0.95rem;">Hopfield variant tuning (this report)</h3>
+      <p style="font-size:0.85rem; color:var(--muted);">
+        Searches over Hopfield variant placement (baseline / projection / embed-storkey / forecast-storkey),
+        strength (0.5&ndash;2.0 or learnable), and all PC/architecture params. Default: 24 trials, Hyperband pruning.
+      </p>
+      <table style="font-size:0.85rem;">
+        <tbody>
+          <tr><td style="color:var(--muted);">Start tuning</td>
+            <td><code>uv run glucose-hopfield-tune run</code></td></tr>
+          <tr><td style="color:var(--muted);">Custom trial count</td>
+            <td><code>uv run glucose-hopfield-tune run --n-trials 48</code></td></tr>
+          <tr><td style="color:var(--muted);">More parallel workers</td>
+            <td><code>uv run glucose-hopfield-tune run --n-trials 48 --max-workers 4</code></td></tr>
+          <tr><td style="color:var(--muted);">Custom run directory</td>
+            <td><code>uv run glucose-hopfield-tune run --run-dir runs/my_hopfield --study-name my_study</code></td></tr>
+          <tr><td style="color:var(--muted);">Adjust epochs/patience</td>
+            <td><code>uv run glucose-hopfield-tune run --max-epochs 20 --patience 5</code></td></tr>
+          <tr><td style="color:var(--muted);">Resume interrupted run</td>
+            <td><code>uv run glucose-hopfield-tune run</code> (Optuna journal auto-resumes)</td></tr>
+          <tr><td style="color:var(--muted);">Regenerate this report</td>
+            <td><code>uv run python scripts/generate_glucose_hopfield_tuning_report.py --format all</code></td></tr>
+        </tbody>
+      </table>
+      <h3 style="font-size:0.95rem; margin-top:1.2rem;">PC Transformer tuning (Gaussian vs Huber energy)</h3>
+      <p style="font-size:0.85rem; color:var(--muted);">
+        Separate tuner for the base PC transformer. Searches both Gaussian and Huber energy,
+        SGD and Adam inference, IPC on/off, and all architecture params.
+      </p>
+      <table style="font-size:0.85rem;">
+        <tbody>
+          <tr><td style="color:var(--muted);">Start transformer tuning</td>
+            <td><code>uv run glucose-transformer-tune run</code></td></tr>
+          <tr><td style="color:var(--muted);">Custom trial count</td>
+            <td><code>uv run glucose-transformer-tune run --n-trials 64 --max-workers 4</code></td></tr>
+          <tr><td style="color:var(--muted);">Regenerate transformer report</td>
+            <td><code>uv run python scripts/generate_glucose_tuning_report.py --format all</code></td></tr>
+        </tbody>
+      </table>
+      <h3 style="font-size:0.95rem; margin-top:1.2rem;">All reports</h3>
+      <table style="font-size:0.85rem;">
+        <tbody>
+          <tr><td style="color:var(--muted);">Generate all reports</td>
+            <td><code>uv run python scripts/generate_all_glucose_reports.py --format all</code></td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+  <script>
+    const DATA = {"bar": {"labels": ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23"], "values": [21.493983573420227, 25.01969516338783, 43.611086698746156, 45.4653524995437, 45.37964037485008, 67.43121025406921, 43.528242794541356, 44.56639291138663, 20.486803761761937, 25.6333108157658, 21.048513937302815, 24.526178431250326, 22.24337251551011, 27.650697786906484, 20.406120327411216, 624.7718641302931, 20.305104535882254, 20.925358384076286, 21.33345872302129, 21.70176238568067, 20.16048926616441, 985.8318416575406, 39.32799020626369, 20.416399301617258], "colors": ["#006FEE", "#006FEE", "#f5a524", "#006FEE", "#f5a524", "#006FEE", "#006FEE", "#f5a524", "#006FEE", "#f5a524", "#006FEE", "#f5a524", "#f5a524", "#006FEE", "#006FEE", "#006FEE", "#006FEE", "#006FEE", "#006FEE", "#006FEE", "#006FEE", "#f5a524", "#f5a524", "#006FEE"], "target": 19.876}, "lines": {"datasets": [{"label": "T20 baseline str=learnable lr=0.002464 \u03b7=1.02e-05 steps=17 MAE=20.16", "data": [{"x": 1, "y": 22.17412779361246}, {"x": 2, "y": 21.28574101517685}, {"x": 3, "y": 20.16048926616441}, {"x": 4, "y": 21.35606078337668}, {"x": 5, "y": 20.417965046640333}, {"x": 6, "y": 20.40575606185792}, {"x": 7, "y": 20.371940801856812}], "borderColor": "#3dd68c", "backgroundColor": "#3dd68c", "tension": 0.2, "pointRadius": 3}, {"label": "T16 baseline str=learnable lr=0.003077 \u03b7=1.26e-05 steps=16 MAE=20.31", "data": [{"x": 1, "y": 22.507875542161262}, {"x": 2, "y": 20.305104535882254}, {"x": 3, "y": 20.79909380337075}, {"x": 4, "y": 20.68055609265814}, {"x": 5, "y": 20.46747335129198}, {"x": 6, "y": 20.556921623016727}], "borderColor": "#006FEE", "backgroundColor": "#006FEE", "tension": 0.2, "pointRadius": 3}, {"label": "T14 baseline str=learnable lr=0.003543 \u03b7=1.38e-05 steps=16 MAE=20.41", "data": [{"x": 1, "y": 21.337258202493516}, {"x": 2, "y": 20.406120327411216}, {"x": 3, "y": 24.560117121295825}, {"x": 4, "y": 21.137761114866077}, {"x": 5, "y": 20.611531420195654}, {"x": 6, "y": 20.866788164567687}], "borderColor": "#f5a524", "backgroundColor": "#f5a524", "tension": 0.2, "pointRadius": 3}, {"label": "T23 baseline str=learnable lr=0.00368 \u03b7=1.58e-05 steps=16 MAE=20.42", "data": [{"x": 1, "y": 22.43815568818119}, {"x": 2, "y": 24.540797872849687}, {"x": 3, "y": 20.788459860714564}, {"x": 4, "y": 22.392650108289658}, {"x": 5, "y": 20.416399301617258}, {"x": 6, "y": 20.502826686536068}, {"x": 7, "y": 20.582283620822416}, {"x": 8, "y": 20.495390836853357}, {"x": 9, "y": 20.4946339550822}], "borderColor": "#9353d3", "backgroundColor": "#9353d3", "tension": 0.2, "pointRadius": 3}, {"label": "T8 baseline str=learnable lr=0.003525 \u03b7=1.47e-05 steps=16 MAE=20.49", "data": [{"x": 1, "y": 22.87640389516844}, {"x": 2, "y": 20.486803761761937}, {"x": 3, "y": 22.124865986454424}, {"x": 4, "y": 23.637628526747303}, {"x": 5, "y": 20.936733192186033}, {"x": 6, "y": 21.056942681546104}], "borderColor": "#f31260", "backgroundColor": "#f31260", "tension": 0.2, "pointRadius": 3}, {"label": "T17 baseline str=learnable lr=0.003783 \u03b7=2.29e-05 steps=17 MAE=20.93", "data": [{"x": 1, "y": 29.842875471373723}, {"x": 2, "y": 20.925358384076286}, {"x": 3, "y": 23.618827513884543}, {"x": 4, "y": 42.64253792633451}], "borderColor": "#a1a1aa", "backgroundColor": "#a1a1aa", "tension": 0.2, "pointRadius": 3}]}};
+    const tickColor = "#9aa7b8";
+    const gridColor = "#243041";
+    new Chart(document.getElementById("barChart"), {
+      type: "bar",
+      data: {
+        labels: DATA.bar.labels,
+        datasets: [{
+          label: "Best val MAE",
+          data: DATA.bar.values,
+          backgroundColor: DATA.bar.colors,
+          borderRadius: 4,
+        }],
+      },
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { labels: { color: tickColor } },
+          annotation: {
+            annotations: {
+              target: {
+                type: "line",
+                yMin: DATA.bar.target,
+                yMax: DATA.bar.target,
+                borderColor: "#3dd68c",
+                borderWidth: 2,
+                borderDash: [6, 4],
+                label: {
+                  display: true,
+                  content: `Target ${DATA.bar.target}`,
+                  position: "end",
+                  backgroundColor: "#121820",
+                  color: "#3dd68c",
+                },
+              },
+            },
+          },
+        },
+        scales: {
+          x: { ticks: { color: tickColor }, grid: { color: gridColor } },
+          y: {
+            ticks: { color: tickColor },
+            grid: { color: gridColor },
+            suggestedMin: 18,
+            suggestedMax: 50,
+            title: { display: true, text: "MAE (mg/dL)", color: tickColor },
+          },
+        },
+      },
+    });
+    new Chart(document.getElementById("lineChart"), {
+      type: "line",
+      data: { datasets: DATA.lines.datasets },
+      options: {
+        responsive: true,
+        plugins: { legend: { labels: { color: tickColor } } },
+        scales: {
+          x: {
+            type: "linear",
+            ticks: { color: tickColor },
+            grid: { color: gridColor },
+            title: { display: true, text: "Epoch", color: tickColor },
+          },
+          y: {
+            ticks: { color: tickColor },
+            grid: { color: gridColor },
+            suggestedMin: 18,
+            suggestedMax: 40,
+            title: { display: true, text: "Val MAE", color: tickColor },
+          },
+        },
+      },
+    });
+  </script>
+</body>
+</html>

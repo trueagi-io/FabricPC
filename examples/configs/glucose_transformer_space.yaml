@@ -1,0 +1,69 @@
+seq_len:
+  type: categorical
+  values: [64, 128]
+
+depth:
+  type: int
+  low: 1
+  high: 3
+
+num_heads:
+  type: categorical
+  values: [1, 2, 4]
+
+lr:
+  type: float
+  low: 3.0e-4
+  high: 5.0e-3
+  log: true
+
+eta_infer:
+  type: float
+  low: 1.0e-5
+  high: 5.0e-4
+  log: true
+
+infer_steps:
+  type: int
+  low: 8
+  high: 24
+
+max_infer_norm:
+  type: categorical
+  values: [0.5, 1.0, 5.0]
+
+grad_clip:
+  type: categorical
+  values: [0.5, 1.0, 2.0]
+
+lr_decay_epochs:
+  type: categorical
+  values: [5, 10, 15]
+
+weight_init_std:
+  type: float
+  low: 0.01
+  high: 0.03
+  log: true
+
+energy:
+  type: categorical
+  values: ["gaussian", "huber"]
+
+ipc:
+  type: categorical
+  values: [true, false]
+
+infer_optimizer:
+  type: categorical
+  values: ["sgd", "adam"]
+
+huber_delta:
+  type: float
+  low: 0.1
+  high: 2.0
+  log: true
+  condition:
+    parent: energy
+    value: huber
+  default: 1.0
