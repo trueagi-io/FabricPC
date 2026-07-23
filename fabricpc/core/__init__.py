@@ -41,6 +41,7 @@ from fabricpc.core.energy import (
 
 # Inference functions and classes
 from fabricpc.core.inference import (
+    InferenceAdam,
     InferenceBase,
     InferenceSGD,
     InferenceSGDNormClip,
@@ -93,6 +94,7 @@ __all__ = [
     "compute_energy_gradient",
     "get_energy_and_gradient",
     # Inference
+    "InferenceAdam",
     "InferenceBase",
     "InferenceSGD",
     "InferenceSGDNormClip",

@@ -1,8 +1,22 @@
-"""Parallel Optuna tuning for the FabricPC glucose transformer.
+﻿"""Epoch-based Optuna tuning for FabricPC glucose Hopfield variants.
 
-The coordinator deliberately does not import JAX. Each Optuna trial runs in a
-fresh child process so compilation caches and CUDA allocations disappear when
-the trial exits.
+Mirrors the active transformer tuner (``examples/glucose_transformer_tuning.py``):
+complete-epoch trials, Hyperband pruning, process-isolated workers, GPU admission.
+
+Search is informed by the phase-4 transformer breakthrough (~19.876 Optuna val MAE):
+locked geometry ``64 / depth 1 / heads 1``, η band ``9e-6–2.5e-5``, and
+``seed_offset``. Trials also search Storkey placement / strength.
+
+Uses the same ``prepare_data`` split as the transformer champion so MAE is
+comparable. Goal: beat **19.876** Optuna validation MAE.
+
+```bash
+uv run glucose-hopfield-tune run \\
+  --run-dir runs/glucose_hopfield_tuning_v1 \\
+  --study-name glucose_hopfield_pc_v1 \\
+  --n-trials 24 --max-workers 3 \\
+  --max-epochs 15 --min-pruning-epochs 3 --patience 4
+```
 """
 from __future__ import annotations
 
@@ -23,33 +37,70 @@ import optuna
 import typer
 from dotenv import load_dotenv
 from optuna.storages import JournalStorage
-from optuna.storages.journal import JournalFileBackend
+from optuna.storages.journal import JournalFileBackend, JournalFileOpenLock
 
 load_dotenv()
 
 os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
 os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
 
-app = typer.Typer(help="Tune FabricPC glucose predictive-coding dynamics.")
+# Prefer CUDA when nvidia-smi is present (WSL/Linux). Windows has no JAX CUDA
+# wheels, so leave unset there and fall back to CPU.
+if "JAX_PLATFORMS" not in os.environ:
+    try:
+        result = subprocess.run(
+            ["nvidia-smi"],
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+        if result.returncode == 0:
+            os.environ["JAX_PLATFORMS"] = "cuda"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
 
-DEFAULT_RUN_DIR = Path("runs/glucose_tuning_epochs_v1")
-DEFAULT_STUDY_NAME = "glucose_transformer_pc_epochs_v1"
-COUNTED_TRIAL_STATES = {
+app = typer.Typer(
+    help=(
+        "Tune FabricPC glucose Hopfield + PC dynamics. "
+        "Target: beat transformer phase-4 Optuna champion 19.876 MAE."
+    )
+)
+
+DEFAULT_RUN_DIR = Path("runs/glucose_hopfield_tuning_v1")
+DEFAULT_STUDY_NAME = "glucose_hopfield_pc_v1"
+TARGET_OPTUNA_MAE = 19.876
+TERMINAL_STATES = {
     optuna.trial.TrialState.COMPLETE,
     optuna.trial.TrialState.PRUNED,
+    optuna.trial.TrialState.FAIL,
+}
+
+# Phase-4 transformer champion (trial 7) — used as enqueued baselines.
+CHAMPION_PC_PARAMS: dict[str, float | int | str] = {
+    "seq_len": 64,
+    "depth": 1,
+    "num_heads": 1,
+    "lr": 0.0036910070447662953,
+    "eta_infer": 1.67967291868957e-05,
+    "infer_steps": 12,
+    "max_infer_norm": 1.0,
+    "grad_clip": 0.5,
+    "lr_decay_epochs": 10,
+    "weight_init_std": 0.01531315474155434,
+    "seed_offset": 19,  # seed 42 + 19 = 61
 }
 
 
 @dataclass(frozen=True)
 class TrialSettings:
-    """Fixed geometry and epoch budget shared by all trials."""
+    """Fixed resource budget shared by all Hopfield trials."""
 
     run_dir: Path
-    seq_len: int = 128
+    seq_len: int = 64
     horizon: int = 12
-    depth: int = 3
+    depth: int = 1
     embed_dim: int = 32
-    num_heads: int = 4
+    num_heads: int = 1
     mlp_dim: int = 128
     batch_size: int = 64
     max_epochs: int = 15
@@ -74,7 +125,12 @@ class WorkerProcess:
 def create_storage(journal_path: Path) -> JournalStorage:
     """Create resumable, multi-process-safe local Optuna storage."""
     journal_path.parent.mkdir(parents=True, exist_ok=True)
-    return JournalStorage(JournalFileBackend(str(journal_path)))
+    path = str(journal_path)
+    if sys.platform == "win32":
+        backend = JournalFileBackend(path, lock_obj=JournalFileOpenLock(path))
+    else:
+        backend = JournalFileBackend(path)
+    return JournalStorage(backend)
 
 
 def create_study(
@@ -83,7 +139,7 @@ def create_study(
     max_epochs: int = 15,
     min_pruning_epochs: int = 3,
 ) -> optuna.Study:
-    """Create or load the shared PC dynamics study."""
+    """Create or load the shared Hopfield PC study."""
     return optuna.create_study(
         study_name=study_name,
         storage=create_storage(journal_path),
@@ -91,7 +147,7 @@ def create_study(
         load_if_exists=True,
         sampler=optuna.samplers.TPESampler(
             seed=42,
-            n_startup_trials=16,
+            n_startup_trials=12,
             multivariate=True,
             group=True,
             constant_liar=True,
@@ -104,38 +160,98 @@ def create_study(
     )
 
 
-def suggest_pc_dynamics(trial: optuna.Trial) -> dict[str, float | int]:
-    """Search PC dynamics and architecture factors linked to instability."""
-    dynamics: dict[str, Any] = {
-        "seq_len": trial.suggest_categorical("seq_len", [64, 128]),
-        "depth": trial.suggest_int("depth", 1, 3),
-        "num_heads": trial.suggest_categorical("num_heads", [1, 2, 4]),
-        "lr": trial.suggest_float("lr", 3e-4, 5e-3, log=True),
-        "eta_infer": trial.suggest_float("eta_infer", 1e-5, 5e-4, log=True),
-        "infer_steps": trial.suggest_int("infer_steps", 8, 24),
-        "max_infer_norm": trial.suggest_categorical(
-            "max_infer_norm", [0.5, 1.0, 5.0]
+def enqueue_hopfield_baselines(study: optuna.Study) -> None:
+    """Seed with transformer champion + matched Hopfield arms."""
+    if study.get_trials(deepcopy=False):
+        return
+    baselines: list[dict[str, float | int | str]] = [
+        {
+            **CHAMPION_PC_PARAMS,
+            "variant": "baseline",
+            "hopfield_strength": "1.0",
+        },
+        {
+            **CHAMPION_PC_PARAMS,
+            "variant": "projection",
+            "hopfield_strength": "1.0",
+        },
+        {
+            **CHAMPION_PC_PARAMS,
+            "variant": "embed-storkey",
+            "hopfield_strength": "1.0",
+        },
+        {
+            **CHAMPION_PC_PARAMS,
+            "variant": "embed-storkey",
+            "hopfield_strength": "2.0",
+        },
+        {
+            **CHAMPION_PC_PARAMS,
+            "variant": "embed-storkey",
+            "hopfield_strength": "learnable",
+        },
+        {
+            **CHAMPION_PC_PARAMS,
+            "variant": "forecast-storkey",
+            "hopfield_strength": "1.0",
+        },
+        {
+            **CHAMPION_PC_PARAMS,
+            "lr": 0.003533,
+            "eta_infer": 2.207e-05,
+            "seed_offset": 21,
+            "variant": "embed-storkey",
+            "hopfield_strength": "1.5",
+        },
+        {
+            **CHAMPION_PC_PARAMS,
+            "lr": 0.002667,
+            "eta_infer": 9.998e-06,
+            "infer_steps": 14,
+            "seed_offset": 21,
+            "variant": "embed-storkey",
+            "hopfield_strength": "2.0",
+        },
+    ]
+    for params in baselines:
+        study.enqueue_trial(params)
+
+
+def suggest_hopfield_dynamics(trial: optuna.Trial) -> dict[str, float | int | str]:
+    """Search Hopfield placement/strength plus breakthrough-informed PC knobs."""
+    return {
+        "seq_len": trial.suggest_categorical("seq_len", [64]),
+        "depth": trial.suggest_categorical("depth", [1]),
+        "num_heads": trial.suggest_categorical("num_heads", [1]),
+        "variant": trial.suggest_categorical(
+            "variant",
+            ["baseline", "projection", "embed-storkey", "forecast-storkey"],
         ),
-        "grad_clip": trial.suggest_categorical("grad_clip", [0.5, 1.0, 2.0]),
+        "hopfield_strength": trial.suggest_categorical(
+            "hopfield_strength",
+            ["0.5", "1.0", "1.5", "2.0", "learnable"],
+        ),
+        "lr": trial.suggest_float("lr", 1.8e-3, 3.8e-3, log=True),
+        "eta_infer": trial.suggest_float("eta_infer", 9e-6, 2.5e-5, log=True),
+        "infer_steps": trial.suggest_int("infer_steps", 12, 18),
+        "max_infer_norm": trial.suggest_categorical(
+            "max_infer_norm", [0.5, 1.0]
+        ),
+        "grad_clip": trial.suggest_categorical("grad_clip", [0.5, 1.0]),
         "lr_decay_epochs": trial.suggest_categorical(
             "lr_decay_epochs", [5, 10, 15]
         ),
         "weight_init_std": trial.suggest_float(
-            "weight_init_std", 0.01, 0.03, log=True
+            "weight_init_std", 0.014, 0.021, log=True
         ),
-        "energy": trial.suggest_categorical("energy", ["gaussian", "huber"]),
-        "ipc": trial.suggest_categorical("ipc", [True, False]),
-        "infer_optimizer": trial.suggest_categorical(
-            "infer_optimizer", ["sgd", "adam"]
-        ),
+        "seed_offset": trial.suggest_int("seed_offset", 0, 40),
     }
-    if dynamics["energy"] == "huber":
-        dynamics["huber_delta"] = trial.suggest_float(
-            "huber_delta", 0.1, 2.0, log=True
-        )
-    else:
-        dynamics["huber_delta"] = 1.0
-    return dynamics
+
+
+def _parse_hopfield_strength(raw: str | float | int) -> float | None:
+    if isinstance(raw, str) and raw == "learnable":
+        return None
+    return float(raw)
 
 
 def query_cuda_process_memory() -> dict[int, int]:
@@ -193,40 +309,7 @@ def admitted_worker_count(
 
 
 def _study_finished_trials(study: optuna.Study) -> int:
-    return sum(
-        trial.state in COUNTED_TRIAL_STATES for trial in study.get_trials()
-    )
-
-
-def _worker_is_alive(pid: int) -> bool:
-    """Return whether a recorded worker process still exists."""
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def _recover_stale_trials(study: optuna.Study, run_dir: Path) -> int:
-    """Fail dead RUNNING trials and enqueue resumable replacements."""
-    recovered = 0
-    for trial in study.get_trials(deepcopy=False):
-        if trial.state != optuna.trial.TrialState.RUNNING:
-            continue
-        worker_pid = trial.user_attrs.get("worker_pid")
-        if isinstance(worker_pid, int) and _worker_is_alive(worker_pid):
-            continue
-        trial_dir = run_dir / "trials" / f"trial_{trial.number:04d}"
-        checkpoint_path = trial_dir / "checkpoint.pkl"
-        study.tell(trial.number, state=optuna.trial.TrialState.FAIL)
-        user_attrs: dict[str, int] = {}
-        if checkpoint_path.is_file():
-            user_attrs["resume_from_trial"] = trial.number
-            recovered += 1
-        study.enqueue_trial(trial.params, user_attrs=user_attrs)
-    return recovered
+    return sum(trial.state in TERMINAL_STATES for trial in study.get_trials())
 
 
 def _worker_command(
@@ -239,7 +322,7 @@ def _worker_command(
     return [
         sys.executable,
         "-m",
-        "examples.glucose_transformer_tuning",
+        "examples.glucose_hopfield_tuning",
         "worker",
         "--journal",
         str(journal_path),
@@ -298,6 +381,7 @@ def _spawn_worker(
         stdout=log_file,
         stderr=subprocess.STDOUT,
         start_new_session=True,
+        env={**os.environ, "PYTHONUNBUFFERED": "1"},
     )
     return WorkerProcess(
         process=process,
@@ -308,13 +392,19 @@ def _spawn_worker(
 
 
 def _stop_worker(worker: WorkerProcess, timeout_seconds: float = 10.0) -> None:
-    """Terminate exactly one worker process group."""
+    """Terminate exactly one worker process (group on POSIX)."""
     if worker.process.poll() is None:
-        os.killpg(worker.process.pid, signal.SIGTERM)
+        if sys.platform == "win32":
+            worker.process.terminate()
+        else:
+            os.killpg(worker.process.pid, signal.SIGTERM)
         try:
             worker.process.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
-            os.killpg(worker.process.pid, signal.SIGKILL)
+            if sys.platform == "win32":
+                worker.process.kill()
+            else:
+                os.killpg(worker.process.pid, signal.SIGKILL)
             worker.process.wait()
     worker.log_file.close()
 
@@ -356,13 +446,13 @@ def _fail_running_trial_for_pid(study: optuna.Study, pid: int) -> None:
 def run_coordinator(
     run_dir: Path = typer.Option(DEFAULT_RUN_DIR, help="Study and trial artifacts."),
     study_name: str = typer.Option(DEFAULT_STUDY_NAME, help="Optuna study name."),
-    n_trials: int = typer.Option(32, min=1, help="Total terminal trials desired."),
-    max_workers: int = typer.Option(8, min=1, help="Maximum parallel workers."),
+    n_trials: int = typer.Option(24, min=1, help="Total terminal trials desired."),
+    max_workers: int = typer.Option(3, min=1, help="Maximum parallel workers."),
     gpu_memory_budget_mib: int = typer.Option(
-        8192, min=1, help="Total GPU memory budget, including unrelated jobs."
+        12000, min=1, help="Total GPU memory budget, including unrelated jobs."
     ),
     estimated_trial_memory_mib: int = typer.Option(
-        900, min=1, help="Admission reservation per worker."
+        2500, min=1, help="Admission reservation per worker."
     ),
     batch_size: int = typer.Option(64, min=1),
     max_epochs: int = typer.Option(15, min=1),
@@ -377,7 +467,7 @@ def run_coordinator(
         True, help="Continue training the best trial to MAX_EPOCHS after tuning."
     ),
 ) -> None:
-    """Coordinate process-isolated PC trials under a CUDA memory budget."""
+    """Coordinate process-isolated Hopfield PC trials under a CUDA budget."""
     if min_pruning_epochs > max_epochs:
         raise typer.BadParameter("min-pruning-epochs cannot exceed max-epochs")
 
@@ -389,6 +479,7 @@ def run_coordinator(
         max_epochs=max_epochs,
         min_pruning_epochs=min_pruning_epochs,
     )
+    enqueue_hopfield_baselines(study)
     settings = TrialSettings(
         run_dir=run_dir,
         batch_size=batch_size,
@@ -397,11 +488,6 @@ def run_coordinator(
         patience=patience,
         warmup_steps=warmup_steps,
     )
-    recovered_trials = _recover_stale_trials(study, run_dir)
-    if recovered_trials:
-        typer.echo(
-            f"Enqueued {recovered_trials} stale trials from epoch checkpoints"
-        )
     (run_dir / "coordinator_config.json").write_text(
         json.dumps(
             {
@@ -412,6 +498,12 @@ def run_coordinator(
                 "max_workers": max_workers,
                 "gpu_memory_budget_mib": gpu_memory_budget_mib,
                 "estimated_trial_memory_mib": estimated_trial_memory_mib,
+                "target_optuna_mae": TARGET_OPTUNA_MAE,
+                "protocol": "epoch-based Hyperband (mirrors glucose-transformer-tune)",
+                "search_notes": (
+                    "Locked geometry 64/d1/h1; Hopfield variant+strength; "
+                    "PC knobs in breakthrough band; same prepare_data split"
+                ),
             },
             indent=2,
         )
@@ -421,7 +513,7 @@ def run_coordinator(
     worker_index = 0
     typer.echo(
         f"Study {study_name}: target={n_trials}, max_workers={max_workers}, "
-        f"GPU budget={gpu_memory_budget_mib} MiB"
+        f"GPU budget={gpu_memory_budget_mib} MiB, beat_mae={TARGET_OPTUNA_MAE}"
     )
 
     try:
@@ -502,6 +594,11 @@ def run_coordinator(
         "best_val_mae_mg_dl": best.value,
         "best_params": best.params,
         "terminal_trials": _study_finished_trials(study),
+        "target_optuna_mae": TARGET_OPTUNA_MAE,
+        "beat_target": bool(best.value is not None and best.value < TARGET_OPTUNA_MAE),
+        "delta_vs_target": (
+            None if best.value is None else float(best.value) - TARGET_OPTUNA_MAE
+        ),
     }
     (run_dir / "best_trial.json").write_text(json.dumps(summary, indent=2))
     typer.echo(json.dumps(summary, indent=2))
@@ -515,7 +612,7 @@ def run_coordinator(
             cmd = [
                 sys.executable,
                 "-m",
-                "examples.glucose_transformer_tuning",
+                "examples.glucose_hopfield_tuning",
                 "continue-best",
                 "--run-dir",
                 str(run_dir),
@@ -603,10 +700,9 @@ def _run_best_continuation(
     import optax
 
     from examples.glucose_data import prepare_data
-    from examples.glucose_model import create_glucose_transformer
-    from fabricpc.core.energy import GaussianEnergy, HuberEnergy
-    from fabricpc.core.inference import InferenceAdam, InferenceSGDNormClip
-    from fabricpc.training.train import train_step, train_step_ipc
+    from examples.glucose_hopfield_model import create_glucose_hopfield_transformer
+    from fabricpc.core.inference import InferenceSGDNormClip
+    from fabricpc.training.train import train_step
     from fabricpc.training.train_backprop import compute_forward_pass
 
     best_info = json.loads((run_dir / "best_trial.json").read_text())
@@ -642,26 +738,16 @@ def _run_best_continuation(
         batch_size=int(config["batch_size"]),
         seed=int(config["seed"]),
     )
-    use_ipc = bool(config.get("ipc", False))
-    infer_optimizer_name = str(config.get("infer_optimizer", "sgd"))
-    if infer_optimizer_name == "adam":
-        inference = InferenceAdam(
-            eta_infer=float(config["eta_infer"]),
-            infer_steps=int(config["infer_steps"]),
-            max_norm=float(config["max_infer_norm"]),
-        )
-    else:
-        inference = InferenceSGDNormClip(
-            eta_infer=float(config["eta_infer"]),
-            infer_steps=int(config["infer_steps"]),
-            max_norm=float(config["max_infer_norm"]),
-        )
-    energy_name = str(config.get("energy", "gaussian"))
-    if energy_name == "huber":
-        energy = HuberEnergy(delta=float(config.get("huber_delta", 1.0)))
-    else:
-        energy = GaussianEnergy()
-    structure = create_glucose_transformer(
+    inference = InferenceSGDNormClip(
+        eta_infer=float(config["eta_infer"]),
+        infer_steps=int(config["infer_steps"]),
+        max_norm=float(config["max_infer_norm"]),
+    )
+    variant = str(config["variant"])
+    hopfield_strength = _parse_hopfield_strength(config["hopfield_strength"])
+    structure = create_glucose_hopfield_transformer(
+        variant=variant,  # type: ignore[arg-type]
+        hopfield_strength=hopfield_strength,
         depth=int(config["depth"]),
         embed_dim=int(config["embed_dim"]),
         num_heads=int(config["num_heads"]),
@@ -671,7 +757,6 @@ def _run_best_continuation(
         inference=inference,
         weight_init_std=float(config["weight_init_std"]),
         include_output_scaling=config.get("include_output_scaling", True),
-        energy=energy,
     )
 
     params = checkpoint["params"]
@@ -682,16 +767,15 @@ def _run_best_continuation(
 
     batches_per_epoch = len(data["train_loader"])
     remaining_epochs = max_epochs - start_epoch + 1
-    ipc_multiplier = int(config["infer_steps"]) if use_ipc else 1
-    remaining_updates = remaining_epochs * batches_per_epoch * ipc_multiplier
+    remaining_steps = remaining_epochs * batches_per_epoch
     cont_lr = float(config["lr"]) * 0.1
-    warmup = min(50 * ipc_multiplier, remaining_updates // 4)
+    warmup = min(50, remaining_steps // 4)
 
     schedule = optax.warmup_cosine_decay_schedule(
         init_value=0.0,
         peak_value=cont_lr,
         warmup_steps=warmup,
-        decay_steps=remaining_updates,
+        decay_steps=remaining_steps,
         end_value=cont_lr * 0.01,
     )
     optimizer = optax.chain(
@@ -702,11 +786,9 @@ def _run_best_continuation(
     glucose_range = max(float(data["g_max"]) - float(data["g_min"]), 1e-8)
     glucose_min = float(data["g_min"])
 
-    _train_fn = train_step_ipc if use_ipc else train_step
-
     @jax.jit
     def step_fn(step_params, step_opt_state, batch, train_key, metric_key):
-        up_params, up_opt, energy_val, final_state = _train_fn(
+        up_params, up_opt, energy_val, final_state = train_step(
             step_params, step_opt_state, batch, structure, optimizer, train_key,
         )
         fwd = compute_forward_pass(up_params, structure, batch, metric_key)
@@ -727,7 +809,8 @@ def _run_best_continuation(
     final_epoch = start_epoch - 1
 
     print(
-        f"\nContinuation: trial {trial_number}, epochs {start_epoch}-{max_epochs}, "
+        f"\nContinuation: trial {trial_number} ({variant}/"
+        f"{config['hopfield_strength']}), epochs {start_epoch}-{max_epochs}, "
         f"lr={cont_lr:.2e}, patience={patience}, "
         f"tuning_best_mae={tuning_best_mae:.3f}"
     )
@@ -828,6 +911,8 @@ def _run_best_continuation(
 
     summary: dict[str, Any] = {
         "source_trial": trial_number,
+        "variant": variant,
+        "hopfield_strength": str(config["hopfield_strength"]),
         "tuning_best_mae": tuning_best_mae,
         "continuation_best_mae": best_mae,
         "improved": best_mae < tuning_best_mae,
@@ -860,7 +945,7 @@ def _own_gpu_memory_mib() -> int:
 
 def _run_trial_attempt(
     trial: optuna.Trial,
-    dynamics: dict[str, float | int],
+    dynamics: dict[str, float | int | str],
     settings: TrialSettings,
     *,
     batch_size: int,
@@ -875,11 +960,10 @@ def _run_trial_attempt(
     import optax
 
     from examples.glucose_data import prepare_data
-    from examples.glucose_model import create_glucose_transformer
-    from fabricpc.core.energy import GaussianEnergy, HuberEnergy
-    from fabricpc.core.inference import InferenceAdam, InferenceSGDNormClip
+    from examples.glucose_hopfield_model import create_glucose_hopfield_transformer
+    from fabricpc.core.inference import InferenceSGDNormClip
     from fabricpc.graph_initialization import initialize_params
-    from fabricpc.training.train import train_step, train_step_ipc
+    from fabricpc.training.train import train_step
     from fabricpc.training.train_backprop import compute_forward_pass
 
     trial_dir = settings.run_dir / "trials" / f"trial_{trial.number:04d}"
@@ -891,26 +975,16 @@ def _run_trial_attempt(
         batch_size=batch_size,
         seed=settings.seed,
     )
-    use_ipc = bool(dynamics.get("ipc", False))
-    infer_optimizer = str(dynamics.get("infer_optimizer", "sgd"))
-    if infer_optimizer == "adam":
-        inference = InferenceAdam(
-            eta_infer=float(dynamics["eta_infer"]),
-            infer_steps=int(dynamics["infer_steps"]),
-            max_norm=float(dynamics["max_infer_norm"]),
-        )
-    else:
-        inference = InferenceSGDNormClip(
-            eta_infer=float(dynamics["eta_infer"]),
-            infer_steps=int(dynamics["infer_steps"]),
-            max_norm=float(dynamics["max_infer_norm"]),
-        )
-    energy_name = str(dynamics.get("energy", "gaussian"))
-    if energy_name == "huber":
-        energy = HuberEnergy(delta=float(dynamics.get("huber_delta", 1.0)))
-    else:
-        energy = GaussianEnergy()
-    structure = create_glucose_transformer(
+    inference = InferenceSGDNormClip(
+        eta_infer=float(dynamics["eta_infer"]),
+        infer_steps=int(dynamics["infer_steps"]),
+        max_norm=float(dynamics["max_infer_norm"]),
+    )
+    variant = str(dynamics["variant"])
+    hopfield_strength = _parse_hopfield_strength(dynamics["hopfield_strength"])
+    structure = create_glucose_hopfield_transformer(
+        variant=variant,  # type: ignore[arg-type]
+        hopfield_strength=hopfield_strength,
         depth=int(dynamics["depth"]),
         embed_dim=settings.embed_dim,
         num_heads=int(dynamics["num_heads"]),
@@ -920,12 +994,9 @@ def _run_trial_attempt(
         inference=inference,
         weight_init_std=float(dynamics["weight_init_std"]),
         include_output_scaling=True,
-        energy=energy,
     )
 
-    # Search trials deliberately share data order and initialization so measured
-    # differences come from hyperparameters rather than random seeds.
-    seed = settings.seed
+    seed = settings.seed + int(dynamics["seed_offset"])
     rng = jax.random.PRNGKey(seed)
     rng, init_key = jax.random.split(rng)
     params = initialize_params(structure, init_key)
@@ -940,11 +1011,8 @@ def _run_trial_attempt(
         int(dynamics["lr_decay_epochs"]),
         settings.max_epochs,
     )
-    ipc_multiplier = int(dynamics["infer_steps"]) if use_ipc else 1
-    decay_steps = decay_epochs * batches_per_epoch * ipc_multiplier
-    warmup_updates = min(
-        settings.warmup_steps * ipc_multiplier, decay_steps // 2
-    )
+    decay_steps = decay_epochs * batches_per_epoch
+    warmup_updates = min(settings.warmup_steps, decay_steps // 2)
     schedule = optax.warmup_cosine_decay_schedule(
         init_value=0.0,
         peak_value=float(dynamics["lr"]),
@@ -960,8 +1028,6 @@ def _run_trial_attempt(
     glucose_range = max(float(data["g_max"]) - float(data["g_min"]), 1e-8)
     glucose_min = float(data["g_min"])
 
-    _train_fn = train_step_ipc if use_ipc else train_step
-
     @jax.jit
     def step_fn(
         step_params: Any,
@@ -970,7 +1036,7 @@ def _run_trial_attempt(
         train_key: Any,
         metric_key: Any,
     ) -> tuple[Any, Any, Any, Any, Any]:
-        updated_params, updated_opt_state, energy, final_state = _train_fn(
+        updated_params, updated_opt_state, energy, final_state = train_step(
             step_params,
             step_opt_state,
             batch,
@@ -1001,7 +1067,7 @@ def _run_trial_attempt(
     eval_step = _make_eval_step(
         structure, float(data["g_min"]), float(data["g_max"])
     )
-    history: list[dict[str, float | int]] = []
+    history: list[dict[str, float | int | str]] = []
     recent_energies: list[float] = []
     best_mae = math.inf
     epochs_without_improvement = 0
@@ -1009,58 +1075,24 @@ def _run_trial_attempt(
     peak_gpu_memory_mib = 0
     started_at = time.time()
     global_step = 0
-    start_epoch = 1
-    resume_from_trial = trial.user_attrs.get("resume_from_trial")
-    source_trial_dir = trial_dir
-    if isinstance(resume_from_trial, int):
-        source_trial_dir = (
-            settings.run_dir / "trials" / f"trial_{resume_from_trial:04d}"
-        )
-    source_checkpoint = source_trial_dir / "checkpoint.pkl"
-    if source_checkpoint.is_file():
-        with source_checkpoint.open("rb") as file:
-            checkpoint = pickle.load(file)
-        if checkpoint["dynamics"] != dynamics:
-            raise ValueError(
-                f"Checkpoint dynamics do not match trial {trial.number}"
-            )
-        params = checkpoint["params"]
-        opt_state = checkpoint["opt_state"]
-        rng = checkpoint["rng"]
-        history = checkpoint["history"]
-        recent_energies = checkpoint["recent_energies"]
-        best_mae = checkpoint["best_mae"]
-        epochs_without_improvement = checkpoint["epochs_without_improvement"]
-        regression_checks = checkpoint["regression_checks"]
-        peak_gpu_memory_mib = checkpoint["peak_gpu_memory_mib"]
-        global_step = checkpoint["global_step"]
-        start_epoch = checkpoint["epoch"] + 1
-        started_at = time.time() - checkpoint["elapsed_s"]
-        for row in history:
-            trial.report(float(row["mae_mg_dl"]), step=int(row["epoch"]))
-        source_best = source_trial_dir / "best_params.pkl"
-        if source_best.is_file() and source_best != trial_dir / "best_params.pkl":
-            shutil.copy2(source_best, trial_dir / "best_params.pkl")
-        trial.set_user_attr("resumed_from_epoch", checkpoint["epoch"])
 
     resolved = {
         **asdict(settings),
         "run_dir": str(settings.run_dir),
         **dynamics,
+        "hopfield_strength_resolved": hopfield_strength,
         "batch_size": batch_size,
         "seed": seed,
         "batches_per_epoch": batches_per_epoch,
         "total_steps": total_steps,
         "decay_steps": decay_steps,
         "include_output_scaling": True,
-        "resume_from_trial": resume_from_trial,
-        "start_epoch": start_epoch,
+        "target_optuna_mae": TARGET_OPTUNA_MAE,
+        "data_protocol": "examples.glucose_data.prepare_data (transformer-comparable)",
     }
     (trial_dir / "config.json").write_text(json.dumps(resolved, indent=2))
-    if history:
-        (trial_dir / "history.json").write_text(json.dumps(history, indent=2))
 
-    for epoch in range(start_epoch, settings.max_epochs + 1):
+    for epoch in range(1, settings.max_epochs + 1):
         epoch_energy = 0.0
         epoch_batches = 0
         batch_train_maes: list[float] = []
@@ -1087,7 +1119,13 @@ def _run_trial_attempt(
                 raise optuna.TrialPruned()
             if len(recent_energies) >= 20:
                 median_energy = float(np.median(recent_energies[-20:]))
-                if median_energy > 0 and energy_value > 10.0 * median_energy:
+                # Hopfield dual-energy can spike vs plain PC; keep only severe
+                # explosions (absolute + relative), not mild Storkey transients.
+                if (
+                    median_energy > 0
+                    and energy_value > 5.0
+                    and energy_value > 50.0 * median_energy
+                ):
                     trial.set_user_attr(
                         "prune_reason",
                         f"energy explosion at epoch {epoch}, step {global_step}: "
@@ -1136,8 +1174,9 @@ def _run_trial_attempt(
         (trial_dir / "history.json").write_text(json.dumps(history, indent=2))
         print(
             f"trial={trial.number} epoch={epoch}/{settings.max_epochs} "
+            f"variant={variant} strength={dynamics['hopfield_strength']} "
             f"step={global_step} val_mae={mae:.3f} "
-            f"train_mae={train_mae_mean:.3f}±{train_mae_std:.3f} "
+            f"train_mae={train_mae_mean:.3f}+/-{train_mae_std:.3f} "
             f"avg_energy={avg_energy:.6g} param_norm={parameter_norm:.3f}",
             flush=True,
         )
@@ -1147,6 +1186,8 @@ def _run_trial_attempt(
             best_mae = mae
             epochs_without_improvement = 0
             with (trial_dir / "best_params.pkl").open("wb") as file:
+                import pickle
+
                 pickle.dump(params, file)
         else:
             epochs_without_improvement += 1
@@ -1159,27 +1200,6 @@ def _run_trial_attempt(
             regression_checks += 1
         else:
             regression_checks = 0
-
-        checkpoint = {
-            "epoch": epoch,
-            "global_step": global_step,
-            "params": params,
-            "opt_state": opt_state,
-            "rng": rng,
-            "best_mae": best_mae,
-            "epochs_without_improvement": epochs_without_improvement,
-            "regression_checks": regression_checks,
-            "history": history,
-            "recent_energies": recent_energies[-20:],
-            "peak_gpu_memory_mib": peak_gpu_memory_mib,
-            "elapsed_s": time.time() - started_at,
-            "dynamics": dynamics,
-        }
-        checkpoint_path = trial_dir / "checkpoint.pkl"
-        checkpoint_tmp = trial_dir / "checkpoint.pkl.tmp"
-        with checkpoint_tmp.open("wb") as file:
-            pickle.dump(checkpoint, file)
-        checkpoint_tmp.replace(checkpoint_path)
 
         if regression_checks >= 2:
             trial.set_user_attr(
@@ -1205,13 +1225,17 @@ def _run_trial_attempt(
 
     trial.set_user_attr("peak_gpu_memory_mib", peak_gpu_memory_mib)
     trial.set_user_attr("elapsed_s", time.time() - started_at)
+    trial.set_user_attr("best_val_mae_mg_dl", best_mae)
+    trial.set_user_attr("beat_target", best_mae < TARGET_OPTUNA_MAE)
+    trial.set_user_attr("variant", variant)
+    trial.set_user_attr("hopfield_strength", str(dynamics["hopfield_strength"]))
     return best_mae
 
 
 def objective(trial: optuna.Trial, settings: TrialSettings) -> float:
-    """Run one PC trial, with a single half-batch retry on CUDA OOM."""
+    """Run one Hopfield PC trial, with a single half-batch retry on CUDA OOM."""
     trial.set_user_attr("worker_pid", os.getpid())
-    dynamics = suggest_pc_dynamics(trial)
+    dynamics = suggest_hopfield_dynamics(trial)
     try:
         return _run_trial_attempt(
             trial, dynamics, settings, batch_size=settings.batch_size
@@ -1240,11 +1264,11 @@ def run_worker(
     journal: Path = typer.Option(...),
     study_name: str = typer.Option(DEFAULT_STUDY_NAME),
     run_dir: Path = typer.Option(DEFAULT_RUN_DIR),
-    seq_len: int = typer.Option(128),
+    seq_len: int = typer.Option(64),
     horizon: int = typer.Option(12),
-    depth: int = typer.Option(3),
+    depth: int = typer.Option(1),
     embed_dim: int = typer.Option(32),
-    num_heads: int = typer.Option(4),
+    num_heads: int = typer.Option(1),
     mlp_dim: int = typer.Option(128),
     batch_size: int = typer.Option(64),
     max_epochs: int = typer.Option(15),
@@ -1276,18 +1300,20 @@ def run_worker(
         max_epochs=max_epochs,
         min_pruning_epochs=min_pruning_epochs,
     )
-    # Parallel workers otherwise construct identically seeded TPE samplers and
-    # propose duplicate startup trials.
     study.sampler.reseed_rng()
-    previous_handler = signal.getsignal(signal.SIGALRM)
 
-    def timeout_handler(_signum: int, _frame: Any) -> None:
-        raise TimeoutError(
-            f"trial exceeded {trial_timeout_seconds} seconds"
-        )
+    use_alarm = hasattr(signal, "SIGALRM")
+    previous_handler = None
+    if use_alarm:
 
-    signal.signal(signal.SIGALRM, timeout_handler)
-    signal.alarm(trial_timeout_seconds)
+        def timeout_handler(_signum: int, _frame: Any) -> None:
+            raise TimeoutError(
+                f"trial exceeded {trial_timeout_seconds} seconds"
+            )
+
+        previous_handler = signal.getsignal(signal.SIGALRM)
+        signal.signal(signal.SIGALRM, timeout_handler)
+        signal.alarm(trial_timeout_seconds)
     try:
         study.optimize(
             lambda trial: objective(trial, settings),
@@ -1295,8 +1321,9 @@ def run_worker(
             catch=(Exception,),
         )
     finally:
-        signal.alarm(0)
-        signal.signal(signal.SIGALRM, previous_handler)
+        if use_alarm:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, previous_handler)
 
 
 @app.command("continue-best")

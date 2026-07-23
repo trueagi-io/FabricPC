@@ -27,6 +27,10 @@ FIXED_DYNAMICS = {
     "grad_clip": 1.0,
     "lr_decay_epochs": 5,
     "weight_init_std": 0.02,
+    "energy": "gaussian",
+    "ipc": False,
+    "infer_optimizer": "sgd",
+    "huber_delta": 1.0,
 }
 
 

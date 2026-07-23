@@ -11,7 +11,7 @@ from examples.glucose_model import (
     RegressionOutputNode,
 )
 from fabricpc.core.activations import GeluActivation, IdentityActivation
-from fabricpc.core.energy import GaussianEnergy
+from fabricpc.core.energy import EnergyFunctional, GaussianEnergy
 from fabricpc.core.inference import InferenceBase, InferenceSGDNormClip
 from fabricpc.core.initializers import NormalInitializer, XavierInitializer
 from fabricpc.core.mupc import MuPCConfig
@@ -49,6 +49,7 @@ def create_glucose_hopfield_transformer(
     weight_init_std: float = 0.02186191083483616,
     use_rope: bool = True,
     include_output_scaling: bool = True,
+    energy: EnergyFunctional | None = None,
 ):
     """Build a matched baseline, projection control, or Storkey graph.
 
@@ -74,6 +75,9 @@ def create_glucose_hopfield_transformer(
             max_norm=1.0,
         )
 
+    if energy is None:
+        energy = GaussianEnergy()
+
     weight_init = NormalInitializer(std=weight_init_std)
     nodes = []
     edges = []
@@ -82,6 +86,7 @@ def create_glucose_hopfield_transformer(
         shape=(seq_len, in_channels),
         activation=IdentityActivation(),
         name="glucose_input",
+        energy=energy,
     )
     embed = ContinuousEmbeddingNode(
         name="embed",
@@ -89,6 +94,7 @@ def create_glucose_hopfield_transformer(
         embed_dim=embed_dim,
         in_channels=in_channels,
         weight_init=XavierInitializer(),
+        energy=energy,
     )
     nodes.extend((input_node, embed))
     edges.append(Edge(source=input_node, target=embed.slot("in")))
@@ -99,6 +105,7 @@ def create_glucose_hopfield_transformer(
             shape=(seq_len, embed_dim),
             activation=IdentityActivation(),
             name="embed_projection_control",
+            energy=energy,
         )
         nodes.append(memory_control)
         edges.append(Edge(source=previous, target=memory_control.slot("in")))
@@ -111,6 +118,7 @@ def create_glucose_hopfield_transformer(
             hopfield_strength=hopfield_strength,
             enforce_symmetry=True,
             zero_diagonal=False,
+            energy=energy,
         )
         nodes.append(embed_memory)
         edges.append(Edge(source=previous, target=embed_memory.slot("in")))
@@ -124,6 +132,7 @@ def create_glucose_hopfield_transformer(
             num_heads=num_heads,
             use_rope=use_rope,
             weight_init=weight_init,
+            energy=energy,
         )
         mlp_1 = LnMlp1Node(
             name=f"L{index}_mlp1",
@@ -132,6 +141,7 @@ def create_glucose_hopfield_transformer(
             ff_dim=mlp_dim,
             activation=GeluActivation(),
             weight_init=weight_init,
+            energy=energy,
         )
         mlp_2 = Mlp2ResidualNode(
             name=f"L{index}_mlp2",
@@ -139,6 +149,7 @@ def create_glucose_hopfield_transformer(
             embed_dim=embed_dim,
             ff_dim=mlp_dim,
             weight_init=weight_init,
+            energy=energy,
         )
         nodes.extend((attention, mlp_1, mlp_2))
         edges.extend(
@@ -159,7 +170,7 @@ def create_glucose_hopfield_transformer(
         embed_dim=embed_dim,
         horizon=horizon,
         weight_init=NormalInitializer(std=float(jnp.sqrt(1.0 / embed_dim))),
-        energy=GaussianEnergy(),
+        energy=energy,
     )
     nodes.append(forecast)
     edges.append(Edge(source=previous, target=forecast.slot("in")))
@@ -173,8 +184,9 @@ def create_glucose_hopfield_transformer(
             hopfield_strength=hopfield_strength,
             enforce_symmetry=True,
             zero_diagonal=False,
+            energy=energy,
         )
-        output = IdentityNode(shape=(horizon,), name="output")
+        output = IdentityNode(shape=(horizon,), name="output", energy=energy)
         nodes.extend((forecast_memory, output))
         edges.extend(
             (

@@ -24,7 +24,7 @@ from fabricpc.core.initializers import (
 from fabricpc.core.positional import precompute_freqs_cis, apply_rotary_emb
 from fabricpc.utils.helpers import layernorm
 from fabricpc.core.activations import IdentityActivation, GeluActivation
-from fabricpc.core.energy import GaussianEnergy
+from fabricpc.core.energy import EnergyFunctional, GaussianEnergy
 from fabricpc.nodes import LnMlp1Node, Mlp2ResidualNode, Linear
 from fabricpc.core.topology import Edge
 from fabricpc.graph_assembly import TaskMap, graph
@@ -169,17 +169,29 @@ class MultiScaleMhaResidualNode(NodeBase):
 
 
 class RegressionOutputNode(NodeBase):
-    """Flatten → Linear → GELU → Linear regression head."""
+    """Sequence → pooled/flat features → Linear → GELU → Linear regression head.
+
+    ``readout`` modes:
+    - ``flatten``: full ``seq_len * embed_dim`` projection (GluMind-style default)
+    - ``mean_pool``: mean over time, then ``embed_dim`` projection (lighter PC head)
+    - ``last``: last timestep only (lighter PC head)
+    """
 
     DEFAULT_ENERGY = GaussianEnergy
     DEFAULT_ACTIVATION = IdentityActivation
 
     def __init__(self, shape, name, seq_len, embed_dim, horizon,
+                 readout: str = "flatten",
                  weight_init=XavierInitializer(),
                  latent_init=NormalInitializer(),
                  energy=GaussianEnergy(), **kwargs):
+        if readout not in {"flatten", "mean_pool", "last"}:
+            raise ValueError(
+                f"readout must be flatten|mean_pool|last, got {readout!r}"
+            )
         super().__init__(shape=shape, name=name, seq_len=seq_len,
                          embed_dim=embed_dim, horizon=horizon,
+                         readout=readout,
                          weight_init=weight_init, latent_init=latent_init,
                          energy=energy, **kwargs)
 
@@ -189,11 +201,15 @@ class RegressionOutputNode(NodeBase):
 
     @staticmethod
     def initialize_params(key, node_shape, input_shapes, weight_init, config):
-        flat_dim = config["seq_len"] * config["embed_dim"]
+        readout = config.get("readout", "flatten")
         embed_dim, horizon = config["embed_dim"], config["horizon"]
+        if readout == "flatten":
+            feature_dim = config["seq_len"] * embed_dim
+        else:
+            feature_dim = embed_dim
         keys = jax.random.split(key, 2)
         weights = {
-            "W_flat": initialize(keys[0], (flat_dim, embed_dim), weight_init),
+            "W_flat": initialize(keys[0], (feature_dim, embed_dim), weight_init),
             "W_out": initialize(keys[1], (embed_dim, horizon), weight_init),
         }
         biases = {"b_flat": jnp.zeros((embed_dim,)), "b_out": jnp.zeros((horizon,))}
@@ -202,8 +218,16 @@ class RegressionOutputNode(NodeBase):
     @staticmethod
     def forward(params, inputs, state, node_info):
         x = inputs[list(inputs.keys())[0]]
-        flat = x.reshape(x.shape[0], -1)
-        h = jax.nn.gelu(jnp.dot(flat, params.weights["W_flat"]) + params.biases["b_flat"])
+        readout = node_info.node_config.get("readout", "flatten")
+        if readout == "mean_pool":
+            features = jnp.mean(x, axis=1)
+        elif readout == "last":
+            features = x[:, -1, :]
+        else:
+            features = x.reshape(x.shape[0], -1)
+        h = jax.nn.gelu(
+            jnp.dot(features, params.weights["W_flat"]) + params.biases["b_flat"]
+        )
         z_mu = jnp.dot(h, params.weights["W_out"]) + params.biases["b_out"]
         error = state.z_latent - z_mu
         state = state._replace(z_mu=z_mu, error=error)
@@ -222,6 +246,8 @@ def create_glucose_transformer(
     weight_init_std: float = 0.02,
     use_rope: bool = True,
     include_output_scaling: bool = False,
+    readout: str = "flatten",
+    energy: EnergyFunctional | None = None,
 ):
     """Build a glucose transformer graph for forecasting.
 
@@ -229,6 +255,8 @@ def create_glucose_transformer(
     depth=3, embed_dim=32, num_heads=4, mlp_dim=128, horizon=12 (60 min).
     Set ``include_output_scaling=True`` for Gaussian/MSE regression muPC
     scaling; the default remains false for checkpoint compatibility.
+    ``readout`` selects the regression head pooling mode (see
+    ``RegressionOutputNode``).
     """
     assert seq_len % 4 == 0, f"seq_len must be divisible by 4, got {seq_len}"
 
@@ -236,6 +264,9 @@ def create_glucose_transformer(
         inference = InferenceSGDNormClip(
             eta_infer=5e-5, infer_steps=12, max_norm=1.0
         )
+
+    if energy is None:
+        energy = GaussianEnergy()
 
     w_init = NormalInitializer(std=weight_init_std)
 
@@ -245,6 +276,7 @@ def create_glucose_transformer(
         shape=(seq_len, in_channels),
         activation=IdentityActivation(),
         name="glucose_input",
+        energy=energy,
     )
     nodes.append(input_node)
 
@@ -252,6 +284,7 @@ def create_glucose_transformer(
         name="embed", shape=(seq_len, embed_dim),
         embed_dim=embed_dim, in_channels=in_channels,
         weight_init=XavierInitializer(),
+        energy=energy,
     )
     nodes.append(embed)
     edges.append(Edge(source=input_node, target=embed.slot("in")))
@@ -262,6 +295,7 @@ def create_glucose_transformer(
             name=f"L{i}_msha", shape=(seq_len, embed_dim),
             embed_dim=embed_dim, num_heads=num_heads,
             use_rope=use_rope, weight_init=w_init,
+            energy=energy,
         )
         nodes.append(msha)
         edges.append(Edge(source=prev, target=msha.slot("in")))
@@ -271,6 +305,7 @@ def create_glucose_transformer(
             name=f"L{i}_mlp1", shape=(seq_len, mlp_dim),
             embed_dim=embed_dim, ff_dim=mlp_dim,
             activation=GeluActivation(), weight_init=w_init,
+            energy=energy,
         )
         nodes.append(mlp1)
         edges.append(Edge(source=msha, target=mlp1.slot("in")))
@@ -278,6 +313,7 @@ def create_glucose_transformer(
         mlp2 = Mlp2ResidualNode(
             name=f"L{i}_mlp2", shape=(seq_len, embed_dim),
             embed_dim=embed_dim, ff_dim=mlp_dim, weight_init=w_init,
+            energy=energy,
         )
         nodes.append(mlp2)
         edges.append(Edge(source=mlp1, target=mlp2.slot("in")))
@@ -288,8 +324,9 @@ def create_glucose_transformer(
     output = RegressionOutputNode(
         name="output", shape=(horizon,), seq_len=seq_len,
         embed_dim=embed_dim, horizon=horizon,
+        readout=readout,
         weight_init=NormalInitializer(std=float(jnp.sqrt(1.0 / embed_dim))),
-        energy=GaussianEnergy(),
+        energy=energy,
     )
     nodes.append(output)
     edges.append(Edge(source=prev, target=output.slot("in")))

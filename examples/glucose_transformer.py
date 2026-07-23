@@ -52,9 +52,10 @@ import numpy as np
 import optax
 
 from fabricpc.graph_initialization import initialize_params
-from fabricpc.training.train import train_step
+from fabricpc.training.train import train_step, train_step_ipc
 from fabricpc.training.train_backprop import train_step_backprop, compute_forward_pass
-from fabricpc.core.inference import InferenceSGDNormClip
+from fabricpc.core.inference import InferenceSGDNormClip, InferenceAdam
+from fabricpc.core.energy import GaussianEnergy, HuberEnergy, LaplacianEnergy
 
 from examples.glucose_data import prepare_data
 from examples.glucose_model import create_glucose_transformer
@@ -100,6 +101,19 @@ def parse_args():
     p.add_argument("--weight_init_std", type=float, default=0.02186191083483616)
     p.add_argument("--grad_clip", type=float, default=0.5,
                    help="Global gradient norm clipping (default: 0.5)")
+    p.add_argument("--energy", choices=["gaussian", "huber", "laplacian"],
+                   default="gaussian",
+                   help="Energy functional for PC nodes (default: gaussian)")
+    p.add_argument("--huber_delta", type=float, default=1.0,
+                   help="Delta for Huber energy (default: 1.0)")
+    p.add_argument("--ipc", action="store_true",
+                   help="Use incremental PC (simultaneous inference + weight updates)")
+    p.add_argument("--infer_optimizer", choices=["sgd", "adam"], default="sgd",
+                   help="Optimizer for latent inference updates (default: sgd)")
+    p.add_argument("--infer_beta1", type=float, default=0.9,
+                   help="Adam beta1 for inference optimizer (default: 0.9)")
+    p.add_argument("--infer_beta2", type=float, default=0.999,
+                   help="Adam beta2 for inference optimizer (default: 0.999)")
     p.add_argument(
         "--include_output_scaling",
         action=argparse.BooleanOptionalAction,
@@ -218,17 +232,36 @@ def train_single(
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    inference = InferenceSGDNormClip(
-        eta_infer=args.eta_infer,
-        infer_steps=args.infer_steps,
-        max_norm=args.max_infer_norm,
-    )
+    if getattr(args, "infer_optimizer", "sgd") == "adam":
+        inference = InferenceAdam(
+            eta_infer=args.eta_infer,
+            infer_steps=args.infer_steps,
+            max_norm=args.max_infer_norm,
+            beta1=getattr(args, "infer_beta1", 0.9),
+            beta2=getattr(args, "infer_beta2", 0.999),
+        )
+    else:
+        inference = InferenceSGDNormClip(
+            eta_infer=args.eta_infer,
+            infer_steps=args.infer_steps,
+            max_norm=args.max_infer_norm,
+        )
+
+    energy_name = getattr(args, "energy", "gaussian")
+    if energy_name == "huber":
+        energy = HuberEnergy(delta=getattr(args, "huber_delta", 1.0))
+    elif energy_name == "laplacian":
+        energy = LaplacianEnergy()
+    else:
+        energy = GaussianEnergy()
+
     structure = structure_builder(
         depth=args.depth, embed_dim=args.embed_dim,
         num_heads=args.num_heads, mlp_dim=args.mlp_dim,
         seq_len=args.seq_len, horizon=args.horizon,
         inference=inference, weight_init_std=args.weight_init_std,
         include_output_scaling=args.include_output_scaling,
+        energy=energy,
     )
 
     n_params = sum(
@@ -256,13 +289,16 @@ def train_single(
     history = []
     resumed = False
 
-    warmup = min(args.warmup_steps, total_steps // 2)
+    use_ipc = getattr(args, "ipc", False) and mode == "pc"
+    ipc_multiplier = args.infer_steps if use_ipc else 1
+
+    warmup = min(args.warmup_steps * ipc_multiplier, total_steps * ipc_multiplier // 2)
     if args.decay_steps is not None:
-        decay_steps = args.decay_steps
+        decay_steps = args.decay_steps * ipc_multiplier
     elif args.decay_epochs is not None:
-        decay_steps = args.decay_epochs * batches_per_epoch
+        decay_steps = args.decay_epochs * batches_per_epoch * ipc_multiplier
     else:
-        decay_steps = total_steps
+        decay_steps = total_steps * ipc_multiplier
     if decay_steps <= warmup:
         raise ValueError(
             f"decay_steps ({decay_steps}) must exceed warmup_steps ({warmup})"
@@ -307,7 +343,11 @@ def train_single(
         f"budget={total_steps} updates"
     )
 
-    if mode == "pc":
+    if mode == "pc" and use_ipc:
+        @jax.jit
+        def step_fn(p, o, b, k):
+            return train_step_ipc(p, o, b, structure, optimizer, k)
+    elif mode == "pc":
         @jax.jit
         def step_fn(p, o, b, k):
             return train_step(p, o, b, structure, optimizer, k)
@@ -332,11 +372,18 @@ def train_single(
         mard = jnp.mean(ae / jnp.maximum(jnp.abs(targets), 1e-8)) * 100.0
         return mae, mard
 
-    mode_label = "PC" if mode == "pc" else "BP"
+    mode_label = "iPC" if use_ipc else ("PC" if mode == "pc" else "BP")
     metric_label = "energy" if mode == "pc" else "mse"
+    infer_label = getattr(args, "infer_optimizer", "sgd")
+    energy_label = getattr(args, "energy", "gaussian")
+    extra_info = ""
+    if mode == "pc":
+        extra_info = f", energy={energy_label}, infer={infer_label}"
+        if use_ipc:
+            extra_info += ", iPC=on"
     print(
         f"\nTraining [{mode_label}] for {args.epochs} epochs "
-        f"(starting at {start_epoch}), lr={lr}, patience={args.patience}\n"
+        f"(starting at {start_epoch}), lr={lr}, patience={args.patience}{extra_info}\n"
     )
 
     t0 = time.time()
@@ -494,6 +541,10 @@ def train_single(
         "grad_clip": args.grad_clip,
         "weight_init_std": args.weight_init_std,
         "include_output_scaling": args.include_output_scaling,
+        "energy": energy_label,
+        "huber_delta": getattr(args, "huber_delta", None) if energy_label == "huber" else None,
+        "ipc": use_ipc,
+        "infer_optimizer": infer_label if mode == "pc" else None,
         "best_val_mae_mg_dl": best_mae,
         "g_min": g_min,
         "g_max": g_max,

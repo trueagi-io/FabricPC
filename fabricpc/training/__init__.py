@@ -5,6 +5,7 @@ Backprop trainers are provided for performance comparison to PC and as a referen
 
 from fabricpc.training.train import (
     train_step,
+    train_step_ipc,
     train_pcn,
     evaluate_pcn,
     evaluate_transformer,
@@ -37,6 +38,7 @@ evaluate_transformer_multi_gpu = evaluate_transformer
 __all__ = [
     # Predictive coding training
     "train_step",
+    "train_step_ipc",
     "train_pcn",
     "evaluate_pcn",
     "evaluate_transformer",

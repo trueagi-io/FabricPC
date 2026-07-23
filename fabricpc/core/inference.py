@@ -356,6 +356,111 @@ class InferenceSGDNormClip(InferenceBase):
         )
 
 
+class InferenceAdam(InferenceBase):
+    """
+    Adam inference with per-node gradient norm clipping.
+
+    Uses Adam optimizer (momentum + RMSProp) for latent state updates,
+    with bias correction and per-sample gradient norm clipping.
+
+    Args:
+        eta_infer: Inference rate (default: 0.1)
+        infer_steps: Number of inference iterations (default: 20)
+        max_norm: Maximum gradient norm per node (default: 1.0)
+        beta1: Exponential decay rate for first moment (default: 0.9)
+        beta2: Exponential decay rate for second moment (default: 0.999)
+        eps: Small constant for numerical stability (default: 1e-8)
+    """
+
+    def __init__(
+        self,
+        eta_infer=0.1,
+        infer_steps=20,
+        max_norm=1.0,
+        beta1=0.9,
+        beta2=0.999,
+        eps=1e-8,
+    ):
+        super().__init__(
+            eta_infer=eta_infer,
+            infer_steps=infer_steps,
+            max_norm=max_norm,
+            beta1=beta1,
+            beta2=beta2,
+            eps=eps,
+        )
+
+    @staticmethod
+    def compute_new_latent(node_name, node_state, config):
+        eta_infer = config["eta_infer"]
+        return node_state.z_latent - eta_infer * node_state.latent_grad
+
+    @staticmethod
+    def run_inference(params, initial_state, clamps, structure):
+        inference_obj = structure.config["inference"]
+        config = inference_obj.config
+        infer_steps = config["infer_steps"]
+        eta = config["eta_infer"]
+        beta1 = config["beta1"]
+        beta2 = config["beta2"]
+        max_norm = config["max_norm"]
+        eps = config["eps"]
+
+        unclamped = tuple(n for n in structure.nodes if n not in clamps)
+
+        m = {n: jnp.zeros_like(initial_state.nodes[n].z_latent) for n in unclamped}
+        v = {n: jnp.zeros_like(initial_state.nodes[n].z_latent) for n in unclamped}
+
+        def body_fn(t, carry):
+            state, m_st, v_st = carry
+
+            state = InferenceAdam.zero_grads(params, state, clamps, structure)
+            state = InferenceAdam.forward_value_and_grad(
+                params, state, clamps, structure
+            )
+
+            new_nodes = dict(state.nodes)
+            new_m = dict(m_st)
+            new_v = dict(v_st)
+
+            t_f = jnp.float32(t + 1)
+            bc1 = 1.0 - jnp.power(jnp.float32(beta1), t_f)
+            bc2 = 1.0 - jnp.power(jnp.float32(beta2), t_f)
+
+            for n in unclamped:
+                ns = state.nodes[n]
+                grad = ns.latent_grad
+
+                grad_norm = jnp.sqrt(
+                    jnp.sum(
+                        grad * grad,
+                        axis=tuple(range(1, grad.ndim)),
+                        keepdims=True,
+                    )
+                )
+                clip_factor = jnp.minimum(1.0, max_norm / (grad_norm + eps))
+                grad = grad * clip_factor
+
+                m_new = beta1 * m_st[n] + (1.0 - beta1) * grad
+                v_new = beta2 * v_st[n] + (1.0 - beta2) * grad * grad
+
+                m_hat = m_new / bc1
+                v_hat = v_new / bc2
+
+                new_z = ns.z_latent - eta * m_hat / (jnp.sqrt(v_hat) + eps)
+                new_nodes[n] = ns._replace(z_latent=new_z)
+                new_m[n] = m_new
+                new_v[n] = v_new
+
+            state = state._replace(nodes=new_nodes)
+            return state, new_m, new_v
+
+        final_state, _, _ = jax.lax.fori_loop(
+            0, infer_steps, body_fn, (initial_state, m, v)
+        )
+        return final_state
+
+
 # =============================================================================
 # Convenience Function
 # =============================================================================
