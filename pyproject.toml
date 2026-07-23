@@ -51,6 +51,7 @@ hopfield = "examples.storkey_hopfield_demo:main"
 hopfield-recall = "examples.storkey_hopfield_recall:main"
 pc-vs-bp = "examples.PC_backprop_compare:main"
 jpc-resnet = "examples.jpc_fc_resnet_compare:main"
+glucose-transformer = "examples.glucose_transformer:main"
 
 [project.optional-dependencies]
 dev = [
@@ -97,8 +98,11 @@ cuda13 = [
 ]
 # Everything except the hardware backend. Append a backend extra for GPU
 # (e.g. ".[all,cuda12]"), or omit it for the CPU build from the base jax dependency.
+glucose = [
+    "pandas>=2.0.0",
+]
 all = [
-    "fabricpc[dev,tfds,experiments,viz]",
+    "fabricpc[dev,tfds,experiments,viz,glucose]",
 ]
 
 [tool.setuptools]

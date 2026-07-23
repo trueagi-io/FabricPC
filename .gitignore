@@ -63,6 +63,7 @@ runs/
 # /models/ is root-anchored: the saved-model artifact folder, not the
 # fabricpc/models package.
 data/
+!examples/data/
 datasets/
 checkpoints/
 /models/
