@@ -35,6 +35,7 @@ dependencies = [
     "numpy>=1.24.0",
     "tqdm>=4.65.0",
     "optuna",
+    "typer>=0.27.0",
 ]
 
 [project.scripts]
@@ -52,6 +53,7 @@ hopfield-recall = "examples.storkey_hopfield_recall:main"
 pc-vs-bp = "examples.PC_backprop_compare:main"
 jpc-resnet = "examples.jpc_fc_resnet_compare:main"
 glucose-transformer = "examples.glucose_transformer:main"
+glucose-transformer-tune = "examples.glucose_transformer_tuning:main"
 
 [project.optional-dependencies]
 dev = [

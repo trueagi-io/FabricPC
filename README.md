@@ -81,6 +81,48 @@ The [`examples`](examples/) folder includes working demonstrations across image 
 - [`resnet18_cifar10_demo.py`](examples/resnet18_cifar10_demo.py) — ResNet-18 as a PC graph, with global average pooling
 - [`transformer_v2_demo.py`](examples/transformer_v2_demo.py) — character- or BPE-level language modeling with text generation
 - [`transformer_tuning.py`](examples/transformer_tuning.py) — two-phase hyperparameter search minimizing validation perplexity
+- [`glucose_transformer.py`](examples/glucose_transformer.py) — GluMind-Uni-style glucose forecasting with predictive coding, backpropagation, or a controlled comparison
+- [`glucose_transformer_tuning.py`](examples/glucose_transformer_tuning.py) — resumable, process-isolated Optuna tuning of glucose PC dynamics and architecture
+
+### Glucose forecasting
+
+Run the glucose transformer with automatic GPU selection:
+
+```bash
+uv run glucose-transformer --mode pc --epochs 30 \
+  --lr 0.001 --grad_clip 1.0 \
+  --out_dir runs/glucose_transformer
+```
+
+Use `--mode backprop` for the backpropagation baseline or `--mode compare` to
+run both methods on the same data and model geometry. Training validates after
+every epoch, saves resumable checkpoints and the best parameters, and stops
+early when validation MAE no longer improves. The run directory contains
+`config.json`, `history.csv`, checkpoints, and final metrics.
+
+### Glucose Optuna search
+
+The tuning command runs every trial in a fresh process so JAX compilation
+caches and CUDA allocations are released when the trial exits. A shared
+journal makes the study resumable, and the coordinator limits parallel workers
+against a total GPU-memory budget:
+
+```bash
+uv run glucose-transformer-tune run \
+  --run-dir runs/glucose_tuning \
+  --n-trials 32 \
+  --max-workers 8 \
+  --gpu-memory-budget-mib 8192
+```
+
+The study minimizes validation MAE while searching context length (64 or 128),
+transformer depth, attention heads, learning rate, gradient clipping, inference
+step size and count, inference norm clipping, and weight initialization scale.
+Successive-halving and explicit energy/validation-regression guards prune
+unstable trials. Live per-trial validation histories are written under
+`runs/glucose_tuning/trials/`, worker logs under
+`runs/glucose_tuning/workers/`, and the final result to `best_trial.json`.
+Re-running the same command and study directory resumes the journal.
 
 ## Documentation
 

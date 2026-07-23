@@ -11,8 +11,6 @@ Multi-scale self-attention operates at DS=1, DS=2, DS=4 with RoPE.
 """
 from __future__ import annotations
 
-from typing import Any
-
 import jax
 import jax.numpy as jnp
 
@@ -223,11 +221,14 @@ def create_glucose_transformer(
     inference: InferenceBase | None = None,
     weight_init_std: float = 0.02,
     use_rope: bool = True,
+    include_output_scaling: bool = False,
 ):
     """Build a glucose transformer graph for forecasting.
 
     Default geometry matches GluMind-Uni: seq_len=128 (10.67 h at 5-min),
     depth=3, embed_dim=32, num_heads=4, mlp_dim=128, horizon=12 (60 min).
+    Set ``include_output_scaling=True`` for Gaussian/MSE regression muPC
+    scaling; the default remains false for checkpoint compatibility.
     """
     assert seq_len % 4 == 0, f"seq_len must be divisible by 4, got {seq_len}"
 
@@ -297,6 +298,6 @@ def create_glucose_transformer(
         nodes=nodes, edges=edges,
         task_map=TaskMap(x=input_node, y=output),
         inference=inference,
-        scaling=MuPCConfig(include_output=False),
+        scaling=MuPCConfig(include_output=include_output_scaling),
         graph_state_initializer=FeedforwardStateInit(),
     )

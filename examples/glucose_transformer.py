@@ -70,7 +70,7 @@ def parse_args():
     p.add_argument("--seq_len", type=int, default=128)
     p.add_argument("--horizon", type=int, default=12)
     p.add_argument("--epochs", type=int, default=30)
-    p.add_argument("--lr", type=float, default=0.02)
+    p.add_argument("--lr", type=float, default=1e-3)
     p.add_argument("--lr_backprop", type=float, default=1e-3,
                    help="Learning rate for backprop mode (default: 1e-3)")
     p.add_argument("--warmup_steps", type=int, default=200)
@@ -80,6 +80,8 @@ def parse_args():
     p.add_argument("--infer_steps", type=int, default=12)
     p.add_argument("--max_infer_norm", type=float, default=1.0)
     p.add_argument("--weight_init_std", type=float, default=0.02)
+    p.add_argument("--grad_clip", type=float, default=1.0,
+                   help="Global gradient norm clipping (default: 1.0)")
     p.add_argument("--patience", type=int, default=4)
     p.add_argument("--out_dir", type=str, default="runs/glucose_transformer")
     p.add_argument("--log_every", type=int, default=1,
@@ -223,7 +225,10 @@ def train_single(
         decay_steps=total_steps,
         end_value=lr * 0.01,
     )
-    optimizer = optax.adam(schedule)
+    optimizer = optax.chain(
+        optax.clip_by_global_norm(args.grad_clip),
+        optax.adam(schedule),
+    )
 
     if args.resume and ckpt_path.exists():
         ckpt = _load_checkpoint(ckpt_path)
@@ -372,6 +377,13 @@ def train_single(
             f"avg_{metric_label}={avg_loss:.6f}  "
             f"elapsed={elapsed:.1f}s{best_tag}"
         )
+
+        if best_mae < float("inf") and val["mae_mg_dl"] > 2.0 * best_mae:
+            print(
+                f"  Divergence guard: val MAE {val['mae_mg_dl']:.1f} > "
+                f"2× best {best_mae:.1f} — stopping"
+            )
+            break
 
         if epochs_without_improvement >= args.patience and epoch < args.epochs:
             print(
