@@ -100,10 +100,10 @@ early when validation MAE no longer improves. The run directory contains
 `config.json`, `history.csv`, checkpoints, and final metrics.
 
 The PC defaults use the best architecture-aware Optuna configuration observed
-on the Livia validation split: context 64, depth 1, 2 attention heads,
-learning rate 0.00473477, 22 inference steps, inference step size 5.23013e-5,
-inference norm clipping 1.0, gradient clipping 2.0, and weight initialization
-standard deviation 0.0159965.
+on the Livia validation split: context 64, depth 2, 1 attention head,
+learning rate 0.00327532, 19 inference steps, inference step size 1.44358e-5,
+inference norm clipping 1.0, gradient clipping 0.5, and weight initialization
+standard deviation 0.0218619.
 
 ### Glucose Optuna search
 

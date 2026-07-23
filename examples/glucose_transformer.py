@@ -63,25 +63,25 @@ from examples.glucose_model import create_glucose_transformer
 def parse_args():
     p = argparse.ArgumentParser(description="Glucose Transformer (FabricPC)")
     p.add_argument("--mode", choices=["pc", "backprop", "compare"], default="pc")
-    p.add_argument("--depth", type=int, default=1)
+    p.add_argument("--depth", type=int, default=2)
     p.add_argument("--embed_dim", type=int, default=32)
-    p.add_argument("--num_heads", type=int, default=2)
+    p.add_argument("--num_heads", type=int, default=1)
     p.add_argument("--mlp_dim", type=int, default=128)
     p.add_argument("--seq_len", type=int, default=64)
     p.add_argument("--horizon", type=int, default=12)
     p.add_argument("--epochs", type=int, default=30)
-    p.add_argument("--lr", type=float, default=4.734770628859596e-3)
+    p.add_argument("--lr", type=float, default=3.2753170973521557e-3)
     p.add_argument("--lr_backprop", type=float, default=1e-3,
                    help="Learning rate for backprop mode (default: 1e-3)")
     p.add_argument("--warmup_steps", type=int, default=200)
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--eta_infer", type=float, default=5.230127685759978e-5)
-    p.add_argument("--infer_steps", type=int, default=22)
+    p.add_argument("--eta_infer", type=float, default=1.4435783212385837e-5)
+    p.add_argument("--infer_steps", type=int, default=19)
     p.add_argument("--max_infer_norm", type=float, default=1.0)
-    p.add_argument("--weight_init_std", type=float, default=0.01599646272210636)
-    p.add_argument("--grad_clip", type=float, default=2.0,
-                   help="Global gradient norm clipping (default: 2.0)")
+    p.add_argument("--weight_init_std", type=float, default=0.02186191083483616)
+    p.add_argument("--grad_clip", type=float, default=0.5,
+                   help="Global gradient norm clipping (default: 0.5)")
     p.add_argument("--patience", type=int, default=4)
     p.add_argument("--out_dir", type=str, default="runs/glucose_transformer")
     p.add_argument("--log_every", type=int, default=1,

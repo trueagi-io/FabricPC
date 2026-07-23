@@ -577,6 +577,7 @@ def _run_trial_attempt(
     history: list[dict[str, float | int]] = []
     recent_energies: list[float] = []
     best_mae = math.inf
+    significant_best_mae = math.inf
     checks_without_improvement = 0
     regression_checks = 0
     peak_gpu_memory_mib = 0
@@ -648,13 +649,15 @@ def _run_trial_attempt(
 
         validation_index = len(history)
         trial.report(mae, step=validation_index)
-        if mae + 0.25 < best_mae:
+        if mae < best_mae:
             best_mae = mae
-            checks_without_improvement = 0
             with (trial_dir / "best_params.pkl").open("wb") as file:
                 import pickle
 
                 pickle.dump(params, file)
+        if mae + 0.25 < significant_best_mae:
+            significant_best_mae = mae
+            checks_without_improvement = 0
         else:
             checks_without_improvement += 1
 
