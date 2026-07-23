@@ -73,7 +73,126 @@ uv run glucose-transformer --mode compare --epochs 30 \
     --out_dir runs/glucose_compare
 ```
 
-## Architecture summary
+### Results (stable, both early-stopped)
+
+**PC** (9 epochs, 12,420 steps, 1533s):
+
+| Epoch | Val MAE (mg/dL) | Val RMSE | MARD (%) |
+|-------|-----------------|----------|----------|
+| 1 | 23.68 | 33.21 | 16.88 |
+| 2 | 21.78 | 30.54 | 16.62 |
+| 4 | 20.15 | 29.31 | 15.85 |
+| 5 | **20.12** | 29.29 | 15.59 |
+| Test | 20.85 | 30.79 | 15.78 |
+
+**Backprop** (7 epochs, 9,660 steps, 268s):
+
+| Epoch | Val MAE (mg/dL) | Val RMSE | MARD (%) |
+|-------|-----------------|----------|----------|
+| 1 | 19.98 | 28.87 | 15.55 |
+| 2 | 19.57 | 28.62 | 15.42 |
+| 3 | **18.82** | 27.94 | 14.60 |
+| Test | 19.14 | 28.44 | 14.62 |
+
+**Winner: Backprop** (Δ = 1.71 mg/dL on test MAE)
+
+### Key observations
+
+- Both modes are **stable** with gradient clipping at norm 1.0
+- Backprop is **5.7x faster** (268s vs 1533s) due to PC's inference overhead
+- PC early-stopped at epoch 9, backprop at epoch 7 — both peaked early
+- PC may benefit from higher eta_infer or more infer_steps to close the gap
+- The 20 mg/dL test MAE (60-min forecast at 5-min cadence) is a reasonable
+  baseline for the GluMind-Uni architecture on Livia
+
+## Architecture-aware Optuna tuning report
+
+The resumable study `glucose_transformer_pc_architecture_v2` evaluated 40
+process-isolated PC trials. Each trial used up to 6,000 optimizer updates, with
+validation every 200 updates and successive-halving pruning. The search varied
+context length (64/128), depth (1–3), attention heads (1/2/4), learning rate,
+inference rate and steps, inference norm clipping, gradient clipping, and
+weight initialization scale.
+
+### Final winner
+
+Trial 34 was the best completed trial. Optuna recorded an objective of
+21.445 mg/dL, while the full validation history reached a lower observed
+minimum of **21.332 mg/dL at update 2,800**. The discrepancy came from using
+the 0.25 mg/dL early-stop significance threshold when updating the stored best;
+best-checkpoint tracking now records every strict improvement independently of
+that threshold.
+
+| Hyperparameter | Final default |
+|----------------|---------------|
+| Context (`seq_len`) | 64 |
+| Depth | 2 |
+| Attention heads | 1 |
+| Learning rate | 0.0032753171 |
+| Inference rate (`eta_infer`) | 1.4435783e-5 |
+| Inference steps | 19 |
+| Inference norm clip | 1.0 |
+| Gradient clip | 0.5 |
+| Weight initialization std | 0.02186191 |
+
+These values are now the defaults for `uv run glucose-transformer`.
+
+### Leading trials by observed validation MAE
+
+| Trial | State | Best MAE | Update | Context | Depth | Heads | LR | Grad clip |
+|------:|-------|---------:|-------:|--------:|------:|------:|---:|----------:|
+| 34 | Complete | **21.332** | 2,800 | 64 | 2 | 1 | 0.003275 | 0.5 |
+| 33 | Complete | 21.902 | 1,000 | 64 | 2 | 1 | 0.004854 | 0.5 |
+| 27 | Pruned | 22.267 | 1,200 | 64 | 2 | 1 | 0.003159 | 0.5 |
+| 29 | Pruned | 22.303 | 1,400 | 64 | 1 | 2 | 0.001874 | 1.0 |
+| 35 | Complete | 23.229 | 1,000 | 64 | 1 | 2 | 0.002694 | 1.0 |
+
+The first 32 trials were run before stable early stops were distinguished from
+true pruning, so some valid best checkpoints (including trials 27 and 29) have
+historical state `Pruned`. The study was resumed for eight trials after the
+fix, producing three selectable completed trials. The ranking above therefore
+uses the minimum MAE in every trial history, not only Optuna's stored objective.
+
+### Architecture results
+
+| Factor | Trials | Median best MAE | Best MAE |
+|--------|-------:|----------------:|---------:|
+| Context 64 | 25 | 30.079 | **21.332** |
+| Context 128 | 15 | 42.095 | 23.857 |
+| Depth 1 | 22 | 31.068 | 22.303 |
+| Depth 2 | 13 | 40.475 | **21.332** |
+| Depth 3 | 5 | 44.171 | 30.079 |
+| 1 head | 13 | 37.185 | **21.332** |
+| 2 heads | 21 | 40.582 | 22.303 |
+| 4 heads | 6 | 34.826 | 25.101 |
+| Gradient clip 0.5 | 12 | 34.826 | **21.332** |
+| Gradient clip 1.0 | 17 | 37.185 | 22.303 |
+| Gradient clip 2.0 | 11 | 40.475 | 23.265 |
+
+These groups are not controlled ablations because Optuna varied several
+parameters simultaneously and pruned weak trials early. They nevertheless give
+clear practical signals: context 64 dominated context 128; depth 3 was never
+competitive; and all three leading trials used depth 2, one head, and gradient
+clip 0.5.
+
+### Stability findings
+
+- Successive halving removed 31 trials early (24 at the first validation and
+  7 at the third), focusing compute on plausible configurations.
+- One trial was stopped by the energy-explosion guard. Trial 3 had reached
+  23.265 MAE before energy jumped to 0.738 at update 1,443.
+- Four of 40 histories had a post-best MAE spike above 10%; two exceeded 25%.
+  Several isolated spikes recovered at the next validation, so requiring two
+  consecutive regressions was more reliable than stopping after one spike.
+- MAE explosions were not explained by parameter norm alone. For example,
+  trial 0 jumped from 24.47 to 39.45 MAE while parameter norm changed only
+  from 58.3 to 59.8; its energy rose from 0.050 to 0.120.
+- The strongest region combined short context, a shallow one-head model,
+  low inference rates around 1–2e-5, and tighter gradient clipping. This
+  supports the hypothesis that excess architectural depth and aggressive PC
+  dynamics contributed to instability.
+
+## Original baseline architecture summary
 
 | Parameter | Value |
 |-----------|-------|
@@ -112,9 +231,7 @@ uv run glucose-transformer --mode compare --epochs 30 \
 
 ## Next steps
 
-1. Complete the architecture-aware Optuna study and compare instability rates
-   by context length (64/128), depth (1–3), and attention heads (1/2/4).
-2. Analyze validation MAE, energy, and parameter-norm trajectories jointly to
-   distinguish inference explosions from optimizer drift.
-3. Confirm the best PC configuration with a full epoch-based run and compare it
-   against backpropagation using the same model geometry.
+1. Confirm trial 34 with a full epoch-based PC run using the promoted defaults.
+2. Repeat the winning configuration across multiple seeds to quantify variance.
+3. Compare PC and backpropagation using the same context-64, depth-2,
+   one-head geometry and report validation and held-out test metrics.
