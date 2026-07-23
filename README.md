@@ -90,7 +90,6 @@ Run the glucose transformer with automatic GPU selection:
 
 ```bash
 uv run glucose-transformer --mode pc --epochs 30 \
-  --lr 0.001 --grad_clip 1.0 \
   --out_dir runs/glucose_transformer
 ```
 
@@ -99,6 +98,12 @@ run both methods on the same data and model geometry. Training validates after
 every epoch, saves resumable checkpoints and the best parameters, and stops
 early when validation MAE no longer improves. The run directory contains
 `config.json`, `history.csv`, checkpoints, and final metrics.
+
+The PC defaults use the best architecture-aware Optuna configuration observed
+on the Livia validation split: context 64, depth 1, 2 attention heads,
+learning rate 0.00473477, 22 inference steps, inference step size 5.23013e-5,
+inference norm clipping 1.0, gradient clipping 2.0, and weight initialization
+standard deviation 0.0159965.
 
 ### Glucose Optuna search
 
