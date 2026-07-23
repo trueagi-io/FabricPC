@@ -9,7 +9,9 @@ from __future__ import annotations
 import json
 import math
 import os
+import pickle
 import signal
+import shutil
 import subprocess
 import sys
 import time
@@ -29,10 +31,9 @@ app = typer.Typer(help="Tune FabricPC glucose predictive-coding dynamics.")
 
 DEFAULT_RUN_DIR = Path("runs/glucose_tuning_epochs_v1")
 DEFAULT_STUDY_NAME = "glucose_transformer_pc_epochs_v1"
-TERMINAL_STATES = {
+COUNTED_TRIAL_STATES = {
     optuna.trial.TrialState.COMPLETE,
     optuna.trial.TrialState.PRUNED,
-    optuna.trial.TrialState.FAIL,
 }
 
 
@@ -177,7 +178,40 @@ def admitted_worker_count(
 
 
 def _study_finished_trials(study: optuna.Study) -> int:
-    return sum(trial.state in TERMINAL_STATES for trial in study.get_trials())
+    return sum(
+        trial.state in COUNTED_TRIAL_STATES for trial in study.get_trials()
+    )
+
+
+def _worker_is_alive(pid: int) -> bool:
+    """Return whether a recorded worker process still exists."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _recover_stale_trials(study: optuna.Study, run_dir: Path) -> int:
+    """Fail dead RUNNING trials and enqueue resumable replacements."""
+    recovered = 0
+    for trial in study.get_trials(deepcopy=False):
+        if trial.state != optuna.trial.TrialState.RUNNING:
+            continue
+        worker_pid = trial.user_attrs.get("worker_pid")
+        if isinstance(worker_pid, int) and _worker_is_alive(worker_pid):
+            continue
+        trial_dir = run_dir / "trials" / f"trial_{trial.number:04d}"
+        checkpoint_path = trial_dir / "checkpoint.pkl"
+        study.tell(trial.number, state=optuna.trial.TrialState.FAIL)
+        user_attrs: dict[str, int] = {}
+        if checkpoint_path.is_file():
+            user_attrs["resume_from_trial"] = trial.number
+            recovered += 1
+        study.enqueue_trial(trial.params, user_attrs=user_attrs)
+    return recovered
 
 
 def _worker_command(
@@ -345,6 +379,11 @@ def run_coordinator(
         patience=patience,
         warmup_steps=warmup_steps,
     )
+    recovered_trials = _recover_stale_trials(study, run_dir)
+    if recovered_trials:
+        typer.echo(
+            f"Enqueued {recovered_trials} stale trials from epoch checkpoints"
+        )
     (run_dir / "coordinator_config.json").write_text(
         json.dumps(
             {
@@ -642,6 +681,39 @@ def _run_trial_attempt(
     peak_gpu_memory_mib = 0
     started_at = time.time()
     global_step = 0
+    start_epoch = 1
+    resume_from_trial = trial.user_attrs.get("resume_from_trial")
+    source_trial_dir = trial_dir
+    if isinstance(resume_from_trial, int):
+        source_trial_dir = (
+            settings.run_dir / "trials" / f"trial_{resume_from_trial:04d}"
+        )
+    source_checkpoint = source_trial_dir / "checkpoint.pkl"
+    if source_checkpoint.is_file():
+        with source_checkpoint.open("rb") as file:
+            checkpoint = pickle.load(file)
+        if checkpoint["dynamics"] != dynamics:
+            raise ValueError(
+                f"Checkpoint dynamics do not match trial {trial.number}"
+            )
+        params = checkpoint["params"]
+        opt_state = checkpoint["opt_state"]
+        rng = checkpoint["rng"]
+        history = checkpoint["history"]
+        recent_energies = checkpoint["recent_energies"]
+        best_mae = checkpoint["best_mae"]
+        epochs_without_improvement = checkpoint["epochs_without_improvement"]
+        regression_checks = checkpoint["regression_checks"]
+        peak_gpu_memory_mib = checkpoint["peak_gpu_memory_mib"]
+        global_step = checkpoint["global_step"]
+        start_epoch = checkpoint["epoch"] + 1
+        started_at = time.time() - checkpoint["elapsed_s"]
+        for row in history:
+            trial.report(float(row["mae_mg_dl"]), step=int(row["epoch"]))
+        source_best = source_trial_dir / "best_params.pkl"
+        if source_best.is_file() and source_best != trial_dir / "best_params.pkl":
+            shutil.copy2(source_best, trial_dir / "best_params.pkl")
+        trial.set_user_attr("resumed_from_epoch", checkpoint["epoch"])
 
     resolved = {
         **asdict(settings),
@@ -653,10 +725,14 @@ def _run_trial_attempt(
         "total_steps": total_steps,
         "decay_steps": decay_steps,
         "include_output_scaling": True,
+        "resume_from_trial": resume_from_trial,
+        "start_epoch": start_epoch,
     }
     (trial_dir / "config.json").write_text(json.dumps(resolved, indent=2))
+    if history:
+        (trial_dir / "history.json").write_text(json.dumps(history, indent=2))
 
-    for epoch in range(1, settings.max_epochs + 1):
+    for epoch in range(start_epoch, settings.max_epochs + 1):
         epoch_energy = 0.0
         epoch_batches = 0
         batch_train_maes: list[float] = []
@@ -743,8 +819,6 @@ def _run_trial_attempt(
             best_mae = mae
             epochs_without_improvement = 0
             with (trial_dir / "best_params.pkl").open("wb") as file:
-                import pickle
-
                 pickle.dump(params, file)
         else:
             epochs_without_improvement += 1
@@ -757,6 +831,27 @@ def _run_trial_attempt(
             regression_checks += 1
         else:
             regression_checks = 0
+
+        checkpoint = {
+            "epoch": epoch,
+            "global_step": global_step,
+            "params": params,
+            "opt_state": opt_state,
+            "rng": rng,
+            "best_mae": best_mae,
+            "epochs_without_improvement": epochs_without_improvement,
+            "regression_checks": regression_checks,
+            "history": history,
+            "recent_energies": recent_energies[-20:],
+            "peak_gpu_memory_mib": peak_gpu_memory_mib,
+            "elapsed_s": time.time() - started_at,
+            "dynamics": dynamics,
+        }
+        checkpoint_path = trial_dir / "checkpoint.pkl"
+        checkpoint_tmp = trial_dir / "checkpoint.pkl.tmp"
+        with checkpoint_tmp.open("wb") as file:
+            pickle.dump(checkpoint, file)
+        checkpoint_tmp.replace(checkpoint_path)
 
         if regression_checks >= 2:
             trial.set_user_attr(

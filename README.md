@@ -32,14 +32,18 @@ pip install -U -e ".[all,cuda12]"   # GPU, CUDA 12
 pip install -U -e ".[all]"          # CPU only
 ```
 
-See [`docs/user_guides/01_installation.md`](docs/user_guides/01_installation.md) for details. Then set up hooks and run an example:
+See [`docs/user_guides/01_installation.md`](docs/user_guides/01_installation.md)
+for details. For development from this checkout, synchronize the locked
+environment, set up hooks, and run an example with `uv`:
 
 ```bash
+uv sync
+
 # Install pre-commit hooks for code quality
-pre-commit install
+uv run pre-commit install
 
 # Run an example
-python examples/mnist_demo.py
+uv run python examples/mnist_demo.py
 ```
 
 ## Build a Model
@@ -83,6 +87,7 @@ The [`examples`](examples/) folder includes working demonstrations across image 
 - [`transformer_tuning.py`](examples/transformer_tuning.py) — two-phase hyperparameter search minimizing validation perplexity
 - [`glucose_transformer.py`](examples/glucose_transformer.py) — GluMind-Uni-style glucose forecasting with predictive coding, backpropagation, or a controlled comparison
 - [`glucose_transformer_tuning.py`](examples/glucose_transformer_tuning.py) — resumable, process-isolated Optuna tuning of glucose PC dynamics and architecture
+- [`glucose_hopfield.py`](examples/glucose_hopfield.py) — glucose forecasting experiments with baseline, projection, and embedded Storkey-Hopfield variants
 
 ### Glucose forecasting
 
@@ -115,10 +120,10 @@ against a total GPU-memory budget:
 
 ```bash
 uv run glucose-transformer-tune run \
-  --run-dir runs/glucose_tuning_epochs_v1 \
-  --study-name glucose_transformer_pc_epochs_v1 \
+  --run-dir runs/glucose_tuning_epochs_v2 \
+  --study-name glucose_transformer_pc_epochs_v2 \
   --n-trials 40 \
-  --max-workers 8 \
+  --max-workers 3 \
   --gpu-memory-budget-mib 8192 \
   --max-epochs 15 \
   --min-pruning-epochs 3 \
@@ -132,15 +137,21 @@ weight initialization scale. Every trial uses the same seed, trains in complete
 epochs, and reports validation MAE once per epoch. Hyperband begins pruning
 after epoch 3; explicit energy and consecutive-validation-regression guards
 remove unstable trials. Live histories are written under
-`runs/glucose_tuning_epochs_v1/trials/`, worker logs under
-`runs/glucose_tuning_epochs_v1/workers/`, and the final result to
+`runs/glucose_tuning_epochs_v2/trials/`, worker logs under
+`runs/glucose_tuning_epochs_v2/workers/`, and the final result to
 `best_trial.json`. Each epoch records validation MAE and online training MAE,
-including its batch-level standard deviation and minimum/maximum. Re-running
-the same command and study directory resumes the journal.
+including its batch-level standard deviation and minimum/maximum. An atomic
+epoch checkpoint stores model and optimizer state, RNG, early-stop counters,
+and history. Re-running the coordinator recovers dead running trials from
+their latest checkpoints while retaining the shared Optuna journal.
 
 ## Documentation
 
-User guides, API reference, and tutorials live in [`docs/user_guides`](docs/user_guides/00_index.md). Development plans and technical design documents are in [`docs/dev_plans`](docs/dev_plans/).
+User guides, API reference, and tutorials live in
+[`docs/user_guides`](docs/user_guides/00_index.md). Development plans and
+technical design documents are in [`docs/dev_plans`](docs/dev_plans/).
+Glucose forecasting experiment plans, training results, and architecture notes
+are grouped under [`docs/glucose_example`](docs/glucose_example/).
 
 ## Extending FabricPC
 

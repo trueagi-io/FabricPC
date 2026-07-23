@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import pickle
 
 import numpy as np
 import optuna
@@ -123,6 +124,13 @@ def test_real_data_trial_writes_unique_best_artifacts(tmp_path) -> None:
         for row in history
     )
     assert (trial_dir / "best_params.pkl").is_file()
+    checkpoint_path = trial_dir / "checkpoint.pkl"
+    assert checkpoint_path.is_file()
+    with checkpoint_path.open("rb") as file:
+        checkpoint = pickle.load(file)
+    assert checkpoint["epoch"] == 3
+    assert checkpoint["global_step"] == history[-1]["step"]
+    assert checkpoint["history"] == history
 
 
 def test_real_data_trial_honors_optuna_pruning(tmp_path) -> None:
