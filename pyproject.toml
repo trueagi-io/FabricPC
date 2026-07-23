@@ -54,6 +54,7 @@ pc-vs-bp = "examples.PC_backprop_compare:main"
 jpc-resnet = "examples.jpc_fc_resnet_compare:main"
 glucose-transformer = "examples.glucose_transformer:main"
 glucose-transformer-tune = "examples.glucose_transformer_tuning:main"
+glucose-hopfield = "examples.glucose_hopfield:app"
 
 [project.optional-dependencies]
 dev = [

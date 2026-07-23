@@ -70,10 +70,28 @@ def parse_args():
     p.add_argument("--seq_len", type=int, default=64)
     p.add_argument("--horizon", type=int, default=12)
     p.add_argument("--epochs", type=int, default=30)
+    p.add_argument(
+        "--max_updates",
+        type=int,
+        default=None,
+        help="Optional optimizer-update budget for pilot runs",
+    )
     p.add_argument("--lr", type=float, default=3.2753170973521557e-3)
     p.add_argument("--lr_backprop", type=float, default=1e-3,
                    help="Learning rate for backprop mode (default: 1e-3)")
     p.add_argument("--warmup_steps", type=int, default=200)
+    p.add_argument(
+        "--decay_steps",
+        type=int,
+        default=None,
+        help="Advanced LR decay override in optimizer updates",
+    )
+    p.add_argument(
+        "--decay_epochs",
+        type=int,
+        default=None,
+        help="LR decay horizon in epochs (default: full epoch budget)",
+    )
     p.add_argument("--batch_size", type=int, default=64)
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--eta_infer", type=float, default=1.4435783212385837e-5)
@@ -82,6 +100,12 @@ def parse_args():
     p.add_argument("--weight_init_std", type=float, default=0.02186191083483616)
     p.add_argument("--grad_clip", type=float, default=0.5,
                    help="Global gradient norm clipping (default: 0.5)")
+    p.add_argument(
+        "--include_output_scaling",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply muPC scaling to the regression output (default: enabled)",
+    )
     p.add_argument("--patience", type=int, default=4)
     p.add_argument("--out_dir", type=str, default="runs/glucose_transformer")
     p.add_argument("--log_every", type=int, default=1,
@@ -166,7 +190,13 @@ def _append_history_row(csv_path, row, write_header):
 
 
 def train_single(
-    mode, data, args, out_dir, lr_override=None,
+    mode,
+    data,
+    args,
+    out_dir,
+    lr_override=None,
+    structure_builder=create_glucose_transformer,
+    evaluate_fn=evaluate,
 ):
     """Epoch-based training loop for one mode (pc or backprop).
 
@@ -193,11 +223,12 @@ def train_single(
         infer_steps=args.infer_steps,
         max_norm=args.max_infer_norm,
     )
-    structure = create_glucose_transformer(
+    structure = structure_builder(
         depth=args.depth, embed_dim=args.embed_dim,
         num_heads=args.num_heads, mlp_dim=args.mlp_dim,
         seq_len=args.seq_len, horizon=args.horizon,
         inference=inference, weight_init_std=args.weight_init_std,
+        include_output_scaling=args.include_output_scaling,
     )
 
     n_params = sum(
@@ -206,7 +237,15 @@ def train_single(
         )
     )
     batches_per_epoch = len(train_loader)
-    total_steps = args.epochs * batches_per_epoch
+    epoch_budget_steps = args.epochs * batches_per_epoch
+    max_updates = getattr(args, "max_updates", None)
+    total_steps = (
+        min(epoch_budget_steps, max_updates)
+        if max_updates is not None
+        else epoch_budget_steps
+    )
+    if args.decay_steps is not None and args.decay_epochs is not None:
+        raise ValueError("Specify only one of decay_steps and decay_epochs")
 
     # Try to resume from checkpoint
     ckpt_path = out_dir / "checkpoint.pkl"
@@ -218,11 +257,21 @@ def train_single(
     resumed = False
 
     warmup = min(args.warmup_steps, total_steps // 2)
+    if args.decay_steps is not None:
+        decay_steps = args.decay_steps
+    elif args.decay_epochs is not None:
+        decay_steps = args.decay_epochs * batches_per_epoch
+    else:
+        decay_steps = total_steps
+    if decay_steps <= warmup:
+        raise ValueError(
+            f"decay_steps ({decay_steps}) must exceed warmup_steps ({warmup})"
+        )
     schedule = optax.warmup_cosine_decay_schedule(
         init_value=0.0,
         peak_value=lr,
         warmup_steps=warmup,
-        decay_steps=total_steps,
+        decay_steps=decay_steps,
         end_value=lr * 0.01,
     )
     optimizer = optax.chain(
@@ -254,8 +303,8 @@ def train_single(
         f"{n_params:,} parameters"
     )
     print(
-        f"  {batches_per_epoch} batches/epoch × {args.epochs} epochs "
-        f"= {total_steps} total steps"
+        f"  {batches_per_epoch} batches/epoch × {args.epochs} epochs; "
+        f"budget={total_steps} updates"
     )
 
     if mode == "pc":
@@ -296,11 +345,15 @@ def train_single(
     write_header = not resumed or not (out_dir / "history.csv").exists()
 
     for epoch in range(start_epoch, args.epochs + 1):
+        if global_step >= total_steps:
+            break
         epoch_loss = 0.0
         epoch_batches = 0
         final_epoch = epoch
 
         for batch_np in train_loader:
+            if global_step >= total_steps:
+                break
             batch = {k: jnp.array(v) for k, v in batch_np.items()}
             rng, step_key = jax.random.split(rng)
             params, opt_state, scalar, _ = step_fn(
@@ -340,7 +393,7 @@ def train_single(
 
         # Validate at end of each epoch
         rng, eval_key = jax.random.split(rng)
-        val = evaluate(params, structure, val_loader, eval_key, g_min, g_max)
+        val = evaluate_fn(params, structure, val_loader, eval_key, g_min, g_max)
         row = {
             "epoch": epoch,
             "step": global_step,
@@ -385,6 +438,10 @@ def train_single(
             )
             break
 
+        if global_step >= total_steps:
+            print(f"  Update budget reached: {global_step}/{total_steps}")
+            break
+
         if epochs_without_improvement >= args.patience and epoch < args.epochs:
             print(
                 f"  Early stop: {args.patience} epochs without improvement"
@@ -400,7 +457,7 @@ def train_single(
         with best_path.open("rb") as f:
             best_params = pickle.load(f)
         rng, test_key = jax.random.split(rng)
-        test_metrics = evaluate(
+        test_metrics = evaluate_fn(
             best_params, structure, test_loader, test_key, g_min, g_max
         )
         print(
@@ -425,12 +482,18 @@ def train_single(
         "epochs": args.epochs,
         "final_epoch": final_epoch,
         "total_steps": global_step,
+        "planned_updates": total_steps,
+        "decay_steps": decay_steps,
+        "decay_epochs": args.decay_epochs,
         "lr": lr,
         "batch_size": args.batch_size,
         "seed": args.seed,
         "eta_infer": args.eta_infer,
         "infer_steps": args.infer_steps,
+        "max_infer_norm": args.max_infer_norm,
+        "grad_clip": args.grad_clip,
         "weight_init_std": args.weight_init_std,
+        "include_output_scaling": args.include_output_scaling,
         "best_val_mae_mg_dl": best_mae,
         "g_min": g_min,
         "g_max": g_max,

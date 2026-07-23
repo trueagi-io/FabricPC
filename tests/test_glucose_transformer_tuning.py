@@ -24,6 +24,7 @@ FIXED_DYNAMICS = {
     "infer_steps": 8,
     "max_infer_norm": 0.5,
     "grad_clip": 1.0,
+    "lr_decay_epochs": 5,
     "weight_init_std": 0.02,
 }
 
@@ -81,9 +82,12 @@ def test_real_data_trial_writes_unique_best_artifacts(tmp_path) -> None:
         num_heads=2,
         mlp_dim=16,
         batch_size=256,
-        pilot_updates=3,
-        full_updates=3,
-        validation_interval=1,
+        max_epochs=3,
+        min_pruning_epochs=1,
+        patience=3,
+        warmup_steps=1,
+        max_batches_per_epoch=1,
+        max_validation_batches=1,
     )
     study = optuna.create_study(
         direction="minimize",
@@ -108,7 +112,16 @@ def test_real_data_trial_writes_unique_best_artifacts(tmp_path) -> None:
     assert completed.state == optuna.trial.TrialState.COMPLETE
     assert completed.value is not None and np.isfinite(completed.value)
     assert config["include_output_scaling"] is True
-    assert [row["update"] for row in history] == [1, 2, 3]
+    assert [row["epoch"] for row in history] == [1, 2, 3]
+    assert all(row["step"] > 0 for row in history)
+    assert all(np.isfinite(row["train_mae_mg_dl"]) for row in history)
+    assert all(np.isfinite(row["train_mae_std_mg_dl"]) for row in history)
+    assert all(
+        row["train_mae_min_mg_dl"]
+        <= row["train_mae_mg_dl"]
+        <= row["train_mae_max_mg_dl"]
+        for row in history
+    )
     assert (trial_dir / "best_params.pkl").is_file()
 
 
@@ -122,9 +135,12 @@ def test_real_data_trial_honors_optuna_pruning(tmp_path) -> None:
         num_heads=2,
         mlp_dim=16,
         batch_size=256,
-        pilot_updates=3,
-        full_updates=3,
-        validation_interval=1,
+        max_epochs=3,
+        min_pruning_epochs=1,
+        patience=3,
+        warmup_steps=1,
+        max_batches_per_epoch=1,
+        max_validation_batches=1,
     )
     study = optuna.create_study(
         direction="minimize",

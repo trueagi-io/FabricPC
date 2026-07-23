@@ -27,8 +27,8 @@ os.environ.setdefault("XLA_PYTHON_CLIENT_ALLOCATOR", "platform")
 
 app = typer.Typer(help="Tune FabricPC glucose predictive-coding dynamics.")
 
-DEFAULT_RUN_DIR = Path("runs/glucose_tuning")
-DEFAULT_STUDY_NAME = "glucose_transformer_pc"
+DEFAULT_RUN_DIR = Path("runs/glucose_tuning_epochs_v1")
+DEFAULT_STUDY_NAME = "glucose_transformer_pc_epochs_v1"
 TERMINAL_STATES = {
     optuna.trial.TrialState.COMPLETE,
     optuna.trial.TrialState.PRUNED,
@@ -38,7 +38,7 @@ TERMINAL_STATES = {
 
 @dataclass(frozen=True)
 class TrialSettings:
-    """Fixed geometry and resource budget shared by all trials."""
+    """Fixed geometry and epoch budget shared by all trials."""
 
     run_dir: Path
     seq_len: int = 128
@@ -48,10 +48,13 @@ class TrialSettings:
     num_heads: int = 4
     mlp_dim: int = 128
     batch_size: int = 64
-    pilot_updates: int = 600
-    full_updates: int = 6000
-    validation_interval: int = 200
+    max_epochs: int = 15
+    min_pruning_epochs: int = 3
+    patience: int = 4
+    warmup_steps: int = 200
     seed: int = 42
+    max_batches_per_epoch: int | None = None
+    max_validation_batches: int | None = None
 
 
 @dataclass
@@ -70,7 +73,12 @@ def create_storage(journal_path: Path) -> JournalStorage:
     return JournalStorage(JournalFileBackend(str(journal_path)))
 
 
-def create_study(journal_path: Path, study_name: str) -> optuna.Study:
+def create_study(
+    journal_path: Path,
+    study_name: str,
+    max_epochs: int = 15,
+    min_pruning_epochs: int = 3,
+) -> optuna.Study:
     """Create or load the shared PC dynamics study."""
     return optuna.create_study(
         study_name=study_name,
@@ -84,10 +92,10 @@ def create_study(journal_path: Path, study_name: str) -> optuna.Study:
             group=True,
             constant_liar=True,
         ),
-        pruner=optuna.pruners.SuccessiveHalvingPruner(
-            min_resource=1,
+        pruner=optuna.pruners.HyperbandPruner(
+            min_resource=min_pruning_epochs,
+            max_resource=max_epochs,
             reduction_factor=3,
-            min_early_stopping_rate=0,
         ),
     )
 
@@ -105,6 +113,9 @@ def suggest_pc_dynamics(trial: optuna.Trial) -> dict[str, float | int]:
             "max_infer_norm", [0.5, 1.0, 5.0]
         ),
         "grad_clip": trial.suggest_categorical("grad_clip", [0.5, 1.0, 2.0]),
+        "lr_decay_epochs": trial.suggest_categorical(
+            "lr_decay_epochs", [5, 10, 15]
+        ),
         "weight_init_std": trial.suggest_float(
             "weight_init_std", 0.01, 0.03, log=True
         ),
@@ -201,12 +212,14 @@ def _worker_command(
         str(settings.mlp_dim),
         "--batch-size",
         str(settings.batch_size),
-        "--pilot-updates",
-        str(settings.pilot_updates),
-        "--full-updates",
-        str(settings.full_updates),
-        "--validation-interval",
-        str(settings.validation_interval),
+        "--max-epochs",
+        str(settings.max_epochs),
+        "--min-pruning-epochs",
+        str(settings.min_pruning_epochs),
+        "--patience",
+        str(settings.patience),
+        "--warmup-steps",
+        str(settings.warmup_steps),
         "--seed",
         str(settings.seed),
         "--trial-timeout-seconds",
@@ -303,31 +316,34 @@ def run_coordinator(
         900, min=1, help="Admission reservation per worker."
     ),
     batch_size: int = typer.Option(64, min=1),
-    pilot_updates: int = typer.Option(600, min=3),
-    full_updates: int = typer.Option(6000, min=3),
-    validation_interval: int = typer.Option(200, min=1),
+    max_epochs: int = typer.Option(15, min=1),
+    min_pruning_epochs: int = typer.Option(3, min=1),
+    patience: int = typer.Option(4, min=1),
+    warmup_steps: int = typer.Option(200, min=0),
     poll_seconds: float = typer.Option(2.0, min=0.1),
     trial_timeout_seconds: int = typer.Option(
         7200, min=60, help="Hard wall-clock bound for one trial worker."
     ),
 ) -> None:
     """Coordinate process-isolated PC trials under a CUDA memory budget."""
-    if pilot_updates > full_updates:
-        raise typer.BadParameter("pilot-updates cannot exceed full-updates")
-    if pilot_updates < 3 * validation_interval:
-        raise typer.BadParameter(
-            "pilot-updates must include at least three validation intervals"
-        )
+    if min_pruning_epochs > max_epochs:
+        raise typer.BadParameter("min-pruning-epochs cannot exceed max-epochs")
 
     run_dir.mkdir(parents=True, exist_ok=True)
     journal_path = run_dir / "optuna_journal.log"
-    study = create_study(journal_path, study_name)
+    study = create_study(
+        journal_path,
+        study_name,
+        max_epochs=max_epochs,
+        min_pruning_epochs=min_pruning_epochs,
+    )
     settings = TrialSettings(
         run_dir=run_dir,
         batch_size=batch_size,
-        pilot_updates=pilot_updates,
-        full_updates=full_updates,
-        validation_interval=validation_interval,
+        max_epochs=max_epochs,
+        min_pruning_epochs=min_pruning_epochs,
+        patience=patience,
+        warmup_steps=warmup_steps,
     )
     (run_dir / "coordinator_config.json").write_text(
         json.dumps(
@@ -466,18 +482,21 @@ def _evaluate_validation(
     loader: Any,
     eval_step: Any,
     rng_key: Any,
+    max_batches: int | None = None,
 ) -> dict[str, float]:
     import jax.numpy as jnp
 
     absolute_error = 0.0
     relative_error = 0.0
     values = 0
-    for batch_np in loader:
+    for batch_index, batch_np in enumerate(loader, start=1):
         batch = {key: jnp.asarray(value) for key, value in batch_np.items()}
         batch_ae, batch_are = eval_step(params, batch, rng_key)
         absolute_error += float(batch_ae)
         relative_error += float(batch_are)
         values += int(batch["y"].size)
+        if max_batches is not None and batch_index >= max_batches:
+            break
     return {
         "mae_mg_dl": absolute_error / max(values, 1),
         "mard_percent": 100.0 * relative_error / max(values, 1),
@@ -514,6 +533,7 @@ def _run_trial_attempt(
     from fabricpc.core.inference import InferenceSGDNormClip
     from fabricpc.graph_initialization import initialize_params
     from fabricpc.training.train import train_step
+    from fabricpc.training.train_backprop import compute_forward_pass
 
     trial_dir = settings.run_dir / "trials" / f"trial_{trial.number:04d}"
     trial_dir.mkdir(parents=True, exist_ok=True)
@@ -541,16 +561,30 @@ def _run_trial_attempt(
         include_output_scaling=True,
     )
 
-    seed = settings.seed + trial.number
+    # Search trials deliberately share data order and initialization so measured
+    # differences come from hyperparameters rather than random seeds.
+    seed = settings.seed
     rng = jax.random.PRNGKey(seed)
     rng, init_key = jax.random.split(rng)
     params = initialize_params(structure, init_key)
-    warmup_updates = min(200, settings.full_updates // 2)
+    batches_per_epoch = len(data["train_loader"])
+    if settings.max_batches_per_epoch is not None:
+        batches_per_epoch = min(
+            batches_per_epoch,
+            settings.max_batches_per_epoch,
+        )
+    total_steps = settings.max_epochs * batches_per_epoch
+    decay_epochs = min(
+        int(dynamics["lr_decay_epochs"]),
+        settings.max_epochs,
+    )
+    decay_steps = decay_epochs * batches_per_epoch
+    warmup_updates = min(settings.warmup_steps, decay_steps // 2)
     schedule = optax.warmup_cosine_decay_schedule(
         init_value=0.0,
         peak_value=float(dynamics["lr"]),
         warmup_steps=warmup_updates,
-        decay_steps=settings.full_updates,
+        decay_steps=decay_steps,
         end_value=float(dynamics["lr"]) * 0.01,
     )
     optimizer = optax.chain(
@@ -558,30 +592,56 @@ def _run_trial_attempt(
         optax.adam(schedule),
     )
     opt_state = optimizer.init(params)
+    glucose_range = max(float(data["g_max"]) - float(data["g_min"]), 1e-8)
+    glucose_min = float(data["g_min"])
 
     @jax.jit
     def step_fn(
         step_params: Any,
         step_opt_state: Any,
         batch: dict[str, Any],
-        key: Any,
-    ) -> tuple[Any, Any, Any, Any]:
-        return train_step(
-            step_params, step_opt_state, batch, structure, optimizer, key
+        train_key: Any,
+        metric_key: Any,
+    ) -> tuple[Any, Any, Any, Any, Any]:
+        updated_params, updated_opt_state, energy, final_state = train_step(
+            step_params,
+            step_opt_state,
+            batch,
+            structure,
+            optimizer,
+            train_key,
+        )
+        forward_state = compute_forward_pass(
+            updated_params,
+            structure,
+            batch,
+            metric_key,
+        )
+        predictions = (
+            forward_state.nodes[structure.task_map["y"]].z_mu * glucose_range
+            + glucose_min
+        )
+        targets = batch["y"] * glucose_range + glucose_min
+        train_mae = jnp.mean(jnp.abs(predictions - targets))
+        return (
+            updated_params,
+            updated_opt_state,
+            energy,
+            final_state,
+            train_mae,
         )
 
     eval_step = _make_eval_step(
         structure, float(data["g_min"]), float(data["g_max"])
     )
-    loader = data["train_loader"].cycle()
     history: list[dict[str, float | int]] = []
     recent_energies: list[float] = []
     best_mae = math.inf
-    significant_best_mae = math.inf
-    checks_without_improvement = 0
+    epochs_without_improvement = 0
     regression_checks = 0
     peak_gpu_memory_mib = 0
     started_at = time.time()
+    global_step = 0
 
     resolved = {
         **asdict(settings),
@@ -589,42 +649,66 @@ def _run_trial_attempt(
         **dynamics,
         "batch_size": batch_size,
         "seed": seed,
+        "batches_per_epoch": batches_per_epoch,
+        "total_steps": total_steps,
+        "decay_steps": decay_steps,
         "include_output_scaling": True,
     }
     (trial_dir / "config.json").write_text(json.dumps(resolved, indent=2))
 
-    for update in range(1, settings.full_updates + 1):
-        batch_np = next(loader)
-        batch = {key: jnp.asarray(value) for key, value in batch_np.items()}
-        rng, step_key = jax.random.split(rng)
-        params, opt_state, energy, _ = step_fn(
-            params, opt_state, batch, step_key
-        )
-        energy_value = float(energy)
-        if not np.isfinite(energy_value):
-            trial.set_user_attr("prune_reason", f"non-finite energy at {update}")
-            raise optuna.TrialPruned()
-        if len(recent_energies) >= 20:
-            median_energy = float(np.median(recent_energies[-20:]))
-            if median_energy > 0 and energy_value > 10.0 * median_energy:
+    for epoch in range(1, settings.max_epochs + 1):
+        epoch_energy = 0.0
+        epoch_batches = 0
+        batch_train_maes: list[float] = []
+        for batch_index, batch_np in enumerate(data["train_loader"], start=1):
+            batch = {key: jnp.asarray(value) for key, value in batch_np.items()}
+            rng, step_key, metric_key = jax.random.split(rng, 3)
+            params, opt_state, energy, _, train_mae = step_fn(
+                params,
+                opt_state,
+                batch,
+                step_key,
+                metric_key,
+            )
+            energy_value = float(energy)
+            batch_train_maes.append(float(train_mae))
+            global_step += 1
+            epoch_batches += 1
+            epoch_energy += energy_value
+            if not np.isfinite(energy_value):
                 trial.set_user_attr(
                     "prune_reason",
-                    f"energy explosion at {update}: {energy_value:.6g}",
+                    f"non-finite energy at epoch {epoch}, step {global_step}",
                 )
                 raise optuna.TrialPruned()
-        recent_energies.append(energy_value)
+            if len(recent_energies) >= 20:
+                median_energy = float(np.median(recent_energies[-20:]))
+                if median_energy > 0 and energy_value > 10.0 * median_energy:
+                    trial.set_user_attr(
+                        "prune_reason",
+                        f"energy explosion at epoch {epoch}, step {global_step}: "
+                        f"{energy_value:.6g}",
+                    )
+                    raise optuna.TrialPruned()
+            recent_energies.append(energy_value)
+            if (
+                settings.max_batches_per_epoch is not None
+                and batch_index >= settings.max_batches_per_epoch
+            ):
+                break
 
-        should_validate = (
-            update % settings.validation_interval == 0
-            or update == settings.pilot_updates
-            or update == settings.full_updates
-        )
-        if not should_validate:
-            continue
-
+        avg_energy = epoch_energy / max(epoch_batches, 1)
+        train_mae_mean = float(np.mean(batch_train_maes))
+        train_mae_std = float(np.std(batch_train_maes))
+        train_mae_min = float(np.min(batch_train_maes))
+        train_mae_max = float(np.max(batch_train_maes))
         rng, eval_key = jax.random.split(rng)
         metrics = _evaluate_validation(
-            params, data["val_loader"], eval_step, eval_key
+            params,
+            data["val_loader"],
+            eval_step,
+            eval_key,
+            settings.max_validation_batches,
         )
         mae = metrics["mae_mg_dl"]
         parameter_norm = float(optax.tree.norm(params))
@@ -632,8 +716,13 @@ def _run_trial_attempt(
         trial.set_user_attr("peak_gpu_memory_mib", peak_gpu_memory_mib)
         history.append(
             {
-                "update": update,
-                "energy": energy_value,
+                "epoch": epoch,
+                "step": global_step,
+                "avg_energy": avg_energy,
+                "train_mae_mg_dl": train_mae_mean,
+                "train_mae_std_mg_dl": train_mae_std,
+                "train_mae_min_mg_dl": train_mae_min,
+                "train_mae_max_mg_dl": train_mae_max,
                 "parameter_norm": parameter_norm,
                 **metrics,
                 "elapsed_s": time.time() - started_at,
@@ -642,24 +731,23 @@ def _run_trial_attempt(
         )
         (trial_dir / "history.json").write_text(json.dumps(history, indent=2))
         print(
-            f"trial={trial.number} update={update} val_mae={mae:.3f} "
-            f"energy={energy_value:.6g} param_norm={parameter_norm:.3f}",
+            f"trial={trial.number} epoch={epoch}/{settings.max_epochs} "
+            f"step={global_step} val_mae={mae:.3f} "
+            f"train_mae={train_mae_mean:.3f}±{train_mae_std:.3f} "
+            f"avg_energy={avg_energy:.6g} param_norm={parameter_norm:.3f}",
             flush=True,
         )
 
-        validation_index = len(history)
-        trial.report(mae, step=validation_index)
+        trial.report(mae, step=epoch)
         if mae < best_mae:
             best_mae = mae
+            epochs_without_improvement = 0
             with (trial_dir / "best_params.pkl").open("wb") as file:
                 import pickle
 
                 pickle.dump(params, file)
-        if mae + 0.25 < significant_best_mae:
-            significant_best_mae = mae
-            checks_without_improvement = 0
         else:
-            checks_without_improvement += 1
+            epochs_without_improvement += 1
 
         previous_best = min(
             (float(row["mae_mg_dl"]) for row in history[:-1]),
@@ -675,19 +763,20 @@ def _run_trial_attempt(
                 "stop_reason", "validation MAE regressed over 10% twice"
             )
             break
-        if validation_index >= 4 and checks_without_improvement >= 4:
+        if epochs_without_improvement >= settings.patience:
             trial.set_user_attr(
-                "stop_reason", "no 0.25 mg/dL improvement over four checks"
+                "stop_reason",
+                f"no validation MAE improvement for {settings.patience} epochs",
             )
             break
-        if trial.should_prune():
+        if epoch >= settings.min_pruning_epochs and trial.should_prune():
             trial.set_user_attr(
                 "prune_reason",
-                f"{type(trial.study.pruner).__name__} at check {validation_index}",
+                f"{type(trial.study.pruner).__name__} at epoch {epoch}",
             )
             raise optuna.TrialPruned()
 
-        if update == settings.pilot_updates:
+        if epoch == settings.min_pruning_epochs:
             trial.set_user_attr("pilot_val_mae_mg_dl", mae)
             trial.set_user_attr("pilot_passed", True)
 
@@ -735,9 +824,10 @@ def run_worker(
     num_heads: int = typer.Option(4),
     mlp_dim: int = typer.Option(128),
     batch_size: int = typer.Option(64),
-    pilot_updates: int = typer.Option(600),
-    full_updates: int = typer.Option(6000),
-    validation_interval: int = typer.Option(200),
+    max_epochs: int = typer.Option(15),
+    min_pruning_epochs: int = typer.Option(3),
+    patience: int = typer.Option(4),
+    warmup_steps: int = typer.Option(200),
     seed: int = typer.Option(42),
     trial_timeout_seconds: int = typer.Option(7200),
 ) -> None:
@@ -751,12 +841,18 @@ def run_worker(
         num_heads=num_heads,
         mlp_dim=mlp_dim,
         batch_size=batch_size,
-        pilot_updates=pilot_updates,
-        full_updates=full_updates,
-        validation_interval=validation_interval,
+        max_epochs=max_epochs,
+        min_pruning_epochs=min_pruning_epochs,
+        patience=patience,
+        warmup_steps=warmup_steps,
         seed=seed,
     )
-    study = create_study(journal, study_name)
+    study = create_study(
+        journal,
+        study_name,
+        max_epochs=max_epochs,
+        min_pruning_epochs=min_pruning_epochs,
+    )
     # Parallel workers otherwise construct identically seeded TPE samplers and
     # propose duplicate startup trials.
     study.sampler.reseed_rng()

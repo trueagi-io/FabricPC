@@ -99,8 +99,9 @@ every epoch, saves resumable checkpoints and the best parameters, and stops
 early when validation MAE no longer improves. The run directory contains
 `config.json`, `history.csv`, checkpoints, and final metrics.
 
-The PC defaults use the best architecture-aware Optuna configuration observed
-on the Livia validation split: context 64, depth 2, 1 attention head,
+The provisional PC defaults use the best configuration from the original
+short, update-budget Optuna study on the Livia validation split: context 64,
+depth 2, 1 attention head,
 learning rate 0.00327532, 19 inference steps, inference step size 1.44358e-5,
 inference norm clipping 1.0, gradient clipping 0.5, and weight initialization
 standard deviation 0.0218619.
@@ -114,20 +115,28 @@ against a total GPU-memory budget:
 
 ```bash
 uv run glucose-transformer-tune run \
-  --run-dir runs/glucose_tuning \
-  --n-trials 32 \
+  --run-dir runs/glucose_tuning_epochs_v1 \
+  --study-name glucose_transformer_pc_epochs_v1 \
+  --n-trials 40 \
   --max-workers 8 \
-  --gpu-memory-budget-mib 8192
+  --gpu-memory-budget-mib 8192 \
+  --max-epochs 15 \
+  --min-pruning-epochs 3 \
+  --patience 4
 ```
 
 The study minimizes validation MAE while searching context length (64 or 128),
 transformer depth, attention heads, learning rate, gradient clipping, inference
-step size and count, inference norm clipping, and weight initialization scale.
-Successive-halving and explicit energy/validation-regression guards prune
-unstable trials. Live per-trial validation histories are written under
-`runs/glucose_tuning/trials/`, worker logs under
-`runs/glucose_tuning/workers/`, and the final result to `best_trial.json`.
-Re-running the same command and study directory resumes the journal.
+step size and count, inference norm clipping, LR-decay horizon in epochs, and
+weight initialization scale. Every trial uses the same seed, trains in complete
+epochs, and reports validation MAE once per epoch. Hyperband begins pruning
+after epoch 3; explicit energy and consecutive-validation-regression guards
+remove unstable trials. Live histories are written under
+`runs/glucose_tuning_epochs_v1/trials/`, worker logs under
+`runs/glucose_tuning_epochs_v1/workers/`, and the final result to
+`best_trial.json`. Each epoch records validation MAE and online training MAE,
+including its batch-level standard deviation and minimum/maximum. Re-running
+the same command and study directory resumes the journal.
 
 ## Documentation
 
