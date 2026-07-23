@@ -669,14 +669,14 @@ def _run_trial_attempt(
 
         if regression_checks >= 2:
             trial.set_user_attr(
-                "prune_reason", "validation MAE regressed over 10% twice"
+                "stop_reason", "validation MAE regressed over 10% twice"
             )
-            raise optuna.TrialPruned()
+            break
         if validation_index >= 4 and checks_without_improvement >= 4:
             trial.set_user_attr(
-                "prune_reason", "no 0.25 mg/dL improvement over four checks"
+                "stop_reason", "no 0.25 mg/dL improvement over four checks"
             )
-            raise optuna.TrialPruned()
+            break
         if trial.should_prune():
             trial.set_user_attr(
                 "prune_reason",
