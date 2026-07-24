@@ -932,6 +932,7 @@ dependencies = [
     { name = "orbax-checkpoint", version = "0.11.39", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "orbax-checkpoint", version = "0.12.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "tqdm" },
     { name = "typer" },
 ]
@@ -1030,6 +1031,7 @@ requires-dist = [
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.19" },
     { name = "scipy", marker = "extra == 'experiments'", specifier = ">=1.10.0" },
     { name = "tensorflow", marker = "extra == 'tfds'", specifier = ">=2.15.0" },

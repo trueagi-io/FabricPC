@@ -165,12 +165,45 @@ def main(
     typer.echo("=" * 70)
     typer.secho(f"  Succeeded: {len(successes)}/{len(run_dirs)}", fg=typer.colors.GREEN)
     for name in successes:
-        typer.echo(f"    ✓ {name}")
+        typer.echo(f"    OK {name}")
     if failures:
         typer.secho(f"  Failed:    {len(failures)}/{len(run_dirs)}", fg=typer.colors.RED)
         for name, reason in failures:
-            typer.echo(f"    ✗ {name}: {reason}")
+            typer.echo(f"    FAIL {name}: {reason}")
     typer.echo("")
+
+    # Single master HTML that rolls every category into one page.
+    typer.echo("=" * 70)
+    typer.echo("Generating master cross-study report")
+    typer.echo("=" * 70)
+    master_cmd = [
+        sys.executable,
+        "scripts/generate_glucose_master_report.py",
+        "--format",
+        format,
+    ]
+    master_result = subprocess.run(
+        master_cmd,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        cwd=Path.cwd(),
+    )
+    if master_result.stdout:
+        typer.echo(master_result.stdout.rstrip())
+    if master_result.returncode != 0:
+        err = (
+            master_result.stderr.strip()
+            if master_result.stderr
+            else "master report failed"
+        )
+        typer.secho(f"MASTER REPORT FAILED: {err[:300]}", fg=typer.colors.RED)
+        failures.append(("glucose_master_report", err[:200]))
+    else:
+        typer.secho(
+            "OK: docs/reports/glucose_master_progress.html",
+            fg=typer.colors.GREEN,
+        )
 
     if failures:
         raise typer.Exit(1)

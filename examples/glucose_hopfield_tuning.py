@@ -3,12 +3,12 @@
 Mirrors the active transformer tuner (``examples/glucose_transformer_tuning.py``):
 complete-epoch trials, Hyperband pruning, process-isolated workers, GPU admission.
 
-Search is informed by the phase-4 transformer breakthrough (~19.876 Optuna val MAE):
+Search is informed by transformer epoch study v3 champion (~19.408 Optuna val MAE):
 locked geometry ``64 / depth 1 / heads 1``, η band ``9e-6–2.5e-5``, and
 ``seed_offset``. Trials also search Storkey placement / strength.
 
 Uses the same ``prepare_data`` split as the transformer champion so MAE is
-comparable. Goal: beat **19.876** Optuna validation MAE.
+comparable. Goal: beat **19.408** Optuna validation MAE.
 
 ```bash
 uv run glucose-hopfield-tune run \\
@@ -62,13 +62,13 @@ if "JAX_PLATFORMS" not in os.environ:
 app = typer.Typer(
     help=(
         "Tune FabricPC glucose Hopfield + PC dynamics. "
-        "Target: beat transformer phase-4 Optuna champion 19.876 MAE."
+        "Target: beat transformer epochs-v3 Optuna champion 19.408 MAE."
     )
 )
 
 DEFAULT_RUN_DIR = Path("runs/glucose_hopfield_tuning_v1")
 DEFAULT_STUDY_NAME = "glucose_hopfield_pc_v1"
-TARGET_OPTUNA_MAE = 19.876
+TARGET_OPTUNA_MAE = 19.408
 TERMINAL_STATES = {
     optuna.trial.TrialState.COMPLETE,
     optuna.trial.TrialState.PRUNED,

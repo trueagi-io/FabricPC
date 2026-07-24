@@ -104,7 +104,7 @@ def create_study(
     )
 
 
-def suggest_pc_dynamics(trial: optuna.Trial) -> dict[str, float | int]:
+def suggest_pc_dynamics(trial: optuna.Trial) -> dict[str, Any]:
     """Search PC dynamics and architecture factors linked to instability."""
     from examples.glucose_tuning_spaces import TRANSFORMER_SPACE, suggest_from_spec
 

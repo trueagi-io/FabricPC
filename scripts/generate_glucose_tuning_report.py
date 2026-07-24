@@ -33,26 +33,157 @@ DEFAULT_RUN_DIR = Path("runs/glucose_tuning_pc_v2")
 CONFIRM_DIR = Path("runs/glucose_pc_best_confirm")
 STUDY_NAME = "glucose_transformer_pc_epochs_v2"
 
-PARAM_GLOSSARY: dict[str, str] = {
-    "seq_len": "Input sequence length (number of 5-min glucose readings fed to the model). Longer = more history but heavier.",
-    "depth": "Number of transformer blocks stacked. More depth = more capacity but slower inference and higher memory.",
-    "num_heads": "Number of parallel attention heads in multi-scale self-attention. More heads = finer-grained attention patterns.",
-    "embed_dim": "Dimensionality of token embeddings inside the transformer. Larger = more expressive but more parameters.",
-    "lr": "Outer learning rate for weight updates (Adam/AdamW). Controls how fast weights move each step.",
-    "eta_infer": "PC inference learning rate. Step size for the inner-loop SGD that updates latent activations to minimise prediction errors.",
-    "infer_steps": "Number of PC inference iterations per forward pass. More steps = tighter energy minimisation but slower training.",
-    "max_infer_norm": "Maximum gradient norm during PC inference. Clips the inner-loop update to prevent latent activations from exploding.",
-    "grad_clip": "Global gradient clipping threshold for weight updates. Stabilises training by capping large gradients.",
-    "lr_decay_epochs": "Epoch at which the learning rate starts cosine decay toward zero. Later = longer warm phase at full LR.",
-    "weight_init_std": "Standard deviation for weight initialisation (Normal). Smaller = more conservative start; interacts with depth.",
-    "weight_decay": "L2 regularisation coefficient on weights. Higher = stronger penalty on large weights, can prevent overfitting.",
-    "readout": "Regression head pooling mode: 'flatten' (full seq*dim projection), 'mean_pool' (average over time), or 'last' (last timestep only).",
-    "seed_offset": "Random seed offset for reproducibility and diversity across trials with otherwise similar configs.",
-    "energy": "Energy functional for PC nodes: 'gaussian' (MSE-based) or 'huber' (robust to outliers).",
-    "huber_delta": "Huber loss delta threshold. Only active when energy='huber'. Smaller = more robust to outliers.",
-    "ipc": "Incremental Predictive Coding. When True, updates latents layer-by-layer instead of all-at-once (can improve convergence).",
-    "infer_optimizer": "Optimiser for PC inference loop: 'sgd' (simple, fast) or 'adam' (adaptive, may converge faster but uses more memory).",
+# Newbie-friendly theory: short = hover tooltip; longer fields = Theory section.
+PARAM_THEORY: dict[str, dict[str, str]] = {
+    "seq_len": {
+        "short": "How many recent 5-min CGM readings the model sees (e.g. 64 ≈ 5.3 hours).",
+        "what": "Sequence length — the history window length fed into the transformer.",
+        "why": "Glucose has delayed effects (meals, activity). Too short and the model misses context; too long and it can drown in noise and cost more compute.",
+        "effect": "64 often wins here (recent day-part). 128 doubles history but did not reliably help under our budget.",
+    },
+    "depth": {
+        "short": "How many transformer blocks are stacked (model “shallowness”).",
+        "what": "Depth — number of identical transformer blocks stacked on top of each other.",
+        "why": "Each block can refine representations. Depth is capacity: more layers can learn richer patterns, but also train slower and overfit more easily on small data.",
+        "effect": "Shallow (depth=1) means one attention+MLP stage — like a short assembly line. Deeper (2–4) means more stages. On this single-person CGM set, shallow models often generalise better and finish trials sooner.",
+    },
+    "num_heads": {
+        "short": "Parallel attention “viewpoints” inside each block.",
+        "what": "Multi-head attention splits attention into several heads that each look for different relationships in the sequence.",
+        "why": "One head might track rising trends; another meal-like bumps. More heads = more specialised views, but also more parameters.",
+        "effect": "With small embed dims, 1 head is common and stable. Extra heads help only if there is enough data and width to use them.",
+    },
+    "embed_dim": {
+        "short": "Width of the internal vector for each timestep.",
+        "what": "Embedding dimension — size of the hidden vector representing each glucose reading inside the network.",
+        "why": "Wider vectors can store richer features, but need more data and memory.",
+        "effect": "Larger embed_dim → more expressive, heavier. Too large on tiny data can overfit (train looks good, val MAE worse).",
+    },
+    "lr": {
+        "short": "Outer learning rate — how big each weight update is (Adam).",
+        "what": "Learning rate for the outer optimiser that updates model weights after each batch/update.",
+        "why": "Too high → training jumps around or diverges (MAE explodes). Too low → crawls and never improves within the budget.",
+        "effect": "Mid-range ~1e-3–4e-3 often worked for champion-like PC configs. Think of it as step size on a foggy hill: big steps miss the valley; tiny steps never arrive.",
+    },
+    "eta_infer": {
+        "short": "Inner PC step size for refining latent activations.",
+        "what": "PC inference learning rate (η). Inside each forward pass, latents are nudged to reduce prediction error.",
+        "why": "PC has an inner loop separate from weight LR. η controls how aggressively beliefs are corrected before weights move.",
+        "effect": "Too large → unstable energy / wild MAE. Too small → under-inferred latents (model never “settles”). Sweet spot here was roughly 1e-5–2.5e-5.",
+    },
+    "infer_steps": {
+        "short": "How many inner PC refinement iterations per forward pass.",
+        "what": "Number of times the inner PC loop updates latents before producing a forecast.",
+        "why": "More steps ≈ tighter energy minimum, but each step costs compute. Too few and PC barely runs.",
+        "effect": "12–16 steps were common in strong trials. Doubling steps rarely pays for itself if η is already well tuned.",
+    },
+    "max_infer_norm": {
+        "short": "Clip on the size of each PC latent update.",
+        "what": "Maximum gradient/update norm allowed during the inner PC loop.",
+        "why": "Stops latent activations from exploding when errors are large (e.g. after a sharp glucose swing).",
+        "effect": "Lower clips = safer but slower settling. Higher clips = freer movement, more risk of blow-ups.",
+    },
+    "grad_clip": {
+        "short": "Clip on outer weight gradients (training stability).",
+        "what": "Global gradient clipping for Adam weight updates.",
+        "why": "Occasional huge gradients can wipe a good run. Clipping caps the damage.",
+        "effect": "0.5–1.0 were typical. Too tight can stall learning; too loose lets rare spikes destabilise training.",
+    },
+    "lr_decay_epochs": {
+        "short": "When cosine LR decay begins (epoch-based runs).",
+        "what": "Epoch index after which the outer learning rate anneals toward zero.",
+        "why": "Early high LR explores; later lower LR fine-tunes. Decay timing changes that schedule.",
+        "effect": "Later decay = longer aggressive phase. Earlier decay = settle sooner (good if you overshoot).",
+    },
+    "weight_init_std": {
+        "short": "How large random initial weights are.",
+        "what": "Standard deviation of Normal weight initialisation.",
+        "why": "Starting scale interacts with depth and PC dynamics. Bad init can look like a “broken” hyperparameter set.",
+        "effect": "Smaller std = gentler start (often better with PC). Larger std can help or explode depending on η/LR.",
+    },
+    "weight_decay": {
+        "short": "L2 penalty that discourages huge weights.",
+        "what": "Weight decay regularisation strength.",
+        "why": "On small datasets, unconstrained weights memorise noise. Decay nudges them toward simpler solutions.",
+        "effect": "Higher → stronger regularisation (can underfit). Zero → freer fit (can overfit).",
+    },
+    "readout": {
+        "short": "How the sequence is turned into one glucose forecast.",
+        "what": "Regression head mode: flatten / mean_pool / last.",
+        "why": "The network outputs a sequence of vectors; readout decides how to map that to a single 60‑min-ahead number.",
+        "effect": "flatten uses the full sequence (more parameters, often best here). mean_pool averages time; last uses only the newest step — lighter heads that may need their own LR/η retuning.",
+    },
+    "seed_offset": {
+        "short": "Random-seed nudge so similar configs can still differ.",
+        "what": "Added to a base seed so trials explore different initialisations/data shuffles.",
+        "why": "PC training can be seed-sensitive. Searching a small offset finds lucky (or unlucky) starts.",
+        "effect": "Same architecture can move several MAE points just from seed — document the winning seed for replay.",
+    },
+    "energy": {
+        "short": "How PC nodes score prediction error (Gaussian vs Huber).",
+        "what": "Energy functional used inside PC nodes.",
+        "why": "Gaussian (MSE) punishes large errors hard. Huber becomes linear for outliers — useful for glucose spikes.",
+        "effect": "Gaussian is the classic default. Huber can be more robust when a few wild points would otherwise dominate.",
+    },
+    "huber_delta": {
+        "short": "Threshold where Huber switches from quadratic to linear.",
+        "what": "Delta parameter for Huber energy (only if energy=huber).",
+        "why": "Controls when an error is treated as an “outlier”.",
+        "effect": "Smaller delta → more robust / less spike-sensitive. Larger → closer to plain MSE.",
+    },
+    "ipc": {
+        "short": "Update latents layer-by-layer (incremental PC) vs all at once.",
+        "what": "Incremental Predictive Coding flag.",
+        "why": "Layerwise updates can improve convergence on deep stacks by letting lower layers settle first.",
+        "effect": "On shallow nets the difference may be small; on deeper nets IPC can matter more.",
+    },
+    "infer_optimizer": {
+        "short": "Optimiser inside the PC loop: SGD or Adam.",
+        "what": "Which optimiser nudges latent activations during inference.",
+        "why": "SGD is simple/fast; Adam adapts per-coordinate and may settle in fewer steps (more memory).",
+        "effect": "Try SGD first for speed; Adam if inference looks under-converged at the same step count.",
+    },
 }
+
+PARAM_GLOSSARY: dict[str, str] = {
+    key: meta["short"] for key, meta in PARAM_THEORY.items()
+}
+
+TRAINING_BASICS_HTML: str = """
+<section>
+  <h2>How to read this report (newbie guide)</h2>
+  <div class="callout">
+    <h3>Trials vs epochs (or updates)</h3>
+    <p>
+      <strong>A trial</strong> is one full experiment with a fixed set of hyperparameters
+      (learning rate, depth, η_infer, …). Optuna proposes many trials to search for a good recipe.
+    </p>
+    <p>
+      <strong>Inside a trial</strong>, the model trains over time. Depending on the protocol you will see either:
+    </p>
+    <ul>
+      <li><strong>Epochs</strong> — one pass over the training set = 1 epoch. Validation MAE is logged each epoch.</li>
+      <li><strong>Updates</strong> — weight steps (e.g. every 200 updates). Same idea: a learning curve of MAE vs training progress.</li>
+    </ul>
+    <p>
+      So: <em>trial = which recipe</em>, <em>epoch/update = how far that recipe has trained</em>.
+      The bar chart compares recipes; the line charts show learning inside a recipe.
+    </p>
+    <h3>Why a run stops early</h3>
+    <ul>
+      <li><strong>Early stopping (patience)</strong> — validation MAE stopped improving for N checks → stop; keeps the best checkpoint.</li>
+      <li><strong>Pruned</strong> — Optuna’s pruner killed a clearly-losing trial mid-way to save compute (not a crash).</li>
+      <li><strong>Failed</strong> — hard error (OOM, NaNs, timeout). Check the reason column.</li>
+      <li><strong>Complete</strong> — finished the allowed budget (or early-stopped cleanly) and reported a final score.</li>
+    </ul>
+    <p>
+      Lower <strong>MAE (mg/dL)</strong> is better — average absolute error of the 60‑minute glucose forecast.
+      Hover green parameter chips (e.g. <span class="tip" data-tip="Example tooltip">lr</span>) for a one-line explanation;
+      the Theory section below goes deeper.
+    </p>
+  </div>
+</section>
+"""
 
 
 def _resolve_study_name(run_dir: Path, study_name: str | None) -> str:
@@ -444,18 +575,91 @@ def _render_markdown(payload: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
-            "## Hyperparameter glossary",
+            "## How to read this report",
             "",
-            "| Parameter | Meaning |",
-            "|-----------|---------|",
+            "- **Trial** = one hyperparameter recipe Optuna tried.",
+            "- **Epoch / update** = training progress *inside* that recipe (learning curve).",
+            "- **Pruned** = Optuna stopped a weak trial early to save compute (not a crash).",
+            "- **Early stop / patience** = validation MAE stopped improving, so training halted and kept the best checkpoint.",
+            "- Lower **MAE (mg/dL)** is better.",
+            "",
+            "## Complete training report (all trials)",
+            "",
+            "Each trial below keeps the same layout: summary → params → stage trace → stop reason.",
+            "",
         ]
     )
-    for key, desc in PARAM_GLOSSARY.items():
-        lines.append(f"| `{key}` | {desc} |")
+    for trial in payload.get("all_trials") or []:
+        params = trial.get("params") or {}
+        attrs = trial.get("user_attrs") or {}
+        reason = (
+            attrs.get("stop_reason")
+            or attrs.get("prune_reason")
+            or attrs.get("failure_reason")
+            or "—"
+        )
+        geometry = (
+            f"{params.get('seq_len')}/d{params.get('depth')}/h{params.get('num_heads')}"
+        )
+        lines.append(
+            f"### Trial {trial['trial']} — {trial['state']} "
+            f"(best MAE {_fmt(trial.get('best_history_mae'), 3)})"
+        )
+        lines.append("")
+        lines.append(f"- **Geometry**: `{geometry}` · readout `{params.get('readout', '—')}`")
+        lines.append(f"- **Stop / prune reason**: {reason}")
+        param_parts = []
+        for key in [
+            "lr", "eta_infer", "infer_steps", "max_infer_norm", "grad_clip",
+            "weight_init_std", "weight_decay", "seed_offset", "energy", "ipc",
+        ]:
+            val = params.get(key)
+            if val is None:
+                continue
+            if isinstance(val, float):
+                param_parts.append(f"{key}={val:.4g}")
+            else:
+                param_parts.append(f"{key}={val}")
+        if param_parts:
+            lines.append(f"- **Params**: {', '.join(param_parts)}")
+        history = trial.get("history") or []
+        if history:
+            x_key = "epoch" if "epoch" in history[0] else "update"
+            lines.append("")
+            lines.append(f"| {x_key.capitalize()} | Val MAE | MARD (%) |")
+            lines.append("|------:|--------:|---------:|")
+            for row in history:
+                x_val = row.get(x_key, row.get("update", row.get("epoch")))
+                lines.append(
+                    f"| {x_val} | {_fmt(row.get('mae_mg_dl'), 3)} | "
+                    f"{_fmt(row.get('mard_percent'), 2)} |"
+                )
+        lines.append("")
 
     lines.extend(
         [
+            "## Hyperparameter theory (for newbies)",
             "",
+            "Short glossary first, then practical intuition for each knob.",
+            "",
+            "| Parameter | One-line meaning |",
+            "|-----------|------------------|",
+        ]
+    )
+    for key, meta in PARAM_THEORY.items():
+        lines.append(f"| `{key}` | {meta['short']} |")
+
+    lines.extend(["", "### Deeper explanations", ""])
+    for key, meta in PARAM_THEORY.items():
+        lines.append(f"#### `{key}`")
+        lines.append("")
+        lines.append(f"- **What it is**: {meta['what']}")
+        lines.append(f"- **Why you care**: {meta['why']}")
+        lines.append(f"- **How changes show up**: {meta['effect']}")
+        lines.append("")
+
+    lines.extend(
+        [
             "## Background",
             "",
             "This work builds on our earlier results with conventional (non-PC) transformers for glucose",
@@ -490,23 +694,6 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             "  Regression Output Head → Glucose Forecast (60 min)",
             "```",
             "",
-            "### Hopfield PC Transformer",
-            "",
-            "```",
-            "Glucose Input (batch, seq_len, 1)",
-            "       |",
-            "  Continuous Embedding",
-            "       |",
-            "  [Storkey Hopfield Memory]  ← content-addressable pattern recall",
-            "       |                       stores learned glucose dynamics",
-            "  +--[ Transformer Block ] × depth --------+",
-            "  |    Multi-Scale MHA + Residual           |",
-            "  |    MLP + skip + PC Energy Node          |",
-            "  +------------------------------------------+",
-            "       |",
-            "  Regression Output Head → Glucose Forecast (60 min)",
-            "```",
-            "",
             "### PC inference loop (runs at every node)",
             "",
             "1. Predict `z_mu` from incoming activations",
@@ -515,53 +702,24 @@ def _render_markdown(payload: dict[str, Any]) -> str:
             "4. Update `z_latent` via SGD or Adam (step size = `eta_infer`, clip = `max_infer_norm`)",
             "5. Repeat for `infer_steps` iterations",
             "",
-            "### Energy functions (both searched during tuning)",
-            "",
-            "- **Gaussian** (default): E = 0.5 ||error||^2 — standard MSE, penalises large errors quadratically",
-            "- **Huber**: quadratic for small errors, linear past `huber_delta` — robust to glucose spikes/outliers",
-            "",
             "## Limitations",
             "",
-            "- **Single participant data** — we started only 1.5 days before the deadline, so we used",
-            "  only Livia's personal CGM data rather than training across multiple participants.",
-            "- **Glucose-only input** — only continuous glucose values are fed to the model. Carbohydrate",
-            "  intake, heart rate, step count, and other covariates available in the full dataset are not included.",
-            "- **Limited tuning budget** — the tight timeline restricted the number of Optuna trials and",
-            "  hyperparameter ranges we could explore.",
+            "- **Single participant data** — Livia's personal CGM only for the deadline sprint.",
+            "- **Glucose-only input** — carbs / HR / steps not included yet.",
+            "- **Limited tuning budget** — finite Optuna trials and ranges.",
             "",
             "## How to run",
             "",
-            "### PC Transformer tuning (this report)",
-            "",
-            "Searches both Gaussian and Huber energy, SGD and Adam inference,",
-            "IPC on/off, and all architecture params. Default: 32 trials, Hyperband pruning.",
-            "",
             "| Task | Command |",
             "|------|---------|",
-            "| Start tuning | `uv run glucose-transformer-tune run` |",
-            "| Custom trial count | `uv run glucose-transformer-tune run --n-trials 64` |",
-            "| More parallel workers | `uv run glucose-transformer-tune run --n-trials 64 --max-workers 4` |",
-            "| Custom run directory | `uv run glucose-transformer-tune run --run-dir runs/my_experiment --study-name my_study` |",
-            "| Adjust epochs/patience | `uv run glucose-transformer-tune run --max-epochs 20 --patience 5` |",
-            "| Resume interrupted | `uv run glucose-transformer-tune run` (Optuna journal auto-resumes) |",
+            "| Install (CPU) | `uv sync --extra glucose` |",
+            "| Install (GPU / WSL) | `uv sync --extra glucose --extra cuda12` |",
+            "| Train PC transformer | `uv run glucose-transformer` |",
+            "| Start epoch Optuna | `uv run glucose-transformer-tune run` |",
+            "| Update-budget Optuna | `uv run glucose-transformer-tune-update-budget run` |",
             "| Regenerate this report | `uv run python scripts/generate_glucose_tuning_report.py --format all` |",
-            "",
-            "### Hopfield variant tuning",
-            "",
-            "Separate tuner that searches Hopfield memory placement (baseline / projection /",
-            "embed-storkey / forecast-storkey) and strength. Same PC dynamics search.",
-            "",
-            "| Task | Command |",
-            "|------|---------|",
-            "| Start Hopfield tuning | `uv run glucose-hopfield-tune run` |",
-            "| Custom trial count | `uv run glucose-hopfield-tune run --n-trials 48 --max-workers 3` |",
-            "| Regenerate Hopfield report | `uv run python scripts/generate_glucose_hopfield_tuning_report.py --format all` |",
-            "",
-            "### All reports",
-            "",
-            "| Task | Command |",
-            "|------|---------|",
-            "| Generate all reports | `uv run python scripts/generate_all_glucose_reports.py --format all` |",
+            "| All reports + master | `uv run python scripts/generate_all_glucose_reports.py --format all` |",
+            "| Master report only | `uv run python scripts/generate_glucose_master_report.py` |",
             "",
         ]
     )
@@ -1052,21 +1210,189 @@ def _svg_energy_comparison() -> str:
     return '\n'.join(parts)
 
 
+def _tip(key: str, label: str | None = None) -> str:
+    """Hoverable parameter label with short glossary text."""
+    meta = PARAM_THEORY.get(key)
+    text = label if label is not None else key
+    if meta is None:
+        return f"<code>{html.escape(text)}</code>"
+    tip = html.escape(meta["short"], quote=True)
+    return (
+        f'<span class="tip" data-tip="{tip}">'
+        f"<code>{html.escape(text)}</code></span>"
+    )
+
+
+def _fmt_param_value(val: Any) -> str:
+    if isinstance(val, float):
+        return f"{val:.4g}"
+    return html.escape(str(val))
+
+
+def _theory_section_html() -> str:
+    cards: list[str] = []
+    for key, meta in PARAM_THEORY.items():
+        cards.append(
+            f'<details class="theory-card">'
+            f"<summary>{_tip(key)} — {html.escape(meta['short'])}</summary>"
+            f"<p><strong>What it is.</strong> {html.escape(meta['what'])}</p>"
+            f"<p><strong>Why you care.</strong> {html.escape(meta['why'])}</p>"
+            f"<p><strong>How changes show up.</strong> {html.escape(meta['effect'])}</p>"
+            f"</details>"
+        )
+    return (
+        "<section><h2>Hyperparameter theory (for newbies)</h2>"
+        "<p class=\"hint\">Hover any green parameter chip for a one-liner. "
+        "Open a card for the full “what / why / effect” story "
+        "(e.g. what “shallow depth” actually means).</p>"
+        f"{''.join(cards)}</section>"
+    )
+
+
+def _trial_sections_html(payload: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    """Per-trial complete report blocks + chart payloads for JS."""
+    blocks: list[str] = []
+    trial_charts: list[dict[str, Any]] = []
+    palette = ["#3dd68c", "#006FEE", "#f5a524", "#9353d3", "#f31260", "#a1a1aa"]
+    for trial in payload.get("all_trials") or []:
+        params = trial.get("params") or {}
+        attrs = trial.get("user_attrs") or {}
+        reason = (
+            attrs.get("stop_reason")
+            or attrs.get("prune_reason")
+            or attrs.get("failure_reason")
+            or "—"
+        )
+        history = trial.get("history") or []
+        x_key = "epoch" if history and "epoch" in history[0] else "update"
+        state = trial["state"]
+        state_class = {
+            "COMPLETE": "ok",
+            "PRUNED": "warn",
+            "FAIL": "bad",
+            "RUNNING": "run",
+        }.get(state, "")
+        param_chips = []
+        for key in [
+            "seq_len", "depth", "num_heads", "readout", "lr", "eta_infer",
+            "infer_steps", "max_infer_norm", "grad_clip", "weight_init_std",
+            "weight_decay", "seed_offset", "energy", "ipc", "infer_optimizer",
+        ]:
+            val = params.get(key)
+            if val is None:
+                continue
+            param_chips.append(
+                f"<tr><td>{_tip(key)}</td>"
+                f"<td><strong>{_fmt_param_value(val)}</strong></td></tr>"
+            )
+        stage_rows = []
+        for row in history:
+            x_val = row.get(x_key, row.get("update", row.get("epoch")))
+            stage_rows.append(
+                "<tr>"
+                f"<td>{html.escape(str(x_val))}</td>"
+                f"<td>{_fmt(row.get('mae_mg_dl'), 3)}</td>"
+                f"<td>{_fmt(row.get('mard_percent'), 2)}</td>"
+                "</tr>"
+            )
+        chart_id = f"trialChart_{trial['trial']}"
+        chart_block = ""
+        if history:
+            points = [
+                {
+                    "x": int(row.get(x_key, row.get("update", row.get("epoch", 0)))),
+                    "y": float(row["mae_mg_dl"]),
+                }
+                for row in history
+                if row.get("mae_mg_dl") is not None
+            ]
+            color = palette[int(trial["trial"]) % len(palette)]
+            trial_charts.append(
+                {
+                    "id": chart_id,
+                    "label": f"Trial {trial['trial']} val MAE",
+                    "xTitle": x_key.capitalize(),
+                    "data": points,
+                    "color": color,
+                }
+            )
+            chart_block = (
+                f'<div class="chart"><canvas id="{chart_id}" height="110"></canvas></div>'
+            )
+        table_block = ""
+        if stage_rows:
+            table_block = (
+                f"<table><thead><tr>"
+                f"<th>{html.escape(x_key.capitalize())}</th>"
+                f"<th>Val MAE</th><th>MARD (%)</th>"
+                f"</tr></thead><tbody>{''.join(stage_rows)}</tbody></table>"
+            )
+        blocks.append(
+            f'<details class="trial-card" id="trial-{trial["trial"]}">'
+            f"<summary>"
+            f'<span class="badge {state_class}">{html.escape(state)}</span> '
+            f"Trial {trial['trial']} · best MAE "
+            f"<strong>{_fmt(trial.get('best_history_mae'), 3)}</strong>"
+            f"</summary>"
+            f"<div class=\"trial-body\">"
+            f"<h3>Summary</h3>"
+            f"<p>Stop / prune reason: <em>{html.escape(str(reason))}</em></p>"
+            f"<h3>Parameters "
+            f"<span class=\"hint\">(hover names for explanations)</span></h3>"
+            f'<table class="arch-params">{"".join(param_chips) or "<tr><td>—</td></tr>"}</table>'
+            f"<h3>Learning curve (stages)</h3>"
+            f"{chart_block}"
+            f"{table_block}"
+            f"</div></details>"
+        )
+    section = (
+        '<details class="fold-block" id="complete">'
+        "<summary>Complete training report (all trials)</summary>"
+        '<p class="hint">Same layout for every trial: summary → parameters → '
+        "stage curve/table. Expand a trial to inspect why it stopped.</p>"
+        f"{''.join(blocks)}</details>"
+    )
+    return section, trial_charts
+
+
 def _render_html(payload: dict[str, Any]) -> str:
-    """Render an interactive HTML report (Chart.js tooltips / legend toggles)."""
+    """Interactive HTML report: Chart.js, param hover tips, full trial dump."""
     counts = payload["counts"]
     best = payload.get("best_complete")
     best_mae = best["best_history_mae"] if best else None
 
-    bar_labels = [str(row["trial"]) for row in payload["trial_bar"]]
-    bar_values = [float(row["best_mae"]) for row in payload["trial_bar"]]
-    bar_colors = [
-        "#3dd68c" if value <= 21.5 else ("#f5a524" if value <= 30 else "#f31260")
-        for value in bar_values
-    ]
+    bar_labels: list[str] = []
+    bar_values: list[float | None] = []
+    bar_colors: list[str] = []
+    for trial in payload.get("all_trials") or []:
+        bar_labels.append(str(trial["trial"]))
+        mae = trial.get("best_history_mae")
+        bar_values.append(float(mae) if mae is not None else None)
+        if mae is None:
+            bar_colors.append("#4b5563")
+        elif trial["state"] == "PRUNED":
+            bar_colors.append("#f5a524")
+        elif trial["state"] == "FAIL":
+            bar_colors.append("#f31260")
+        elif float(mae) <= 21.5:
+            bar_colors.append("#3dd68c")
+        elif float(mae) <= 30:
+            bar_colors.append("#f5a524")
+        else:
+            bar_colors.append("#f31260")
 
     line_palette = ["#3dd68c", "#006FEE", "#f5a524", "#9353d3"]
-    line_datasets = []
+    line_datasets: list[dict[str, Any]] = []
+    sample_hist = None
+    for trial in payload.get("all_trials") or []:
+        if trial.get("history"):
+            sample_hist = trial["history"][0]
+            break
+    x_title = (
+        "Epoch"
+        if sample_hist is not None and "epoch" in sample_hist and "update" not in sample_hist
+        else "Optimizer update"
+    )
     for index, hist in enumerate(payload["top_histories"]):
         color = line_palette[index % len(line_palette)]
         params = hist.get("params") or {}
@@ -1075,19 +1401,23 @@ def _render_html(payload: dict[str, Any]) -> str:
             f"/h{params.get('num_heads')}"
         )
         detail_parts = [f"T{hist['trial']}", geometry]
-        for key, fmt in [("lr", ".4g"), ("eta_infer", ".3g"), ("infer_steps", "d")]:
+        for key in ("lr", "eta_infer", "infer_steps"):
             val = params.get(key)
-            if val is not None:
-                detail_parts.append(f"{key}={float(val):{fmt}}" if fmt != "d" else f"{key}={val}")
+            if val is None:
+                continue
+            if isinstance(val, float):
+                detail_parts.append(f"{key}={val:.4g}")
+            else:
+                detail_parts.append(f"{key}={val}")
         detail_parts.append(f"MAE={hist['best_mae']:.2f}")
-        label = " ".join(detail_parts) + " val"
+        xy = [
+            {"x": int(p["update"]), "y": float(p["mae_mg_dl"])}
+            for p in hist["points"]
+        ]
         line_datasets.append(
             {
-                "label": label,
-                "data": [
-                    {"x": int(point["update"]), "y": float(point["mae_mg_dl"])}
-                    for point in hist["points"]
-                ],
+                "label": " ".join(detail_parts),
+                "data": xy,
                 "borderColor": color,
                 "backgroundColor": color,
                 "tension": 0.2,
@@ -1095,68 +1425,16 @@ def _render_html(payload: dict[str, Any]) -> str:
                 "pointHoverRadius": 6,
             }
         )
-        train_points = [
-            p for p in hist["points"] if p.get("train_mae_mg_dl")
-        ]
-        if train_points:
-            line_datasets.append(
-                {
-                    "label": f"T{hist['trial']} train",
-                    "data": [
-                        {
-                            "x": int(p["update"]),
-                            "y": float(p["train_mae_mg_dl"]),
-                        }
-                        for p in train_points
-                    ],
-                    "borderColor": color,
-                    "backgroundColor": color,
-                    "borderDash": [6, 3],
-                    "tension": 0.2,
-                    "pointRadius": 2,
-                    "pointHoverRadius": 5,
-                }
-            )
-
-    bar_svg = _svg_bar_chart(
-        list(zip(bar_labels, bar_values)),
-        title="Best MAE by trial",
-    )
-
-    line_series = []
-    for ds in line_datasets:
-        line_series.append({
-            "name": ds["label"],
-            "points": [{"update": p["x"], "mae_mg_dl": p["y"]} for p in ds["data"]],
-            "dash": ds.get("borderDash"),
-        })
-    all_y = [p["y"] for ds in line_datasets for p in ds["data"]]
-    line_y_min = max(math.floor(min(all_y) - 1), 0) if all_y else 18.0
-    line_y_max = math.ceil(max(all_y) + 1) if all_y else 36.0
-    line_svg = _svg_line_chart_detailed(
-        line_series,
-        title="Top trial learning curves",
-        x_key="update", y_key="mae_mg_dl",
-        y_min=line_y_min, y_max=line_y_max,
-        colors=[ds["borderColor"] for ds in line_datasets],
-    )
 
     confirm = payload.get("confirm")
     confirm_block = ""
+    confirm_data: dict[str, Any] | None = None
     if confirm is not None and confirm["epochs"]:
         cfg = confirm["config"]
-        confirm_series = [{
-            "name": "Val MAE (mg/dL)",
-            "points": [
-                {"epoch": int(r["epoch"]), "mae_mg_dl": float(r["mae_mg_dl"])}
-                for r in confirm["epochs"]
-            ],
-        }]
-        confirm_svg = _svg_line_chart_detailed(
-            confirm_series, title="PC confirmation train",
-            x_key="epoch", y_key="mae_mg_dl",
-            y_min=18.0, y_max=34.0,
-        )
+        confirm_data = {
+            "labels": [int(r["epoch"]) for r in confirm["epochs"]],
+            "values": [float(r["mae_mg_dl"]) for r in confirm["epochs"]],
+        }
         confirm_block = f"""
         <section>
           <h2>PC confirmation train</h2>
@@ -1165,8 +1443,9 @@ def _render_html(payload: dict[str, Any]) -> str:
             test MAE <strong>{_fmt(cfg.get('test_mae_mg_dl'), 4)}</strong>,
             epochs {html.escape(str(cfg.get('final_epoch')))},
             {html.escape(str(cfg.get('elapsed_s')))}s.
+            Hover points for exact levels; click legend to toggle.
           </p>
-          <div class="chart">{confirm_svg}</div>
+          <div class="chart"><canvas id="confirmChart" height="120"></canvas></div>
         </section>
         """
 
@@ -1205,25 +1484,46 @@ def _render_html(payload: dict[str, Any]) -> str:
         param_rows = []
         for key in arch_param_keys:
             val = params.get(key)
-            if val is not None:
-                if isinstance(val, float):
-                    display = f"{val:.4g}"
-                else:
-                    display = html.escape(str(val))
-                param_rows.append(
-                    f"<tr><td>{html.escape(key)}</td><td>{display}</td></tr>"
-                )
-        mard_str = f" · MARD {_fmt(row.get('best_mard'), 1)}%" if row.get("best_mard") is not None else ""
+            if val is None:
+                continue
+            param_rows.append(
+                f"<tr><td>{_tip(key)}</td><td>{_fmt_param_value(val)}</td></tr>"
+            )
+        mard_str = (
+            f" · MARD {_fmt(row.get('best_mard'), 1)}%"
+            if row.get("best_mard") is not None
+            else ""
+        )
         arch_cards.append(
             f'<div class="arch-card">'
             f'<div class="arch-rank">#{rank}</div>'
             f'<div class="arch-trial">Trial {row["trial"]}</div>'
             f'<div class="arch-mae">MAE {_fmt(row["best_mae"], 3)}{mard_str}</div>'
             f'<div class="arch-desc">{html.escape(geometry)}</div>'
-            f'<div class="arch-detail">readout: {html.escape(readout)}</div>'
+            f'<div class="arch-detail">readout: {_tip("readout", readout)}</div>'
             f'<table class="arch-params">{"".join(param_rows)}</table>'
             f"</div>"
         )
+
+    trial_section, trial_charts = _trial_sections_html(payload)
+    charts_json = json.dumps(
+        {
+            "bar": {
+                "labels": bar_labels,
+                "values": [v if v is not None else None for v in bar_values],
+                "colors": bar_colors,
+                "bestMae": best_mae,
+            },
+            "lines": {"datasets": line_datasets, "xTitle": x_title},
+            "confirm": confirm_data,
+            "trialCharts": trial_charts,
+        }
+    )
+
+    th_lr = _tip("lr", "LR")
+    th_eta = _tip("eta_infer", "η_infer")
+    th_steps = _tip("infer_steps", "Infer steps")
+    th_clip = _tip("grad_clip", "Grad clip")
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -1231,86 +1531,79 @@ def _render_html(payload: dict[str, Any]) -> str:
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>Glucose PC Optuna progress</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.8/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.1.0/dist/chartjs-plugin-annotation.min.js"></script>
   <style>
     :root {{
       color-scheme: dark;
-      --bg: #0b0f14;
-      --card: #121820;
-      --text: #e7ecf3;
-      --muted: #9aa7b8;
-      --line: #243041;
-      --accent: #3dd68c;
+      --bg: #0b0f14; --card: #121820; --text: #e7ecf3;
+      --muted: #9aa7b8; --line: #243041; --accent: #3dd68c;
     }}
-    body {{
-      margin: 0;
-      font-family: "Segoe UI", system-ui, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      line-height: 1.45;
+    body {{ margin:0; font-family:"Segoe UI",system-ui,sans-serif;
+      background:var(--bg); color:var(--text); line-height:1.45; }}
+    main {{ max-width:1040px; margin:0 auto; padding:32px 20px 80px; }}
+    h1,h2,h3 {{ margin:0 0 12px; font-weight:650; }}
+    h1 {{ font-size:1.8rem; }} h2 {{ font-size:1.2rem; margin-top:28px; }}
+    h3 {{ font-size:1rem; margin-top:16px; color:var(--text); }}
+    p,li {{ color:var(--muted); }}
+    .stats {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr));
+      gap:12px; margin:20px 0; }}
+    .stat {{ background:var(--card); border:1px solid var(--line);
+      border-radius:12px; padding:14px 16px; }}
+    .stat strong {{ display:block; font-size:1.4rem; color:var(--text); }}
+    .stat span {{ color:var(--muted); font-size:0.85rem; }}
+    .chart {{ margin:16px 0; border:1px solid var(--line); border-radius:12px;
+      background:var(--card); padding:16px; }}
+    table {{ width:100%; border-collapse:collapse; font-size:0.9rem; }}
+    th,td {{ border-bottom:1px solid var(--line); padding:8px 10px; text-align:left; }}
+    th {{ color:var(--muted); font-weight:600; }}
+    code {{ color:var(--accent); }}
+    .hint {{ font-size:0.85rem; color:var(--muted); }}
+    .callout {{ background:var(--card); border:1px solid var(--line);
+      border-radius:12px; padding:16px 18px; }}
+    .callout h3 {{ margin-top:14px; }} .callout h3:first-child {{ margin-top:0; }}
+    .tip {{ position:relative; cursor:help; border-bottom:1px dotted var(--accent); }}
+    .tip:hover::after, .tip:focus::after {{
+      content: attr(data-tip);
+      position:absolute; left:0; bottom:calc(100% + 8px); z-index:40;
+      min-width:220px; max-width:320px; padding:10px 12px;
+      background:#1a2332; color:var(--text); border:1px solid var(--line);
+      border-radius:8px; font-size:0.8rem; line-height:1.35; white-space:normal;
+      box-shadow:0 8px 24px rgba(0,0,0,0.35); pointer-events:none;
     }}
-    main {{
-      max-width: 980px;
-      margin: 0 auto;
-      padding: 32px 20px 64px;
-    }}
-    h1, h2 {{ margin: 0 0 12px; font-weight: 650; }}
-    h1 {{ font-size: 1.8rem; }}
-    h2 {{ font-size: 1.2rem; margin-top: 28px; }}
-    p, li {{ color: var(--muted); }}
-    .stats {{
-      display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 12px;
-      margin: 20px 0;
-    }}
-    .stat {{
-      background: var(--card);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 14px 16px;
-    }}
-    .stat strong {{
-      display: block;
-      font-size: 1.4rem;
-      color: var(--text);
-    }}
-    .stat span {{ color: var(--muted); font-size: 0.85rem; }}
-    .chart {{
-      margin: 16px 0;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: var(--card);
-      padding: 16px;
-    }}
-    table {{
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.92rem;
-    }}
-    th, td {{
-      border-bottom: 1px solid var(--line);
-      padding: 8px 10px;
-      text-align: left;
-    }}
-    th {{ color: var(--muted); font-weight: 600; }}
-    code {{ color: var(--accent); }}
-    .hint {{ font-size: 0.85rem; }}
     .arch-grid {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr));
       gap:14px; margin:16px 0; }}
     .arch-card {{ background:var(--card); border:1px solid var(--line);
       border-radius:12px; padding:16px; position:relative; }}
     .arch-rank {{ position:absolute; top:12px; right:16px; font-size:1.6rem;
       font-weight:700; color:var(--line); }}
-    .arch-trial {{ font-size:0.85rem; font-weight:600; color:var(--muted);
-      margin-bottom:2px; letter-spacing:0.03em; }}
-    .arch-mae {{ font-size:1.2rem; font-weight:650; color:var(--accent); margin-bottom:6px; }}
-    .arch-desc {{ font-size:0.95rem; color:var(--text); margin-bottom:4px; }}
+    .arch-trial {{ font-size:0.85rem; font-weight:600; color:var(--muted); }}
+    .arch-mae {{ font-size:1.2rem; font-weight:650; color:var(--accent); margin:4px 0 6px; }}
+    .arch-desc {{ font-size:0.95rem; color:var(--text); }}
     .arch-detail {{ font-size:0.85rem; color:var(--muted); margin-bottom:10px; }}
-    .arch-params {{ font-size:0.8rem; }}
     .arch-params td {{ padding:3px 8px; border-bottom:1px solid var(--line); }}
-    .arch-params td:first-child {{ color:var(--muted); }}
-    @media (max-width: 800px) {{
-      .stats {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+    .trial-card, .theory-card, .fold-block {{
+      background:var(--card); border:1px solid var(--line); border-radius:12px;
+      margin:10px 0; padding:0 14px; }}
+    .trial-card > summary, .theory-card > summary, .fold-block > summary {{
+      cursor:pointer; list-style:none; padding:14px 0; color:var(--text); font-weight:600; }}
+    .trial-card > summary::-webkit-details-marker,
+    .theory-card > summary::-webkit-details-marker,
+    .fold-block > summary::-webkit-details-marker {{ display:none; }}
+    .fold-block > summary::before {{ content:"▸ "; color:var(--accent); }}
+    .fold-block[open] > summary::before {{ content:"▾ "; }}
+    .trial-body {{ padding:0 0 16px; }}
+    .param-list {{ display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr));
+      gap:4px 12px; padding-left:18px; }}
+    .badge {{ display:inline-block; font-size:0.75rem; padding:2px 8px;
+      border-radius:999px; border:1px solid var(--line); color:var(--muted); }}
+    .badge.ok {{ color:#3dd68c; border-color:#3dd68c55; }}
+    .badge.warn {{ color:#f5a524; border-color:#f5a52455; }}
+    .badge.bad {{ color:#f31260; border-color:#f3126055; }}
+    .badge.run {{ color:#006FEE; border-color:#006FEE55; }}
+    .toc a {{ color:var(--accent); margin-right:12px; font-size:0.9rem; }}
+    @media (max-width:800px) {{
+      .stats {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
     }}
   </style>
 </head>
@@ -1323,153 +1616,291 @@ def _render_html(payload: dict[str, Any]) -> str:
       <code>{html.escape(payload['generated_at'])}</code>
     </p>
     <p class="hint">
-      Self-contained report — no external dependencies. Charts are inline SVG.
+      Interactive charts (Chart.js): hover for exact levels, axes labelled, click legend to show/hide.
+      Open in Chrome/Edge/Firefox — IDE HTML previews may block the CDN.
     </p>
-    <div class="stats">
+    <p class="toc">
+      <a href="#overview">Overview</a>
+      <a href="#curves">Learning curves</a>
+      <a href="#leaderboard">Leaderboard</a>
+      <a href="#complete">All trials</a>
+      <a href="#theory">Theory</a>
+      <a href="#how-to-run">How to run</a>
+    </p>
+    <div class="stats" id="overview">
       <div class="stat"><strong>{counts['n_trials']}</strong><span>Trials</span></div>
       <div class="stat"><strong>{counts['n_complete']}</strong><span>Complete</span></div>
       <div class="stat"><strong>{counts['n_pruned']}</strong><span>Pruned</span></div>
       <div class="stat"><strong>{_fmt(best_mae, 2)}</strong><span>Best MAE (mg/dL)</span></div>
     </div>
-    <section>
-      <h2>Best MAE by trial</h2>
-      <div class="chart">{bar_svg}</div>
-    </section>
-    <section>
-      <h2>Top trial learning curves</h2>
-      <div class="chart">{line_svg}</div>
-    </section>
-    {confirm_block}
-    <section>
-      <h2>Complete-trial leaderboard</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Trial</th><th>Best MAE</th><th>MARD%</th><th>Geometry</th>
-            <th>LR</th><th>η_infer</th><th>Infer steps</th><th>Grad clip</th>
-          </tr>
-        </thead>
-        <tbody>
-          {''.join(leaderboard_rows)}
-        </tbody>
-      </table>
-    </section>
+    {TRAINING_BASICS_HTML}
     <section>
       <h2>What helped (auto-generated from top trials)</h2>
       <pre style="font-size:0.85rem; color:var(--muted); white-space:pre-wrap;">{html.escape(_summarize_what_helped(payload['leaderboard']))}</pre>
     </section>
     <section>
-      <h2>Top model architectures</h2>
-      <p style="font-size:0.85rem; color:var(--muted);">
-        Full hyperparameter configurations of the top 5 performing models.
+      <h2>Best MAE by trial</h2>
+      <p class="hint">
+        <span style="color:#3dd68c;">■</span> ≤21.5&ensp;
+        <span style="color:#f5a524;">■</span> pruned / mid&ensp;
+        <span style="color:#f31260;">■</span> high / fail&ensp;
+        Dashed line = best complete MAE.
       </p>
+      <div class="chart"><canvas id="barChart" height="120"></canvas></div>
+    </section>
+    <section id="curves">
+      <h2>Top trial learning curves</h2>
+      <p class="hint">X = training progress inside a trial; Y = validation MAE. Lower is better.</p>
+      <div class="chart"><canvas id="lineChart" height="120"></canvas></div>
+    </section>
+    {confirm_block}
+    <details class="fold-block" id="leaderboard">
+      <summary>Complete-trial leaderboard</summary>
+      <p class="hint">Hover column headers marked with a dotted underline for parameter explainers.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Trial</th><th>Best MAE</th><th>MARD%</th><th>Geometry</th>
+            <th>{th_lr}</th><th>{th_eta}</th><th>{th_steps}</th><th>{th_clip}</th>
+          </tr>
+        </thead>
+        <tbody>{''.join(leaderboard_rows)}</tbody>
+      </table>
+    </details>
+    <section>
+      <h2>Top model architectures</h2>
+      <p class="hint">Hover parameter names for short explainers.</p>
       <div class="arch-grid">{''.join(arch_cards)}</div>
     </section>
-    <section>
-      <h2>Hyperparameter glossary</h2>
-      <p style="font-size:0.85rem; color:var(--muted);">
-        What each tuned parameter controls in the predictive-coding transformer.
-      </p>
-      <table>
-        <thead><tr><th>Parameter</th><th>Meaning</th></tr></thead>
-        <tbody>
-          {''.join(
-              f'<tr><td><code>{html.escape(k)}</code></td>'
-              f'<td style="color:var(--muted);">{html.escape(v)}</td></tr>'
-              for k, v in PARAM_GLOSSARY.items()
-          )}
-        </tbody>
-      </table>
-    </section>
+    {trial_section}
+    <div id="theory">{_theory_section_html()}</div>
     <section>
       <h2>Background</h2>
-      <p style="font-size:0.85rem; color:var(--muted);">
-        This work builds on our earlier results with conventional (non-PC) transformers for glucose forecasting
-        at <a href="https://github.com/GlucoseDAO/glucose-forecasting" style="color:var(--accent);"
-        >GlucoseDAO/glucose-forecasting</a>. Here we replace the standard forward pass with
-        <strong>predictive coding (PC)</strong> — an inner optimisation loop where each layer maintains its
-        own "belief" about what the input should look like, computes a prediction error, and iteratively
-        refines its activations before the outer weight update. This makes training more biologically
-        plausible and can improve generalisation.
-      </p>
-      <p style="font-size:0.85rem; color:var(--muted);">
-        We also explore a <strong>Hopfield extension</strong> — adding a content-addressable associative
-        memory layer (Storkey Hopfield network) that can store and recall learned glucose dynamics such as
-        meal responses, exercise patterns, and dawn phenomenon. The Hopfield memory gives the model an
-        explicit pattern-recall mechanism beyond what attention alone provides.
+      <p class="hint">
+        Builds on <a href="https://github.com/GlucoseDAO/glucose-forecasting" style="color:var(--accent);">GlucoseDAO/glucose-forecasting</a>.
+        Here the forward pass uses <strong>predictive coding (PC)</strong>: each layer holds a belief,
+        computes a prediction error, and refines activations before the outer weight update.
       </p>
     </section>
     <section>
       <h2>How the model works</h2>
       <div class="chart">{_svg_architecture_diagram()}</div>
-      <p style="font-size:0.85rem; color:var(--muted); margin-top:12px;">
-        The <strong>energy function</strong> at each PC node determines how prediction errors are penalised.
-        Tuning searches both Gaussian (standard MSE) and Huber (robust to outliers) energy variants,
-        along with SGD vs Adam inference optimisers and incremental PC (IPC) on/off.
-      </p>
       <div class="chart">{_svg_energy_comparison()}</div>
     </section>
-    <section>
-      <h2>Limitations</h2>
-      <ul style="font-size:0.85rem; color:var(--muted);">
-        <li><strong>Single participant data</strong> — we started only 1.5 days before the deadline,
-          so we used only Livia's personal CGM data rather than training across multiple participants.</li>
-        <li><strong>Glucose-only input</strong> — only continuous glucose values are fed to the model.
-          Carbohydrate intake, heart rate, step count, and other covariates that are available in the
-          full dataset are not included.</li>
-        <li><strong>Limited tuning budget</strong> — the tight timeline restricted the number of Optuna
-          trials and hyperparameter ranges we could explore.</li>
-      </ul>
-    </section>
-    <section>
+    <section id="how-to-run">
       <h2>How to run</h2>
-      <h3 style="font-size:0.95rem;">PC Transformer tuning (this report)</h3>
-      <p style="font-size:0.85rem; color:var(--muted);">
-        Searches both Gaussian and Huber energy, SGD and Adam inference,
-        IPC on/off, and all architecture params. Default: 32 trials, Hyperband pruning.
-      </p>
       <table style="font-size:0.85rem;">
         <tbody>
-          <tr><td style="color:var(--muted);">Start tuning</td>
+          <tr><td style="color:var(--muted);">Install (CPU)</td>
+            <td><code>uv sync --extra glucose</code></td></tr>
+          <tr><td style="color:var(--muted);">Install (GPU / WSL)</td>
+            <td><code>uv sync --extra glucose --extra cuda12</code></td></tr>
+          <tr><td style="color:var(--muted);">Train PC transformer</td>
+            <td><code>uv run glucose-transformer</code></td></tr>
+          <tr><td style="color:var(--muted);">Epoch Optuna (default)</td>
             <td><code>uv run glucose-transformer-tune run</code></td></tr>
-          <tr><td style="color:var(--muted);">Custom trial count</td>
-            <td><code>uv run glucose-transformer-tune run --n-trials 64</code></td></tr>
-          <tr><td style="color:var(--muted);">More parallel workers</td>
-            <td><code>uv run glucose-transformer-tune run --n-trials 64 --max-workers 4</code></td></tr>
-          <tr><td style="color:var(--muted);">Custom run directory</td>
-            <td><code>uv run glucose-transformer-tune run --run-dir runs/my_experiment --study-name my_study</code></td></tr>
-          <tr><td style="color:var(--muted);">Adjust epochs/patience</td>
-            <td><code>uv run glucose-transformer-tune run --max-epochs 20 --patience 5</code></td></tr>
-          <tr><td style="color:var(--muted);">Resume interrupted run</td>
-            <td><code>uv run glucose-transformer-tune run</code> (Optuna journal auto-resumes)</td></tr>
+          <tr><td style="color:var(--muted);">Update-budget Optuna</td>
+            <td><code>uv run glucose-transformer-tune-update-budget run</code></td></tr>
           <tr><td style="color:var(--muted);">Regenerate this report</td>
             <td><code>uv run python scripts/generate_glucose_tuning_report.py --format all</code></td></tr>
-        </tbody>
-      </table>
-      <h3 style="font-size:0.95rem; margin-top:1.2rem;">Hopfield variant tuning</h3>
-      <p style="font-size:0.85rem; color:var(--muted);">
-        Searches Hopfield memory placement (baseline / projection / embed-storkey / forecast-storkey)
-        and strength. Same PC dynamics search.
-      </p>
-      <table style="font-size:0.85rem;">
-        <tbody>
-          <tr><td style="color:var(--muted);">Start Hopfield tuning</td>
-            <td><code>uv run glucose-hopfield-tune run</code></td></tr>
-          <tr><td style="color:var(--muted);">Custom trial count</td>
-            <td><code>uv run glucose-hopfield-tune run --n-trials 48 --max-workers 3</code></td></tr>
-          <tr><td style="color:var(--muted);">Regenerate Hopfield report</td>
-            <td><code>uv run python scripts/generate_glucose_hopfield_tuning_report.py --format all</code></td></tr>
-        </tbody>
-      </table>
-      <h3 style="font-size:0.95rem; margin-top:1.2rem;">All reports</h3>
-      <table style="font-size:0.85rem;">
-        <tbody>
-          <tr><td style="color:var(--muted);">Generate all reports</td>
+          <tr><td style="color:var(--muted);">All studies + master</td>
             <td><code>uv run python scripts/generate_all_glucose_reports.py --format all</code></td></tr>
+          <tr><td style="color:var(--muted);">Master report only</td>
+            <td><code>uv run python scripts/generate_glucose_master_report.py</code></td></tr>
         </tbody>
       </table>
     </section>
   </main>
+  <script>
+    const DATA = {charts_json};
+    const tickColor = "#9aa7b8";
+    const gridColor = "#243041";
+    const common = {{
+      responsive: true,
+      maintainAspectRatio: true,
+      interaction: {{ mode: "nearest", intersect: false }},
+      plugins: {{
+        legend: {{
+          display: true,
+          labels: {{ color: tickColor, boxWidth: 12, usePointStyle: true }},
+        }},
+        tooltip: {{
+          callbacks: {{
+            label: (ctx) => {{
+              const y = ctx.parsed.y;
+              const x = ctx.parsed.x ?? ctx.label;
+              if (y == null) return `${{ctx.dataset.label}}: n/a`;
+              return `${{ctx.dataset.label}}: ${{y.toFixed(3)}} mg/dL @ ${{x}}`;
+            }},
+          }},
+        }},
+      }},
+      scales: {{
+        x: {{
+          ticks: {{ color: tickColor }},
+          grid: {{ color: gridColor }},
+          title: {{ display: true, color: tickColor }},
+        }},
+        y: {{
+          ticks: {{ color: tickColor }},
+          grid: {{ color: gridColor }},
+          title: {{ display: true, text: "MAE (mg/dL)", color: tickColor }},
+        }},
+      }},
+    }};
+
+    new Chart(document.getElementById("barChart"), {{
+      type: "bar",
+      data: {{
+        labels: DATA.bar.labels,
+        datasets: [{{
+          label: "Best val MAE (mg/dL)",
+          data: DATA.bar.values,
+          backgroundColor: DATA.bar.colors,
+          borderRadius: 4,
+        }}],
+      }},
+      options: {{
+        ...common,
+        plugins: {{
+          ...common.plugins,
+          annotation: DATA.bar.bestMae == null ? {{}} : {{
+            annotations: {{
+              bestLine: {{
+                type: "line",
+                yMin: DATA.bar.bestMae,
+                yMax: DATA.bar.bestMae,
+                borderColor: "#3dd68c",
+                borderWidth: 2,
+                borderDash: [6, 4],
+                label: {{
+                  display: true,
+                  content: `Best ${{DATA.bar.bestMae.toFixed(2)}}`,
+                  position: "end",
+                  backgroundColor: "#121820",
+                  color: "#3dd68c",
+                }},
+              }},
+            }},
+          }},
+        }},
+        scales: {{
+          ...common.scales,
+          x: {{
+            ...common.scales.x,
+            title: {{ display: true, text: "Trial", color: tickColor }},
+          }},
+          y: {{
+            ...common.scales.y,
+            suggestedMin: 18,
+            suggestedMax: 50,
+          }},
+        }},
+      }},
+    }});
+
+    new Chart(document.getElementById("lineChart"), {{
+      type: "line",
+      data: {{ datasets: DATA.lines.datasets }},
+      options: {{
+        ...common,
+        scales: {{
+          x: {{
+            type: "linear",
+            ticks: {{ color: tickColor }},
+            grid: {{ color: gridColor }},
+            title: {{ display: true, text: DATA.lines.xTitle || "Update", color: tickColor }},
+          }},
+          y: {{
+            ...common.scales.y,
+            suggestedMin: 18,
+            suggestedMax: 40,
+          }},
+        }},
+      }},
+    }});
+
+    if (DATA.confirm) {{
+      new Chart(document.getElementById("confirmChart"), {{
+        type: "line",
+        data: {{
+          labels: DATA.confirm.labels,
+          datasets: [{{
+            label: "Val MAE (mg/dL)",
+            data: DATA.confirm.values,
+            borderColor: "#3dd68c",
+            backgroundColor: "rgba(61,214,140,0.15)",
+            fill: true,
+            tension: 0.25,
+            pointRadius: 4,
+            pointHoverRadius: 7,
+          }}],
+        }},
+        options: {{
+          ...common,
+          scales: {{
+            x: {{
+              ...common.scales.x,
+              title: {{ display: true, text: "Epoch", color: tickColor }},
+            }},
+            y: {{
+              ...common.scales.y,
+              suggestedMin: 18,
+              suggestedMax: 34,
+            }},
+          }},
+        }},
+      }});
+    }}
+
+    const trialChartById = {{}};
+    (DATA.trialCharts || []).forEach((tc) => {{
+      const el = document.getElementById(tc.id);
+      if (!el || !tc.data.length) return;
+      trialChartById[tc.id] = new Chart(el, {{
+        type: "line",
+        data: {{
+          datasets: [{{
+            label: tc.label,
+            data: tc.data,
+            borderColor: tc.color,
+            backgroundColor: tc.color,
+            tension: 0.2,
+            pointRadius: 3,
+            pointHoverRadius: 6,
+          }}],
+        }},
+        options: {{
+          ...common,
+          plugins: {{
+            ...common.plugins,
+            legend: {{ display: true, labels: {{ color: tickColor }} }},
+          }},
+          scales: {{
+            x: {{
+              type: "linear",
+              ticks: {{ color: tickColor }},
+              grid: {{ color: gridColor }},
+              title: {{ display: true, text: tc.xTitle, color: tickColor }},
+            }},
+            y: {{
+              ...common.scales.y,
+              title: {{ display: true, text: "Val MAE (mg/dL)", color: tickColor }},
+            }},
+          }},
+        }},
+      }});
+    }});
+    document.querySelectorAll("details.trial-card").forEach((det) => {{
+      det.addEventListener("toggle", () => {{
+        if (!det.open) return;
+        det.querySelectorAll("canvas").forEach((canvas) => {{
+          const chart = trialChartById[canvas.id];
+          if (chart) chart.resize();
+        }});
+      }});
+    }});
+  </script>
 </body>
 </html>
 """
@@ -1526,7 +1957,7 @@ def main(
         md_path.write_text(md_text, encoding="utf-8")
         typer.echo(f"wrote {md_path}")
         resolved = _resolve_study_name(run_dir, study_name)
-        docs_md = Path(f"docs/reports/{resolved}_progress.md")
+        docs_md = Path(f"docs/reports/old/{resolved}_progress.md")
         docs_md.parent.mkdir(parents=True, exist_ok=True)
         docs_md.write_text(md_text, encoding="utf-8")
         typer.echo(f"wrote {docs_md}")
@@ -1536,7 +1967,7 @@ def main(
         html_path.write_text(html_text, encoding="utf-8")
         typer.echo(f"wrote {html_path}")
         resolved = _resolve_study_name(run_dir, study_name)
-        docs_html = Path(f"docs/reports/{resolved}_progress.html")
+        docs_html = Path(f"docs/reports/old/{resolved}_progress.html")
         docs_html.parent.mkdir(parents=True, exist_ok=True)
         docs_html.write_text(html_text, encoding="utf-8")
         typer.echo(f"wrote {docs_html}")
