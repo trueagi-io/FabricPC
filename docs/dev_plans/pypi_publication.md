@@ -194,6 +194,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/trueagi-io/FabricPC"
+Repository = "https://github.com/trueagi-io/FabricPC"
 Documentation = "https://github.com/trueagi-io/FabricPC/blob/main/docs/user_guides/00_index.md"
 Changelog = "https://github.com/trueagi-io/FabricPC/blob/main/CHANGELOG.md"
 Issues = "https://github.com/trueagi-io/FabricPC/issues"
@@ -213,14 +214,14 @@ all = ["fabricpc[tfds,experiments,viz]"]
 
 ### Step 3 — README and installation docs
 
-- README: new user-facing install block (`pip install fabricpc`, `pip install "fabricpc[all]"`, `pip install "fabricpc[all,cuda12]"` / `cuda13`); contributor block keeps clone + `pip install -e ".[all,dev]"`; all relative links converted to absolute `https://github.com/trueagi-io/FabricPC/blob/main/...` URLs; code snippet updated to `from fabricpc.jax_setup import setup_jax`.
+- README: new user-facing install block (`pip install fabricpc`, `pip install "fabricpc[all]"`, `pip install "fabricpc[all,cuda12]"` / `cuda13`); contributor block keeps clone + `pip install -e ".[all,dev]"`; all relative links converted to absolute `https://github.com/trueagi-io/FabricPC/blob/main/...` URLs; code snippet updated to `from fabricpc.jax_setup import setup_jax`. The README currently has no images; if any are added, they need absolute `raw.githubusercontent.com` URLs — PyPI does not render GitHub blob pages as images.
 - Same updates in `docs/user_guides/01_installation.md`, `02_quickstart.md`, `16_troubleshooting.md`.
 
 ### Step 4 — CI
 
 - `.github/workflows/publish.yml`:
   - `on: release: types: [published]` plus `workflow_dispatch` for the TestPyPI rehearsal.
-  - Job `build`: `python -m build`, `twine check dist/*`, upload `dist/` as artifact.
+  - Job `build`: `python -m build`, `twine check dist/*`, upload `dist/` as artifact. On release triggers, a tag–version guard: fail unless the release tag equals `v` + the `Version:` in the built wheel's metadata. `importlib.metadata` keeps `__version__` consistent with `pyproject.toml`, but nothing ties the git tag to either; without the guard a `v0.4.1` release can publish a wheel that reports 0.4.0.
   - Job `smoke`: install the built wheel into a clean environment on Python 3.10 and 3.13, run `python -c "import fabricpc; print(fabricpc.__version__)"`.
   - Job `publish-testpypi` (`workflow_dispatch` only): environment `testpypi`, `permissions: id-token: write`, `pypa/gh-action-pypi-publish@release/v1` with `repository-url: https://test.pypi.org/legacy/`.
   - Job `publish` (release only): environment `pypi`, `permissions: id-token: write`, `pypa/gh-action-pypi-publish@release/v1`.
@@ -239,9 +240,14 @@ all = ["fabricpc[tfds,experiments,viz]"]
 
 1. Merge the pending muPC output-scaling branch to `main`.
 2. Open the packaging PR (Steps 1–5) against `main`; test suite green; merge.
-3. Rehearse: run `publish.yml` via `workflow_dispatch` → TestPyPI; in a clean venv, `pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple fabricpc` and smoke-test.
+3. Rehearse: run `publish.yml` via `workflow_dispatch` → TestPyPI; in a clean venv, `pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple fabricpc` and smoke-test; repeat with `"fabricpc[cpu]"` to confirm backend extras resolve (`jax[cpu]` comes from pypi.org via the extra index). The rehearsal is mandatory: PyPI permanently reserves every (name, version, filename) tuple — even a deleted release cannot be re-uploaded — so a botched production upload burns 0.4.0 forever, while TestPyPI mistakes cost nothing.
 4. Create GitHub release `v0.4.0` on `main` → workflow publishes to pypi.org.
 5. Post-publish check: pypi.org/project/fabricpc renders README, license, and links correctly; `pip install fabricpc` in a clean venv; run the README model-building snippet.
+
+### Post-publish hygiene
+
+- Immediately after the first upload, add a second owner on the pypi.org project: a single-owner project is one lost account from unmaintainable, and PyPI requires a second owner before some project-scoped settings can be changed. PyPI mandates 2FA — store the recovery codes in the org's shared secret storage, not on one person's device.
+- Bad release: **yank, never delete**. Yanking removes the version from default resolution while keeping it installable for anyone who already pinned it; deletion breaks those installs and still does not free the version for re-upload.
 
 ---
 
@@ -253,10 +259,12 @@ all = ["fabricpc[tfds,experiments,viz]"]
 - `setup_jax` contract test (Step 2) passes: platform selection and XLA flags take effect when called after `import jax`, before first computation.
 - Bare-install boundary: without extras, `import fabricpc.tuning` raises `ModuleNotFoundError: optuna` and nothing else breaks.
 - Full pytest suite passes, including the migrated `test_doc_snippets.py`.
-- TestPyPI rehearsal install (release procedure step 3) before the real release.
+- TestPyPI rehearsal install (release procedure step 3), including the `[cpu]` backend-extra resolution check, before the real release.
+- Tag–version guard: the publish workflow fails on a release whose tag does not match the built wheel's version.
 
 ## Alternatives considered (summary)
 
 - **`jax_setup` placement and contract:** Options A–D in §2. A (move + post-import-safe contract) recommended, grounded in the empirical import-timing tests and the eager-`__init__` convention of all JAX-ecosystem peers. B (lazy `__init__`) rejected — no ecosystem precedent, and the constraint it preserves is unnecessary. C/D rejected for namespace pollution / loss of the helper.
 - **Publish mechanism:** Trusted Publishing CI (chosen) vs manual `twine` upload with an API token (rejected: long-lived token management, hand-run releases) vs manual-first-then-CI (unnecessary — pending publishers let CI claim the unclaimed name directly).
 - **Version:** 0.4.0 (chosen: `jax_setup` breaking change + first public release) vs 0.3.3 vs republishing 0.3.2 (rejected: artifact would not match the 0.3.2 changelog entry).
+- **Version single-sourcing:** static `project.version` + CI tag–version guard (chosen) vs deriving the version from the git tag with setuptools-scm (rejected: replaces a one-line CI assertion with build-backend machinery and dev-version noise on untagged checkouts).
