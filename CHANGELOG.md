@@ -1,5 +1,8 @@
 # Changelog
 
+## [unreleased]
+- Fixed scaling bug in muPC for output nodes. Aligned to muPC scaling formula by removing depth term from the output node scaling; readout is applied once to the already-O(1) stream.
+
 ## [0.3.2] - 2026-07-17
 ### New features
 - Convolutional and pooling nodes: `ConvNode` (unified 1D/2D/3D) and the weight-free `MaxPool`/`AvgPool`, tensors in channels-last order. Declared output shapes are validated at `initialize_params` time, before the JIT-compiled forward pass. Demo: `examples/mnist_conv_demo.py`; see `docs/user_guides/10_api_nodes.md`.

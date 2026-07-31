@@ -24,6 +24,13 @@ Scaling is computed per in-edge, based on the target slot's properties:
     at scale 1.0. This preserves the identity mapping that carries signal
     through deep residual networks.
 
+  - Edges into output nodes (out_degree=0, with include_output=True) get
+
+        a = gain / (fan_in * sqrt(K_slot))
+
+    with no depth factor: the readout is applied once to the O(1) stream,
+    not summed L times (muPC Table 1 a_L = 1/N).
+
 Residual depth L is the number of nodes along the longest path that have
 at least one slot with is_skip_connection=True. These are the
 variance-accumulating merge points where skip and compute paths sum.
@@ -123,7 +130,7 @@ class MuPCConfig:
 
     Args:
         include_output: Whether to include output nodes (out_degree=0) in muPC
-            scaling. When True, output nodes get a = 1/(fan_in * sqrt(K))
+            scaling. When True, output nodes get a = gain/(fan_in * sqrt(K))
             (matching jpc reference a_L = 1/N for K=1). When False (default),
             output nodes are excluded and should use standard initialization
             (e.g., Xavier). Use True with MSE/Gaussian energy; False with
@@ -228,7 +235,10 @@ def compute_mupc_scalings(
 
     For output nodes (include_output=True):
 
-        a = gain / (fan_in * sqrt(K_slot * L))
+        a = gain / (fan_in * sqrt(K_slot))
+
+    with no depth factor: the readout is applied once to the O(1) stream,
+    not summed L times (muPC Table 1 a_L = 1/N).
 
     Args:
         nodes: Dictionary mapping node names to finalized NodeBase instances
@@ -324,10 +334,11 @@ def compute_mupc_scalings(
             #   Hidden: a = gain/sqrt(fan_in * K_slot * L)
             #       — K_slot handles multi-input variance amplification per slot
             #       — L bounds total variance growth to (1+1/L)^L ~ e
-            #   Output: a = gain/(fan_in * sqrt(K_slot * L))
-            #       — matches muPC O(1/N) convention
+            #   Output: a = gain/(fan_in * sqrt(K_slot))
+            #       — no depth factor: the readout is applied once to the
+            #         O(1) stream, not summed L times (muPC Table 1 a_L = 1/N)
             if is_output:
-                a = gain / (fan_in * math.sqrt(K_slot * L))
+                a = gain / (fan_in * math.sqrt(K_slot))
             else:
                 a = gain / math.sqrt(fan_in * K_slot * L)
 

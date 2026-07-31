@@ -15,7 +15,7 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from fabricpc.nodes import Linear
+from fabricpc.nodes import Linear, LinearResidual
 from fabricpc.nodes.identity import IdentityNode
 from fabricpc.core.topology import Edge
 from fabricpc.graph_assembly import TaskMap, graph
@@ -189,6 +189,38 @@ class TestMuPCScaling:
         # y: fan_in=20, K=1 -> a = 1/(20 * 1) = 0.05
         edge_key = structure.nodes["y"].node_info.in_edges[0]
         assert abs(scaling.forward_scale[edge_key] - 1.0 / 20) < 1e-10
+
+    def test_include_output_depth_free_with_residual_blocks(self):
+        """Output scale carries no L; hidden scale does (L=2 residual chain)."""
+        x = IdentityNode(shape=(10,), name="x")
+        h1 = Linear(shape=(20,), name="h1", weight_init=MuPCInitializer())
+        r1 = LinearResidual(shape=(20,), name="r1", weight_init=MuPCInitializer())
+        r2 = LinearResidual(shape=(20,), name="r2", weight_init=MuPCInitializer())
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, h1, r1, r2, y],
+            edges=[
+                Edge(source=x, target=h1.slot("in")),
+                Edge(source=h1, target=r1.slot("in")),
+                Edge(source=h1, target=r1.slot("skip")),
+                Edge(source=r1, target=r2.slot("in")),
+                Edge(source=r1, target=r2.slot("skip")),
+                Edge(source=r2, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(eta_infer=0.1, infer_steps=5),
+            scaling=MuPCConfig(include_output=True),
+        )
+        # r1 and r2 carry is_skip_connection slots on the longest path -> L=2.
+        # Hidden r2 "in" edge: fan_in=20, K=1 -> a = 1/sqrt(20 * 1 * 2).
+        r2_scaling = structure.nodes["r2"].node_info.scaling_config
+        assert len(r2_scaling.forward_scale) == 1  # skip edge absent
+        (r2_a,) = r2_scaling.forward_scale.values()
+        assert abs(r2_a - 1.0 / math.sqrt(20 * 2)) < 1e-10
+        # Output y: fan_in=20, K=1 -> a = 1/(20 * sqrt(1)), independent of L.
+        y_scaling = structure.nodes["y"].node_info.scaling_config
+        y_edge = structure.nodes["y"].node_info.in_edges[0]
+        assert abs(y_scaling.forward_scale[y_edge] - 1.0 / 20) < 1e-10
 
 
 # ============================================================================
