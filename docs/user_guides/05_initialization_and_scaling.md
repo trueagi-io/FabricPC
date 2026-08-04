@@ -207,7 +207,7 @@ For edges into output nodes (when `include_output=True`):
 a = gain / (fan_in * sqrt(K_slot))
 ```
 
-The stronger `1/fan_in` scaling (instead of `1/sqrt(fan_in)`) is used because output nodes typically don't have downstream dependencies that would amplify variance. This scaling is optimal for regression tasks with identity activation and Gaussian energy (MSE loss).
+The stronger `1/fan_in` scaling (instead of `1/sqrt(fan_in)`) is a feature-learning requirement: at initialization the readout sums `fan_in` uncorrelated terms (an O(sqrt(fan_in)) sum, giving O(1/sqrt(fan_in)) outputs), but after training the weight updates correlate with the incoming features and the sum grows as O(fan_in), so `1/fan_in` keeps trained outputs O(1). This scaling is optimal for regression tasks with identity activation and Gaussian energy (MSE loss).
 
 The depth factor `L` is absent by design: the hidden `1/sqrt(L)` damps the L branch contributions summed into the residual stream, while the readout is applied once to the already-O(1) stream. This matches the muPC reference output scaling `a_L = 1/N` (Table 1 of arXiv:2505.13124), which carries no depth factor.
 

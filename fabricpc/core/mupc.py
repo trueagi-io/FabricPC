@@ -131,7 +131,8 @@ class MuPCConfig:
     Args:
         include_output: Whether to include output nodes (out_degree=0) in muPC
             scaling. When True, output nodes get a = gain/(fan_in * sqrt(K))
-            (matching jpc reference a_L = 1/N for K=1). When False (default),
+            (matching jpc reference a_L = 1/N for K=1 and gain=1; jpc carries
+            no activation-gain factor). When False (default),
             output nodes are excluded and should use standard initialization
             (e.g., Xavier). Use True with MSE/Gaussian energy; False with
             softmax+CE.

@@ -189,3 +189,112 @@ in above:
   init, τ_ℓ = 1 for hidden layers only, "adapted, rather than derived") and
   jpc `_get_param_scalings` (output `1/N` for the μPC parameterization, no L
   under skip connections). The core change and its rationale stand.
+
+## Scope expansion: remaining uniform-L divergences (2026-08-03; planned, not implemented)
+
+A post-fix review audited the adjacent scaling paths for the same species of
+defect — a depth factor where Depth-μP/μPC place none. The uniform hidden
+rule (`compute_mupc_scalings`: every scalable edge of every non-output node
+carries `a = gain/√(fan_in·K_slot·L)`) diverges from the references in three
+places. Unlike the output fix, correcting these changes shipped skip-graph
+numerics, so they are recorded as expanded scope pending design and
+empirical verification.
+
+### 5. Stream-initializing stem layers are damped
+
+- References: Table 1 gives the first layer `a₁ = N₀^(-1/2)` with no depth
+  factor; jpc's first layer is `1/√D` with or without skip connections. The
+  stem produces the initial residual stream; it is not one of the L branch
+  contributions summed into it.
+- FabricPC damps the first weighted layer by `1/√L` whenever the graph
+  contains any skip merge: the L=2 test graph's stem `h1` gets `1/√(10·2)`
+  (`test_include_output_depth_free_with_residual_blocks`); the ResNet demo's
+  stem ConvNode (`examples/resnet18_cifar10_demo.py:257`, L=8) gets an extra
+  `1/√8`.
+- Consequence: initial stream variance v₀ = 1/L instead of 1. With the
+  per-block recursion v_i = v_{i-1}(1+1/L), the final stream variance is
+  ≈ e/L — vanishing with depth. The inline comment "L bounds total variance
+  growth to (1+1/L)^L ~ e" itself assumes v₀ = 1.
+- Same verification blind spot as Finding 1: the design archive's
+  first-hidden row (`muPC_arbitrary_graph_upgrade_plan.md:88`, "1/√784
+  matches jpc a₁=1/√D") was checked only on an L=1 chain, where the L factor
+  is invisible.
+
+### 6. Branches are damped once per weighted layer; stream projections are damped
+
+- Depth-μP damps each branch contribution once at the merge:
+  stream_ℓ = stream_{ℓ-1} + (1/√L)·branch_ℓ. FabricPC's per-edge rule gives
+  every weighted layer inside a branch its own `1/√L`, so a branch with k
+  weighted layers is damped by L^(−k/2). ResNet demo: two convs per branch
+  (`conv_a`, `conv_b`, `examples/resnet18_cifar10_demo.py:176-194`), L=8 →
+  branch damped 1/8, intended 1/√8.
+- Stream-path projections are damped too: downsample blocks put a weighted
+  1×1 `conv_skip` on the skip path (`:211`); its in-edge is scalable, so it
+  carries `1/√L` although it substitutes for the identity stream path, which
+  Depth-μP leaves undamped.
+- Where the damping currently lives: `SkipConnection`'s single "in" slot is
+  non-scalable (both paths pass at 1.0), so branch damping sits entirely on
+  branch-interior edges. That placement is correct only when the branch has
+  exactly one weighted layer — the configuration the existing L-placement
+  test uses (`test_skip_depth_affects_compute_scaling`).
+
+### 7. Post-stream layers are damped
+
+- Layers after the last merge apply once to the final stream; nothing is
+  summed L times at them. FabricPC still damps them: the ResNet demo's
+  global-pool in-edge is scaled `1/√8`, documented as expected behavior in
+  `04_building_models.md:254`. (The logits Linear is exempt only because
+  `include_output=False` removes it from muPC scaling entirely.)
+
+### Correct placement (design sketch, to be validated)
+
+The `1/√L` belongs once per branch, on the branch contribution entering a
+skip merge. All other scalable edges — stem, branch-interior, stream
+projections, post-stream — get the L-free hidden formula
+`gain/√(fan_in·K_slot)`. Candidate designs:
+
+- **A. Damp at the merge node's compute input.** `LinearResidual` already
+  separates branch ("in") from stream ("skip"); its current
+  `gain/√(fan_in·K·L)` on "in" is then exactly right. `SkipConnection`
+  cannot express this: both paths arrive at one non-scalable "in" slot. It
+  would need a two-slot form (compute + skip) or per-edge annotation, and
+  the compute edge would carry `1/√L` despite the slot's fan_in=1,
+  non-scalable semantics.
+- **B. Damp the last scalable edge feeding a merge.** Identify, per skip
+  merge, the scalable edge whose target node feeds the merge's compute path,
+  and fold `1/√L` into that edge only. No slot API change; needs a
+  definition robust to fan-out (a node feeding both a merge and a non-merge
+  consumer) and to branches whose final hop is weightless.
+- Open question for arbitrary graphs: the references assume one residual
+  stream with a single global L. Graphs with several disjoint or nested
+  streams may need per-merge L (the number of merges on that stream) rather
+  than one global `max(skip_depth, 1)`.
+- Under either design, single-weighted-layer branches keep their current
+  numerics (the damped edge is the same one); the changes surface only at
+  stems, multi-layer branches, stream projections, and post-stream layers.
+
+### Impact
+
+- Shipped numerics change for every skip-graph: `resnet18_cifar10_demo.py`
+  (stem, two-conv branches, downsample projections, post-pool edges) and the
+  StorkeyHopfield depth-comparison arms. The transformer is largely
+  unaffected: block-internal projections scale internally via non-edge
+  weight keys, and it sets `include_output=False`.
+- Empirical gate before landing: paired-depth experiments (paired N-arm
+  runner) comparing uniform-L against the corrected placement at several
+  depths. The archive's jpc comparison
+  (`muPC_arbitrary_graph_upgrade_plan.md:434`) shows depth-factor placement
+  materially affects trainability, so the change must be measured, not only
+  derived.
+
+### Verification (for the future change)
+
+- Unit tests extending the L=2 residual test: stem edge L-free;
+  branch-interior edge L-free (requires a two-weighted-layer branch);
+  merge-site edge damped exactly once; downsample-projection edge L-free;
+  post-stream edge L-free.
+- Deep-variance test: a residual chain at several L asserting final stream
+  variance stays O(1) (the e-bound), which the current stem damping violates
+  (≈ e/L).
+- Fixed-seed before/after runs of `resnet18_cifar10_demo.py` and the
+  StorkeyHopfield arms, reported alongside the paired-depth results.
