@@ -222,7 +222,7 @@ all = ["fabricpc[tfds,experiments,viz]"]
 - `.github/workflows/publish.yml`:
   - `on: release: types: [published]` plus `workflow_dispatch` for the TestPyPI rehearsal.
   - Job `build`: `python -m build`, `twine check dist/*`, upload `dist/` as artifact. On release triggers, a tag–version guard: fail unless the release tag equals `v` + the `Version:` in the built wheel's metadata. `importlib.metadata` keeps `__version__` consistent with `pyproject.toml`, but nothing ties the git tag to either; without the guard a `v0.4.1` release can publish a wheel that reports 0.4.0.
-  - Job `smoke`: install the built wheel into a clean environment on Python 3.10 and 3.13, run `python -c "import fabricpc; print(fabricpc.__version__)"`.
+  - Job `smoke`: matrix over Python {3.10, 3.13} × backend extra {none, cpu, cuda12, cuda13}: install the built wheel with that extra into a clean environment, `pip check`, `python -c "import fabricpc; print(fabricpc.__version__)"`; the cpu leg additionally asserts every `jax.devices()` platform is `cpu`. The cuda legs download the multi-GB nvidia wheel set (acceptable at release cadence) and verify install + import only — GitHub-hosted runners have no GPU; the device-level GPU check lives in §5's backend install matrix.
   - Job `publish-testpypi` (`workflow_dispatch` only): environment `testpypi`, `permissions: id-token: write`, `pypa/gh-action-pypi-publish@release/v1` with `repository-url: https://test.pypi.org/legacy/`.
   - Job `publish` (release only): environment `pypi`, `permissions: id-token: write`, `pypa/gh-action-pypi-publish@release/v1`.
 - `.github/workflows/test.yml`: pytest on ubuntu, CPU JAX, Python 3.10 and 3.13, on push/PR.
@@ -240,9 +240,9 @@ all = ["fabricpc[tfds,experiments,viz]"]
 
 1. Merge the pending muPC output-scaling branch to `main`.
 2. Open the packaging PR (Steps 1–5) against `main`; test suite green; merge.
-3. Rehearse: run `publish.yml` via `workflow_dispatch` → TestPyPI; in a clean venv, `pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple fabricpc` and smoke-test; repeat with `"fabricpc[cpu]"` to confirm backend extras resolve (`jax[cpu]` comes from pypi.org via the extra index). The rehearsal is mandatory: PyPI permanently reserves every (name, version, filename) tuple — even a deleted release cannot be re-uploaded — so a botched production upload burns 0.4.0 forever, while TestPyPI mistakes cost nothing.
+3. Rehearse: run `publish.yml` via `workflow_dispatch` → TestPyPI; in a clean venv, `pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple fabricpc` and smoke-test; then run the PyPI row of §5's backend install matrix — `"fabricpc[cpu]"`, `"fabricpc[cuda12]"`, `"fabricpc[cuda13]"`, each in its own clean venv (jax's coupled wheel sets come from pypi.org via the extra index). The rehearsal is mandatory: PyPI permanently reserves every (name, version, filename) tuple — even a deleted release cannot be re-uploaded — so a botched production upload burns 0.4.0 forever, while TestPyPI mistakes cost nothing.
 4. Create GitHub release `v0.4.0` on `main` → workflow publishes to pypi.org.
-5. Post-publish check: pypi.org/project/fabricpc renders README, license, and links correctly; `pip install fabricpc` in a clean venv; run the README model-building snippet.
+5. Post-publish check: pypi.org/project/fabricpc renders README, license, and links correctly; `pip install fabricpc` in a clean venv; run the README model-building snippet; repeat the PyPI row of §5's backend install matrix against pypi.org.
 
 ### Post-publish hygiene
 
@@ -259,8 +259,29 @@ all = ["fabricpc[tfds,experiments,viz]"]
 - `setup_jax` contract test (Step 2) passes: platform selection and XLA flags take effect when called after `import jax`, before first computation.
 - Bare-install boundary: without extras, `import fabricpc.tuning` raises `ModuleNotFoundError: optuna` and nothing else breaks.
 - Full pytest suite passes, including the migrated `test_doc_snippets.py`.
-- TestPyPI rehearsal install (release procedure step 3), including the `[cpu]` backend-extra resolution check, before the real release.
+- Backend install matrix (below): the PyPI path and the clone path each verified for cpu, cuda12, and cuda13.
 - Tag–version guard: the publish workflow fails on a release whose tag does not match the built wheel's version.
+
+### Backend install matrix
+
+Both install paths must work for each backend. Six cells, one clean venv each:
+
+| | cpu | cuda12 | cuda13 |
+|---|---|---|---|
+| **PyPI wheel** | `pip install "fabricpc[cpu]"` | `pip install "fabricpc[cuda12]"` | `pip install "fabricpc[cuda13]"` |
+| **Clone (editable)** | `git clone` + `pip install -e ".[all,cpu]"` | `pip install -e ".[all,cuda12]"` | `pip install -e ".[all,cuda13]"` |
+
+Pass criteria per cell:
+
+- Resolution and install complete; `pip check` reports no broken requirements.
+- `import fabricpc` succeeds and reports the expected `__version__`.
+- cpu column: `setup_jax()`, then every device in `jax.devices()` has `platform == "cpu"`. Runnable on any machine.
+- cuda columns: the coupled wheel set is installed (`jax-cuda12-plugin` + `jax-cuda12-pjrt` + the nvidia-* wheels, or the cuda13 equivalents); on a host with a working NVIDIA driver, `jax.devices()[0].platform == "gpu"`. Install, `pip check`, and import run on any machine — without a driver, backend initialization falls back to CPU with a warning. The device check requires GPU hardware; this machine's driver is currently unloadable (§2), so run it on a GPU host or record the cell as install-verified only.
+
+When each row runs:
+
+- **Clone row:** on the packaging PR, before any release — it needs no published package.
+- **PyPI row:** at the TestPyPI rehearsal (release step 3) using `-i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple` (jax's coupled wheel sets resolve from pypi.org via the extra index), and again from pypi.org after publishing (release step 5). The publish workflow's smoke job (Step 4) automates the install + import half of this row on every release.
 
 ## Alternatives considered (summary)
 
