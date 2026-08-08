@@ -29,7 +29,8 @@ Scaling is computed per in-edge, based on the target slot's properties:
         a = gain / (fan_in * sqrt(K_slot))
 
     with no depth factor: the readout is applied once to the O(1) stream,
-    not summed L times (muPC Table 1 a_L = 1/N).
+    not summed L times. This matches a_L = 1/N in Table 1 of the muPC
+    paper (arXiv:2505.13124), where N is the readout fan_in.
 
 Residual depth L is the number of nodes along the longest path that have
 at least one slot with is_skip_connection=True. These are the
@@ -239,7 +240,8 @@ def compute_mupc_scalings(
         a = gain / (fan_in * sqrt(K_slot))
 
     with no depth factor: the readout is applied once to the O(1) stream,
-    not summed L times (muPC Table 1 a_L = 1/N).
+    not summed L times. This matches a_L = 1/N in Table 1 of the muPC
+    paper (arXiv:2505.13124), where N is the readout fan_in.
 
     Args:
         nodes: Dictionary mapping node names to finalized NodeBase instances
@@ -337,7 +339,8 @@ def compute_mupc_scalings(
             #       — L bounds total variance growth to (1+1/L)^L ~ e
             #   Output: a = gain/(fan_in * sqrt(K_slot))
             #       — no depth factor: the readout is applied once to the
-            #         O(1) stream, not summed L times (muPC Table 1 a_L = 1/N)
+            #         O(1) stream, not summed L times (a_L = 1/N in Table 1
+            #         of the muPC paper, arXiv:2505.13124)
             if is_output:
                 a = gain / (fan_in * math.sqrt(K_slot))
             else:
