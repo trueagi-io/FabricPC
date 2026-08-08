@@ -190,15 +190,18 @@ in above:
   jpc `_get_param_scalings` (output `1/N` for the μPC parameterization, no L
   under skip connections). The core change and its rationale stand.
 
-## Scope expansion: remaining uniform-L divergences (2026-08-03; planned, not implemented)
+## Scope expansion: remaining uniform-L divergences (2026-08-03; revised 2026-08-08; planned, not implemented)
 
 A post-fix review audited the adjacent scaling paths for the same species of
-defect — a depth factor where Depth-μP/μPC place none. The uniform hidden
-rule (`compute_mupc_scalings`: every scalable edge of every non-output node
-carries `a = gain/√(fan_in·K_slot·L)`) diverges from the references in three
-places. Unlike the output fix, correcting these changes shipped skip-graph
-numerics, so they are recorded as expanded scope pending design and
-empirical verification.
+defect — a depth factor where Depth-μP/μPC place none. The root defect is
+placement: the uniform hidden rule (`compute_mupc_scalings`: every scalable
+edge of every non-output node carries `a = gain/√(fan_in·K_slot·L)`) applies
+L per scalable edge, while Depth-μP places the `1/√L` on exactly one edge
+class — the branch contribution entering a residual-stream merge. Findings
+5-7 are the divergences this produces; findings 8-9 record adjacent defects
+found while settling the design (2026-08-08 review). Unlike the output fix,
+correcting these changes shipped skip-graph numerics, so the change is gated
+on empirical verification.
 
 ### 5. Stream-initializing stem layers are damped
 
@@ -246,42 +249,140 @@ empirical verification.
   `04_building_models.md:254`. (The logits Linear is exempt only because
   `include_output=False` removes it from muPC scaling entirely.)
 
-### Correct placement (design sketch, to be validated)
+### 8. StorkeyHopfield's probe slot is scalable, breaking its pass-through under muPC (latent)
 
-The `1/√L` belongs once per branch, on the branch contribution entering a
-skip merge. All other scalable edges — stem, branch-interior, stream
-projections, post-stream — get the L-free hidden formula
-`gain/√(fan_in·K_slot)`. Candidate designs:
+- StorkeyHopfield merges an identity path and a learned path internally:
+  `z_mu = act(probe/(1+s) + (probe @ W)·s/(1+s) + b)`, where `probe` is the
+  input arriving on the single in-edge, `W` the internally
+  Xavier-initialized (D, D) Hopfield matrix on Hopfield dimension D, and
+  `s` = hopfield_strength.
+- Its "in" slot is scalable by default
+  (`fabricpc/nodes/storkey_hopfield.py:168`) and the node inherits
+  `get_weight_fan_in`, which returns `source_shape[-1]` = D
+  (`fabricpc/nodes/base.py:404-407`). In a muPC graph the probe edge would
+  get `a = gain/√(D·K_slot·L)`; the blend becomes
+  `act(a·probe/(1+s) + (a·probe)@W·s/(1+s))`, so the s=0 pass-through
+  collapses toward `act(0)` and the internally initialized W is scaled a
+  second time.
+- Latent, not shipped: no StorkeyHopfield consumer passes
+  `scaling=MuPCConfig` (checked `examples/storkey_hopfield_demo.py`,
+  `examples/storkey_hopfield_recall.py`,
+  `scripts/storkey_hopfield_diagnostic.py`). It becomes live the first time
+  the node is composed into a muPC graph.
+- Resolution: set `is_variance_scalable=False`, keep
+  `is_skip_connection=False`. The node self-normalizes: the blend
+  coefficients `1/(1+s)` and `s/(1+s)` sum to 1, so stacked StorkeyHopfield
+  nodes do not accumulate variance, and the activation wraps the identity
+  path, so no raw identity stream passes through the node. It must not
+  count toward L — counting it would raise L and over-damp the graph's true
+  merges.
 
-- **A. Damp at the merge node's compute input.** `LinearResidual` already
-  separates branch ("in") from stream ("skip"); its current
-  `gain/√(fan_in·K·L)` on "in" is then exactly right. `SkipConnection`
-  cannot express this: both paths arrive at one non-scalable "in" slot. It
-  would need a two-slot form (compute + skip) or per-edge annotation, and
-  the compute edge would carry `1/√L` despite the slot's fan_in=1,
-  non-scalable semantics.
-- **B. Damp the last scalable edge feeding a merge.** Identify, per skip
-  merge, the scalable edge whose target node feeds the merge's compute path,
-  and fold `1/√L` into that edge only. No slot API change; needs a
-  definition robust to fan-out (a node feeding both a merge and a non-merge
-  consumer) and to branches whose final hop is weightless.
-- Open question for arbitrary graphs: the references assume one residual
-  stream with a single global L. Graphs with several disjoint or nested
-  streams may need per-merge L (the number of merges on that stream) rather
-  than one global `max(skip_depth, 1)`.
-- Under either design, single-weighted-layer branches keep their current
-  numerics (the damped edge is the same one); the changes surface only at
-  stems, multi-layer branches, stream projections, and post-stream layers.
+### 9. L counts declared skip slots, not connected ones
+
+- `_build_slots` (`fabricpc/graph_assembly/graph_construction.py:37-62`)
+  emits every declared slot, with `in_neighbors` possibly empty;
+  `_count_skip_connections_depth` tests
+  `any(s.is_skip_connection for s in node_info.slots.values())`
+  (`mupc.py:209`) without consulting `in_neighbors`.
+- A `LinearResidual` used with no skip edge — its forward tolerates the
+  empty slot (`fabricpc/nodes/linear_residual.py:190-195`) — therefore
+  inflates L for the whole graph. Both the L count and the merge-node rule
+  below must require a connected slot: `len(slot.in_neighbors) > 0`.
+
+### Correct placement: the merge-node rule
+
+The `1/√L` belongs once per branch, applied where the branch joins the
+stream. Rule: a node is a merge node if it has at least one connected
+`is_skip_connection` slot; edges into a merge node's scalable slots get
+`a = gain/√(fan_in·K_slot·L)`; all other scalable edges get the L-free
+`a = gain/√(fan_in·K_slot)`. Consequences:
+
+- `LinearResidual` already has the required slot split (scalable "in",
+  skip "skip"); its "in" formula is unchanged — identical numerics.
+- `SkipConnection` gains the same split: "in" becomes the scalable compute
+  slot (weightless, fan_in=1, so `a = gain/√(K_slot·L)`); a new
+  non-scalable `is_skip_connection=True` "skip" slot receives the stream.
+  This is `LinearResidual`'s slot layout minus the weights. All callers
+  migrate in the same change (no dual-mode form):
+  `examples/resnet18_cifar10_demo.py:196-224` (branch `conv_b` → "in";
+  stream `prev`/`conv_skip` → "skip"), `examples/mupc_demo.py` skip mode,
+  tests `test_skip_connection_unscaled`,
+  `test_skip_depth_affects_compute_scaling`,
+  `test_slot_is_variance_scalable_property`, and the usage example in
+  `skip_connection.py`'s module docstring.
+- Stems, branch-interior edges, stream projections (`conv_skip`), and
+  post-stream edges (global pool) all become L-free — findings 5-7 close
+  under the one rule.
+- Transformer: `MhaResidualNode` and the FFN residual node declare skip
+  slots (`fabricpc/nodes/transformer_v2.py:166-168,344`), so they are merge
+  nodes and their scalable "in" slots keep the L factor — block edges keep
+  current numerics. Only scalable edges into non-merge nodes of the
+  transformer graph lose L.
+- Damping position: for Linear+SkipConnection blocks the `1/√L` moves from
+  the branch layer's in-edge (pre-weight) to the merge's compute edge
+  (post-activation). The magnitude is the same, once per branch; for
+  saturating activations the variance inside the nonlinearity differs.
+  Depth-μP damps post-activation at the merge; jpc damps pre-weight; the
+  two coincide only for identity activations. `LinearResidual` keeps the
+  jpc (pre-weight) position.
+
+Alternatives considered:
+
+- **Damp the last scalable edge feeding a merge (former design B)**: no
+  slot API change, but "last edge before the merge" needs a definition
+  robust to fan-out (a node feeding both a merge and a non-merge consumer
+  would need edge-specific scales) and to branches whose final hop is
+  weightless. Rejected: the merge-node rule reads the same information from
+  slot declarations already in place.
+- **Per-edge skip annotations**: maximally general (any edge can be
+  declared stream or branch), but duplicates what `SlotSpec` already
+  expresses and adds a second annotation surface to keep consistent.
+  Rejected.
+
+Open question for arbitrary graphs (unchanged): the references assume one
+residual stream with a single global L. Graphs with several disjoint or
+nested streams may need per-merge L (the number of merges on that stream)
+rather than one global `max(skip_depth, 1)`.
+
+### Change items (future change)
+
+1. `compute_mupc_scalings`: add the merge-node conditional (L factor only
+   for nodes with a connected `is_skip_connection` slot); change
+   `_count_skip_connections_depth` and the merge predicate to require
+   `len(slot.in_neighbors) > 0` (finding 9).
+2. `SkipConnection`: two-slot form and caller migration as listed above.
+3. `StorkeyHopfield`: "in" slot `is_variance_scalable=False` (finding 8).
+4. Docstrings in `mupc.py`:
+   - `:267-269` (inline comment): states L is the "number of nodes with
+     non-scalable slots along the longest path"; the counted property is
+     `is_skip_connection`, and non-scalable non-skip slots (attention
+     masks) are excluded — pinned by
+     `test_metadata_slot_does_not_inflate_depth`. Wrong about current code;
+     may land immediately, independent of the design change.
+   - `:35-41` (module docstring): factually correct but conflates the
+     flags; restate as: only `is_skip_connection` slots contribute to L;
+     `is_variance_scalable` controls edge scaling, never L.
+   - The module-docstring formula block (`:11-24`) and the
+     `compute_mupc_scalings` docstring take the merge-node conditional when
+     the rule lands.
+5. Docs: `docs/user_guides/04_building_models.md:254-256` documents the
+   ResNet global-pool edge's `1/√8` as expected behavior — wrong under the
+   rule; the hidden-formula parts of
+   `docs/user_guides/05_initialization_and_scaling.md` take the merge-node
+   conditional.
 
 ### Impact
 
-- Shipped numerics change for every skip-graph: `resnet18_cifar10_demo.py`
-  (stem, two-conv branches, downsample projections, post-pool edges) and the
-  StorkeyHopfield depth-comparison arms. The transformer is largely
-  unaffected: block-internal projections scale internally via non-edge
-  weight keys, and it sets `include_output=False`.
+- Among shipped graphs, only `resnet18_cifar10_demo.py` changes numerics
+  (stem, two-conv branches, downsample projections, post-pool edges). The
+  transformer's block edges keep current numerics (merge nodes retain the
+  L factor); only scalable edges into its non-merge nodes change. No
+  StorkeyHopfield consumer uses muPC scaling, so finding 8 changes no
+  shipped run. [2026-08-08 correction: an earlier revision claimed the
+  StorkeyHopfield depth-comparison arms would change; none of those
+  scripts passes `scaling=MuPCConfig`.]
 - Empirical gate before landing: paired-depth experiments (paired N-arm
-  runner) comparing uniform-L against the corrected placement at several
+  runner) comparing uniform-L against the merge-node rule at several
   depths. The archive's jpc comparison
   (`muPC_arbitrary_graph_upgrade_plan.md:434`) shows depth-factor placement
   materially affects trainability, so the change must be measured, not only
@@ -291,10 +392,15 @@ projections, post-stream — get the L-free hidden formula
 
 - Unit tests extending the L=2 residual test: stem edge L-free;
   branch-interior edge L-free (requires a two-weighted-layer branch);
-  merge-site edge damped exactly once; downsample-projection edge L-free;
-  post-stream edge L-free.
+  merge compute edge damped exactly once; downsample-projection edge
+  L-free; post-stream edge L-free.
+- A declared-but-unconnected skip slot (`LinearResidual` with no skip edge)
+  does not inflate L.
+- StorkeyHopfield inside a muPC graph: its in-edge is absent from the
+  per-edge scaling dicts (unscaled), and the s=0 forward reproduces
+  `act(probe)` — the pass-through is preserved.
 - Deep-variance test: a residual chain at several L asserting final stream
   variance stays O(1) (the e-bound), which the current stem damping violates
   (≈ e/L).
-- Fixed-seed before/after runs of `resnet18_cifar10_demo.py` and the
-  StorkeyHopfield arms, reported alongside the paired-depth results.
+- Fixed-seed before/after runs of `resnet18_cifar10_demo.py`, reported
+  alongside the paired-depth results.
