@@ -25,14 +25,15 @@ path. The framework distinguishes two cases:
   * Weightless nodes that still perform a transformation (IdentityNode summing
     multi-input edges, pooling nodes reducing spatial dims) follow the
     IdentityNode convention: override ``get_weight_fan_in`` to return 1. The muPC
-    formula ``a = gain / sqrt(fan_in * K_slot * L)`` then reduces to
-    ``a = gain / sqrt(K_slot * L)`` — compensating only for multi-edge summation
-    variance, not for a non-existent weight matrix.
+    formula ``a = gain / sqrt(fan_in * K_slot)`` then reduces to
+    ``a = gain / sqrt(K_slot)`` — compensating only for multi-edge summation
+    variance, not for a non-existent weight matrix. Pooling nodes declare no
+    skip slots, so they are not merge nodes and carry no depth factor L.
 
-With a single incoming edge in a non-residual graph (K_slot=1, L=1) and
-IdentityActivation (gain=1.0), the scale is exactly 1.0 — a no-op. Returning the
-upstream channel count instead (the base default) would silently attenuate
-activations and gradients through every pool by ``1/sqrt(C_in)``.
+With a single incoming edge (K_slot=1) and IdentityActivation (gain=1.0), the
+scale is exactly 1.0 — a no-op. Returning the upstream channel count instead
+(the base default) would silently attenuate activations and gradients through
+every pool by ``1/sqrt(C_in)``.
 """
 
 from __future__ import annotations
@@ -93,8 +94,8 @@ class _PoolBase(NodeBase):
     def get_weight_fan_in(source_shape: Tuple[int, ...], config: Dict[str, Any]) -> int:
         """No weight matrix — return 1, matching the IdentityNode convention.
 
-        With fan_in=1 the muPC formula ``a = gain / sqrt(fan_in * K_slot * L)``
-        reduces to ``a = gain / sqrt(K_slot * L)`` — compensating only for
+        With fan_in=1 the muPC formula ``a = gain / sqrt(fan_in * K_slot)``
+        reduces to ``a = gain / sqrt(K_slot)`` — compensating only for
         multi-edge summation variance, not for a non-existent weight matrix.
         """
         return 1

@@ -110,7 +110,7 @@ hopfield = StorkeyHopfield(
 | `weight_init` | `InitializerBase` | `XavierInitializer()` | Weight initializer for W matrix |
 | `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
 
-**Slots:** `"in"` (single-input)
+**Slots:** `"in"` (single-input, `is_variance_scalable=False`). The node self-normalizes — the blend coefficients `1/(1+s)` and `s/(1+s)` sum to 1 and W is initialized internally — so muPC leaves the probe edge unscaled; a muPC edge scale would collapse the s=0 pass-through toward `activation(0)` and scale W a second time. The slot is not a skip connection, so the node does not count toward the residual depth L.
 
 **Energy formulation:**
 ```
@@ -133,13 +133,15 @@ where `s = softplus(raw_strength)` if `hopfield_strength=None` (learnable), othe
 
 `fabricpc.nodes.SkipConnection`
 
-Passthrough node for residual/skip paths. Sums all inputs without muPC variance scaling. Functionally identical to `IdentityNode`, but its slot has `is_variance_scalable=False` and `is_skip_connection=True`, telling muPC to leave incoming edges at scale 1.0.
+Weightless merge node for residual architectures. Sums inputs from two slots and passes the sum through: computed branch contributions enter `"in"` (scaled by muPC's once-per-branch depth damping `gain/sqrt(K_slot * L)`), the residual stream enters `"skip"` (unscaled, counts the node toward the residual depth L). This is `LinearResidual`'s slot layout without the weights.
 
 ```python
 from fabricpc.nodes import SkipConnection
 
 skip = SkipConnection(shape=(128,), name="res1")
-# Connect with: Edge(source, skip.slot("in"))
+# Connect with:
+# Edge(branch, skip.slot("in"))     — branch joins the stream (scaled)
+# Edge(stream, skip.slot("skip"))   — residual stream (unscaled)
 ```
 
 **Parameters:**
@@ -152,11 +154,13 @@ skip = SkipConnection(shape=(128,), name="res1")
 | `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
 | `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
 
-**Slots:** `"in"` (multi-input, `is_variance_scalable=False`, `is_skip_connection=True`)
+**Slots:**
+- `"in"` (multi-input, `is_variance_scalable=True`) — branch contributions, scaled `gain/sqrt(K_slot * L)`
+- `"skip"` (multi-input, `is_variance_scalable=False`, `is_skip_connection=True`) — residual stream, unscaled
 
 **muPC fan_in:** Always returns `1` (weightless node).
 
-**Difference from IdentityNode:** IdentityNode's `"in"` slot has `is_variance_scalable=True`, so muPC scales incoming edges by `1/sqrt(K_slot)`. SkipConnection leaves all edges unscaled, preserving the identity mapping through deep residual networks.
+**Difference from IdentityNode:** IdentityNode has a single scalable slot and no skip slot, so it does not count toward the residual depth L and its edges carry no depth factor. SkipConnection's unscaled `"skip"` slot preserves the identity mapping through deep residual networks, and its `"in"` slot applies the once-per-branch `1/sqrt(L)` damping.
 
 ---
 

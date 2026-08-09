@@ -2,6 +2,10 @@
 
 ## [unreleased]
 - Fixed scaling bug in muPC for output nodes. Aligned to muPC scaling formula by removing depth term from the output node scaling; readout is applied once to the already-O(1) stream.
+- muPC depth placement follows the merge-node rule: `1/sqrt(L)` applies only to scalable edges into merge nodes (nodes with a connected `is_skip_connection` slot), damping each branch once where it joins the residual stream. Stems, branch-interior layers, stream projections, and post-stream layers are now L-free; previously every scalable edge carried `1/sqrt(L)`, so the stem-damped stream started at variance 1/L and the final stream variance vanished as e/L with depth.
+- L counts only connected skip slots: a declared-but-unconnected skip slot (e.g. `LinearResidual` without a skip edge) no longer inflates L.
+- **Breaking**: `SkipConnection` now has two slots, matching `LinearResidual`'s layout: branch contributions enter the scalable `"in"` slot (scaled `gain/sqrt(K_slot * L)`), the residual stream enters the new `"skip"` slot (unscaled, counts toward L). Route stream edges to `slot("skip")`.
+- `StorkeyHopfield`'s `"in"` slot is no longer variance-scalable: the node self-normalizes (blend coefficients `1/(1+s)` and `s/(1+s)` sum to 1, W initialized internally), and a muPC edge scale would collapse the s=0 pass-through toward `activation(0)`.
 
 ## [0.3.2] - 2026-07-17
 ### New features

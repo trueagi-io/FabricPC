@@ -48,6 +48,23 @@ strength (inverted-U response to strength).
 
 Use moderate values for hopfield_strength (s) because it scales the hopfield energy term without normalization.
 
+muPC scaling:
+    The "in" slot is not variance-scalable (is_variance_scalable=False), so
+    muPC leaves the probe edge unscaled. The node self-normalizes: the blend
+    coefficients 1/(1+s) and s/(1+s) sum to 1, so z_mu preserves the probe's
+    O(1) variance and stacked StorkeyHopfield nodes do not accumulate
+    variance. W is initialized internally (Xavier on (D, D)) at the scale
+    the blend expects. Were the slot scalable, muPC would apply
+    a = gain/sqrt(D * K_slot * L) to the probe: the s=0 pass-through
+    activation(a * probe) collapses toward activation(0), and the
+    already-normalized W is scaled a second time.
+
+    The slot is also not a skip connection (is_skip_connection=False): the
+    activation wraps the identity path, so no raw identity stream passes
+    through the node. It is not a residual-stream merge and must not count
+    toward the residual depth L — counting it would raise L and over-damp
+    the graph's true merges.
+
 Notation:
     xi^mu = stored Hopfield patterns (absolute states in z-space)
     epsilon = z - mu = PC prediction error (context-dependent residual)
@@ -56,15 +73,15 @@ Notation:
 
 Architecture (internal to forward()):
 
-    probe --+--> probe / (1+s) ------+--> + bias --> activation --> z_mu
-            |                        |
-            +--> (probe @ W) * s/(1+s)
-
-    error = z - z_mu --> PC energy (E_pc) -->  z_latent --> Hopfield energy (E_hop)
-                                                   ^              |
-                                                   |______________|
+    probe ──┬──► probe / (1+s) ──────────┐
+            │                            ├──► + bias ──► activation ──► z_mu
+            └──► (probe @ W) * s/(1+s) ──┘
 
 Recurrency comes from the Hopfield energy gradient during inference steps.
+
+    error = z - z_mu ──► PC energy (E_pc) ──► z_latent ──► Hopfield energy (E_hop)
+                                                 ▲                    │
+                                                 └────────────────────┘
 """
 
 from __future__ import annotations
@@ -164,8 +181,19 @@ class StorkeyHopfield(NodeBase):
 
     @staticmethod
     def get_slots() -> Dict[str, SlotSpec]:
-        """One single-input slot. Input shape must match node output shape (D)."""
-        return {"in": SlotSpec(name="in", is_multi_input=False)}
+        """One single-input slot. Input shape must match node output shape (D).
+
+        Not variance-scalable: the node self-normalizes (the blend
+        coefficients 1/(1+s) and s/(1+s) sum to 1, and W is initialized
+        internally), so a muPC edge scale would collapse the s=0
+        pass-through toward activation(0) and scale W a second time.
+        Not a skip connection: the activation wraps the identity path, so
+        the node is not a residual-stream merge and must not count toward
+        the residual depth L. See the module docstring, "muPC scaling".
+        """
+        return {
+            "in": SlotSpec(name="in", is_multi_input=False, is_variance_scalable=False)
+        }
 
     @staticmethod
     def initialize_params(

@@ -196,7 +196,7 @@ def create_transformer_model(
         edges.append(Edge(source=prev_node, target=new_block.slot("in")))
         edges.append(Edge(source=mask_node, target=new_block.slot("mask")))
         nodes.append(new_skip)
-        edges.append(Edge(source=prev_node, target=new_skip.slot("in")))
+        edges.append(Edge(source=prev_node, target=new_skip.slot("skip")))
         edges.append(Edge(source=new_block, target=new_skip.slot("in")))
         prev_node = new_skip
 

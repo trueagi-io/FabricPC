@@ -115,7 +115,7 @@ muPC achieves this through four complementary scaling mechanisms:
 
 1. **Kaiming fan_in scaling** — normalizes for weight matrix width
 2. **Per-slot in-degree scaling (K_slot)** — normalizes for multiple inputs summing into a slot
-3. **Residual depth scaling (L)** — normalizes for variance accumulation across residual+skip merge points
+3. **Residual depth scaling (L)** — damps each branch contribution once, where it joins the residual stream at a merge node
 4. **Saturative activation compensation** — normalizes gradients for activations like tanh and GELU whose derivatives are < 1
 
 These are combined in a single per-edge scaling factor computed automatically from the graph topology, enabling stable training of networks with 100+ layers.
@@ -166,15 +166,18 @@ muPC computes a scaling factor `a` for each incoming edge based on the target no
   source ──────── edge ──────── target:slot
                     │
                     ↓
-          ┌───────────────────────┐
-          │ is_variance_scalable? │
-          │                       │
-          │  Yes:                 │   No (skip/mask):
-          │  a = gain             │   a = 1.0
-          │     / sqrt(fan_in     │   (pass through)
-          │           * K_slot    │
-          │           * L)        │
-          └───────────────────────┘
+          ┌───────────────────────────┐
+          │ is_variance_scalable?     │
+          │                           │
+          │  Yes, non-merge target:   │   No (skip/mask):
+          │  a = gain                 │   a = 1.0
+          │     / sqrt(fan_in*K_slot) │   (pass through)
+          │                           │
+          │  Yes, merge target:       │
+          │  a = gain                 │
+          │     / sqrt(fan_in*K_slot  │
+          │            * L)           │
+          └───────────────────────────┘
 ```
 
 #### Hidden Nodes
@@ -182,14 +185,17 @@ muPC computes a scaling factor `a` for each incoming edge based on the target no
 For edges into hidden nodes with `is_variance_scalable=True`:
 
 ```
-a = gain / sqrt(fan_in * K_slot * L)
+a = gain / sqrt(fan_in * K_slot)          (non-merge nodes)
+a = gain / sqrt(fan_in * K_slot * L)      (merge nodes)
 ```
 
 where:
 - `gain`: The activation function's variance gain (e.g., `sqrt(5/3)` for tanh, `sqrt(2)` for ReLU)
 - `fan_in`: The weight matrix fan_in (from `get_weight_fan_in()` — see Kaiming Fan_in below)
 - `K_slot`: The in-degree of the **specific slot** receiving this edge (not the whole node's in-degree)
-- `L`: The residual depth — number of nodes with skip connection slots along the longest path (see Residual Depth below)
+- `L`: The residual depth — number of merge nodes along the longest path (see Residual Depth below)
+
+A **merge node** is a node with at least one connected `is_skip_connection` slot — the point where a computed branch joins the residual stream. The `1/sqrt(L)` damps each branch contribution once, at the merge; edges elsewhere — stems, branch-interior layers, stream projections, post-stream layers — carry no depth factor.
 
 This scaling ensures:
 - **Width invariance**: O(1) activations as `fan_in` increases
@@ -227,7 +233,7 @@ Each node class implements `get_weight_fan_in()` to report the input dimension o
 | IdentityNode | 1 | No weight matrix |
 | SkipConnection | 1 | No weight matrix |
 
-For weighted nodes, this is the standard Kaiming convention — the number of input features to each output neuron. For weightless nodes, `fan_in=1` so the formula reduces to `a = gain / sqrt(K_slot * L)`.
+For weighted nodes, this is the standard Kaiming convention — the number of input features to each output neuron. For weightless nodes, `fan_in=1` so the formula reduces to `a = gain / sqrt(K_slot)`, or `a = gain / sqrt(K_slot * L)` at a merge node.
 
 ### Per-Slot In-Degree Scaling (K_slot)
 
@@ -255,14 +261,15 @@ If multiple edges connect to the same scalable slot, each is scaled by `1/sqrt(K
 # Two edges into the same "in" slot: K_slot = 2
 Edge(source=a, target=node.slot("in"))
 Edge(source=b, target=node.slot("in"))
-# Each edge scaled by gain / sqrt(fan_in * 2 * L)
+# Each edge scaled by gain / sqrt(fan_in * 2), times 1/sqrt(L) if the
+# target is a merge node
 ```
 
 ### Residual Depth Scaling (L)
 
 In residual networks, the identity (skip) path preserves signal at scale 1.0 while each residual block adds variance from the compute path. Without depth scaling, total variance grows linearly with the number of blocks.
 
-**L** is the number of nodes with at least one `is_skip_connection=True` slot along the longest path in the graph. It represents the number of variance-accumulating merge points.
+**L** is the number of merge nodes — nodes with at least one **connected** `is_skip_connection=True` slot — along the longest path in the graph. It counts the variance-accumulating points where a computed branch sums into the residual stream.
 
 ```
 How L is counted (ResNet with 3 blocks):
@@ -272,22 +279,24 @@ input ──→ h1 ──→ skip1(+) ──→ h2 ──→ skip2(+) ──→ 
            └────────┘           └────────┘           └────────┘
                 L=1                 L=2                 L=3
 
-Only nodes with is_skip_connection=True slots count toward L.
+Only nodes with connected is_skip_connection slots count toward L.
 Nodes like h1, h2, h3 (no skip slots) do not increment L.
 ```
+
+The `1/sqrt(L)` factor applies only to scalable edges **into merge nodes** — the branch contributions being summed into the stream. All other scalable edges are L-free: the stem (which produces the initial stream), layers inside a branch, weighted projections on the stream path (e.g., a downsample 1×1 conv), and layers after the last merge. Each branch is therefore damped exactly once, at the point where it joins the stream.
 
 | Topology | L | Effect |
 |----------|---|--------|
 | Pure sequential chain | 1 | No depth factor: `a = gain / sqrt(fan_in * K_slot)` |
-| ResNet with D blocks | D | Each block's compute path scaled by `1/sqrt(L)` |
-| Decomposed transformer, depth d | 2d | Two skip-bearing nodes per block |
-| Mixed architecture | max skip depth | Computed from the longest skip-connection path |
+| ResNet with D blocks | D | Each branch scaled by `1/sqrt(L)` at its merge |
+| Decomposed transformer, depth d | 2d | Two merge nodes per block |
+| Mixed architecture | max skip depth | Computed from the longest merge-node path |
 
-In the decomposed transformer (see [Nodes API](10_api_nodes.md)), each block contributes two nodes with a skip-bearing slot — `MhaResidualNode` via `"skip"` and `Mlp2ResidualNode` via `"residual"` — so a depth-`d` model has residual depth `L = 2d`.
+In the decomposed transformer (see [Nodes API](10_api_nodes.md)), each block contributes two merge nodes — `MhaResidualNode` via `"skip"` and `Mlp2ResidualNode` via `"residual"` — so a depth-`d` model has residual depth `L = 2d`. Because these nodes are merges, their scalable `"in"` edges carry the L factor.
 
-With L in the denominator, each residual block contributes `O(1/L)` variance. Over L blocks, total variance grows as `(1 + 1/L)^L`, which is bounded by approximately **e** (~2.72) — stable regardless of depth.
+With the L-free stem producing a unit-variance stream, each merge adds `O(1/L)` variance and the total grows as `(1 + 1/L)^L`, which is bounded by approximately **e** (~2.72) — stable regardless of depth.
 
-**What counts toward L**: Only slots with `is_skip_connection=True`. Slots that are merely non-scalable (like attention mask slots with `is_variance_scalable=False, is_skip_connection=False`) do **not** contribute to L.
+**What counts toward L**: Only connected slots with `is_skip_connection=True`. `is_variance_scalable` controls edge scaling, never L: slots that are merely non-scalable (like attention mask slots with `is_variance_scalable=False, is_skip_connection=False`) do **not** contribute. Neither does a declared-but-unconnected skip slot (e.g., a `LinearResidual` used without a skip edge) — it neither raises L nor makes its node a merge.
 
 ### Activation Gain and Jacobian Compensation
 
@@ -389,7 +398,10 @@ Each input slot on a node has two muPC-relevant flags:
 
 #### SkipConnection Node
 
-`SkipConnection` is a passthrough node identical to `IdentityNode` in behavior — it sums inputs and passes them through. Its slot has `is_variance_scalable=False` and `is_skip_connection=True`, so muPC leaves all incoming edges at scale 1.0.
+`SkipConnection` is a weightless merge node that sums inputs from two slots and passes the sum through — `LinearResidual`'s slot layout without the weights:
+
+- **"in"** (`is_variance_scalable=True`): receives computed branch contributions; each edge is scaled by `gain / sqrt(K_slot * L)` (fan_in=1), the once-per-branch depth damping applied where the branch joins the stream.
+- **"skip"** (`is_skip_connection=True`): receives the residual stream; edges pass through at scale 1.0. Connecting this slot counts the node toward L.
 
 ```python
 from fabricpc.nodes import Linear, SkipConnection
@@ -399,9 +411,9 @@ linear = Linear(shape=(128,), activation=TanhActivation(),
 skip = SkipConnection(shape=(128,), name="res1")
 
 edges = [
-    Edge(source=prev, target=linear.slot("in")),   # scaled by muPC
-    Edge(source=prev, target=skip.slot("in")),      # unscaled (skip)
-    Edge(source=linear, target=skip.slot("in")),    # unscaled (skip)
+    Edge(source=prev, target=linear.slot("in")),    # branch (scaled)
+    Edge(source=prev, target=skip.slot("skip")),    # stream (unscaled)
+    Edge(source=linear, target=skip.slot("in")),    # branch joins stream
 ]
 ```
 

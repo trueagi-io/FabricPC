@@ -190,7 +190,7 @@ in above:
   jpc `_get_param_scalings` (output `1/N` for the μPC parameterization, no L
   under skip connections). The core change and its rationale stand.
 
-## Scope expansion: remaining uniform-L divergences (2026-08-03; revised 2026-08-08; planned, not implemented)
+## Scope expansion: remaining uniform-L divergences (2026-08-03; revised 2026-08-08; implemented 2026-08-08 — empirical gate still pending)
 
 A post-fix review audited the adjacent scaling paths for the same species of
 defect — a depth factor where Depth-μP/μPC place none. The root defect is
@@ -344,7 +344,7 @@ residual stream with a single global L. Graphs with several disjoint or
 nested streams may need per-merge L (the number of merges on that stream)
 rather than one global `max(skip_depth, 1)`.
 
-### Change items (future change)
+### Change items (implemented 2026-08-08)
 
 1. `compute_mupc_scalings`: add the merge-node conditional (L factor only
    for nodes with a connected `is_skip_connection` slot); change
@@ -388,7 +388,7 @@ rather than one global `max(skip_depth, 1)`.
   materially affects trainability, so the change must be measured, not only
   derived.
 
-### Verification (for the future change)
+### Verification (unit tests implemented 2026-08-08; empirical runs pending)
 
 - Unit tests extending the L=2 residual test: stem edge L-free;
   branch-interior edge L-free (requires a two-weighted-layer branch);

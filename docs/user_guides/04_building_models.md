@@ -147,20 +147,20 @@ Edge(source=source_node, target=hopfield.slot("in"))
 
 ### SkipConnection
 
-A passthrough node for residual/skip paths with no learnable parameters.
+A passthrough merge node for residual architectures with no learnable parameters. It sums inputs from two slots and passes the sum through:
 
-**Input slots**: `"in"` (multi-input, `is_variance_scalable=False`)
+**Input slots**:
+- `"in"` (multi-input, `is_variance_scalable=True`): receives computed branch contributions. The node is weightless (fan_in=1), so muPC scales each edge by `gain / sqrt(K_slot * L)` — the once-per-branch depth damping, applied where the branch joins the stream.
+- `"skip"` (multi-input, `is_skip_connection=True`): receives the residual stream. Edges pass through at scale 1.0, preserving the identity mapping that carries signal through deep networks. Connecting this slot makes the node a merge node and counts it toward the residual depth L.
 
-SkipConnection is functionally identical to IdentityNode — it sums inputs and passes them through. The key difference is that its slot has `is_variance_scalable=False` and `is_skip_connection=True`, which tells muPC to leave incoming edges unscaled (scale 1.0). This preserves the identity mapping that carries signal through deep residual networks.
-
-Use SkipConnection for residual/skip paths. Use IdentityNode for summation points where all inputs are independent and should be variance-scaled.
+This is LinearResidual's slot layout without the weights. Use SkipConnection to merge a computed branch residual into the residual stream. Use IdentityNode for summation points where all inputs are independent and should be variance-scaled without depth damping.
 
 ```
 prev ──→ Linear(h1) ──→ SkipConnection(res1) ──→ next
-  │       (transform)     (sums at scale 1.0)
-  │                              ↑
+  │       (branch)      "in": × 1/sqrt(L)
+  │                              ↑ "skip": × 1.0
   └──────────────────────────────┘
-           (identity skip, unscaled)
+           (residual stream, unscaled)
 ```
 
 ```python
@@ -171,9 +171,9 @@ linear = Linear(shape=(128,), activation=TanhActivation(),
 skip = SkipConnection(shape=(128,), name="res1")
 
 edges = [
-    Edge(source=prev, target=linear.slot("in")),   # transform path (scaled)
-    Edge(source=prev, target=skip.slot("in")),      # skip path (unscaled)
-    Edge(source=linear, target=skip.slot("in")),    # transform -> sum (unscaled)
+    Edge(source=prev, target=linear.slot("in")),    # branch (scaled)
+    Edge(source=prev, target=skip.slot("skip")),    # stream (unscaled)
+    Edge(source=linear, target=skip.slot("in")),    # branch joins stream
 ]
 ```
 
@@ -251,7 +251,7 @@ avgpool = AvgPool(shape=(256,), name="avgpool", global_pool=True)
 # (batch, H, W, 256) -> (batch, 256), then a Linear classifier head
 ```
 
-Pooling nodes are weightless, so their muPC fan_in is 1. The incoming-edge scale is still `a = gain / sqrt(fan_in * K_slot * L)` — `gain` the activation gain (1 for the identity default), `K_slot` the number of edges arriving at the slot, `L` the graph's residual depth — so fan_in = 1 removes only the weight-matrix factor. In `examples/resnet18_cifar10_demo.py` (`L = 8`) the global pool's incoming edge is scaled by `1/sqrt(8) ≈ 0.35`; the scale is exactly 1.0 only when `K_slot = 1` and `L = 1`. Constructor tables: [Nodes API](10_api_nodes.md).
+Pooling nodes are weightless, so their muPC fan_in is 1, and they declare no skip slots, so they are not merge nodes and their incoming edges carry no depth factor: `a = gain / sqrt(K_slot)` — `gain` the activation gain (1 for the identity default), `K_slot` the number of edges arriving at the slot. In `examples/resnet18_cifar10_demo.py` the global pool's incoming edge is scaled by 1.0 (`K_slot = 1`); the residual depth L damps only scalable edges into merge nodes. Constructor tables: [Nodes API](10_api_nodes.md).
 
 ### TransformerBlock
 
