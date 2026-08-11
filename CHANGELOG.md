@@ -127,6 +127,18 @@ Internal infrastructure release: unified autodiff gradient path, muPC scaling li
 ## [0.2.1] - 2025-12-04
 - Node autograd is the default behavior now; can override by subclassing a node and implementing manual gradients
 - N-dimensional tensor support: breaking changes to shape conventions
-  - Linear nodes: shape=(features,) e.g., (128,) for 128-dimensional vector
-  - 2D Conv nodes: shape=(H, W, C) e.g., (28, 28, 64) for 28x28 image with 64 channels (NHWC)
+- Linear nodes: shape=(features,) e.g., (128,) for 128-dimensional vector
+- 2D Conv nodes: shape=(H, W, C) e.g., (28, 28, 64) for 28x28 image with 64 channels (NHWC)
 - Plugin architecture for custom nodes with two choices for registration: decorator or setuptools entry points
+
+### Fixed
+- `[tfds]` installs `tensorflow-cpu` on Linux instead of `tensorflow`. The default
+    Linux wheel is a CUDA build that initializes its own CUDA loader at import time,
+    which conflicts with JAX's CUDA stack and caused JAX to fall back to CPU with a
+    spurious "Outdated cuBLAS installation" error at the first TFDS data load.
+
+    Upgrade note: `tensorflow` and `tensorflow-cpu` install the same `tensorflow`
+    package directory, so pip will not cleanly replace one with the other. Existing
+    environments must run `pip uninstall -y tensorflow` before reinstalling the extra.
+
+	
