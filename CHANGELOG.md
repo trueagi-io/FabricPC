@@ -1,14 +1,22 @@
 # Changelog
 
 ## [unreleased]
-- Fixed scaling bug in muPC for output nodes. Aligned to muPC scaling formula by removing depth term from the output node scaling; readout is applied once to the already-O(1) stream.
-- muPC depth placement follows the merge-node rule: `1/sqrt(L)` applies only to scalable edges into merge nodes (nodes with a connected `is_skip_connection` slot), damping each branch once where it joins the residual stream. Stems, branch-interior layers, stream projections, and post-stream layers are now L-free; previously every scalable edge carried `1/sqrt(L)`, so the stem-damped stream started at variance 1/L and the final stream variance vanished as e/L with depth.
-- L counts only connected skip slots: a declared-but-unconnected skip slot (e.g. `LinearResidual` without a skip edge) no longer inflates L.
-- **Breaking**: `SkipConnection` now has two slots, matching `LinearResidual`'s layout: branch contributions enter the scalable `"in"` slot (scaled `gain/sqrt(K_slot * L)`), the residual stream enters the new `"skip"` slot (unscaled, counts toward L). Route stream edges to `slot("skip")`. Graph construction now raises if a `SkipConnection`'s `"skip"` slot receives no edge — the pre-migration layout would otherwise train quietly wrong, with the node dropping out of the depth count and both stream and branch scaled `1/sqrt(2)`. `SlotSpec` gained `require_connected` to express this.
-- **Breaking**: `NodeBase.get_weight_fan_in(source_shape, config) -> int` is replaced by `get_variance_factor(source_shape, config, weight_init) -> float`: the factor by which a node's input transform multiplies input variance, which muPC undoes via `a = gain/sqrt(v * K_slot)`. Weighted nodes return the Kaiming fan_in exactly as before, so their scaling is unchanged. The float return lets a transform that *reduces* variance report `v < 1` and be amplified rather than attenuated; the `weight_init` argument lets a node with internally-built weights derive its own factor. Custom nodes must rename the method and add the third parameter.
-- `AvgPool` now reports `v = 1/n` for `n` pooled cells (window volume, or all spatial dimensions under `global_pool=True`), so muPC scales its in-edge by `sqrt(n)`. Previously it reported 1 and every average pool attenuated the signal reaching the next layer by up to `1/sqrt(n)` — `1/4` for the global 4x4 pool in `examples/resnet18_cifar10_demo.py`. `MaxPool` keeps `v = 1`: the variance of a max depends on the input distribution (at a 2x2 window the ratio is 0.49 for Gaussian inputs but 1.32 for the ReLU outputs a max pool actually receives), so no distribution-free constant exists, and its mean shift is not correctable by any edge scale.
-- `StorkeyHopfield` now reports its blend's variance factor `v(s) = (1 + s^2 r)/(1 + s)^2` instead of inheriting `fan_in = D`, where `r = Var(probe @ W)/Var(probe)` is derived from `weight_init` and the symmetry constraints. The blend coefficients `1/(1+s)` and `s/(1+s)` sum to 1, but the two terms are near-independent so their variances add in quadrature and the blend shrinks variance — down to `r/(1+r) = 1/3` under the default initialization, which compounds through a chain of these nodes. With the factor reported, muPC holds the node at O(1) variance at any strength and depth, and the `s=0` identity blend is scaled by `gain` alone rather than collapsing toward `activation(0)`.
-- `InitializerBase.element_variance(shape, config)` returns the per-element variance each initializer draws, in closed form; implemented for all built-ins. `StorkeyHopfield` uses it to derive `r` rather than assuming Xavier.
+muPC scaling correctness release. Deep residual and pooling graphs previously trained with an attenuated signal; activations, losses, and tuned learning rates will shift. See `docs/user_guides/05_initialization_and_scaling.md`.
+
+### Breaking changes
+- `SkipConnection` gained a `"skip"` slot: route the residual stream there, branch contributions to `"in"`. Construction raises when `"skip"` is unconnected (new `SlotSpec.require_connected`).
+- `NodeBase.get_weight_fan_in` is replaced by `get_variance_factor(source_shape, config, weight_init) -> float`. Custom nodes must rename and accept the third argument; weighted nodes keep their existing scaling. Migration: `docs/user_guides/06_custom_nodes.md`.
+
+### muPC scaling corrections
+- Depth damping `1/sqrt(L)` now applies only to branch edges entering merge nodes. Previously every scalable edge carried it, so stream variance vanished as `e/L` with depth.
+- Stems, branch interiors, stream projections, post-stream layers, and output-node readouts are now L-free — each reads a stream already held at O(1).
+- `L` counts only connected skip slots, so a declared-but-unconnected slot (`LinearResidual` with no skip edge) no longer inflates the residual depth.
+- `AvgPool` reports `v = 1/n` over its `n` pooled cells, so muPC amplifies its in-edge by `sqrt(n)`; previously each pool attenuated by up to `1/sqrt(n)`.
+- `MaxPool` is unchanged at `v = 1`: the variance of a max depends on the input distribution, so no distribution-free correction exists.
+- `StorkeyHopfield` reports its blend's variance factor rather than `fan_in`. The near-independent blend terms previously shrank variance to `1/3` at default init, compounding across chained nodes.
+
+### New
+- `InitializerBase.element_variance(shape, config)` returns the per-element variance an initializer draws, in closed form; implemented for all built-ins. `StorkeyHopfield` derives its factor from it. `StorkeyHopfield` uses it to derive `r` rather than assuming Xavier.
 
 ## [0.3.2] - 2026-07-17
 ### New features

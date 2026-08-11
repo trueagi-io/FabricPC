@@ -6,13 +6,16 @@ each appended in place rather than rewritten:
 
 1. **Output node** (2026-07-24, landed) — findings 1-4. The readout carried a
    `√L` that Depth-μP/μPC do not give it.
-2. **Depth-factor placement** (2026-08-03/08, landed; empirical gate pending) —
-   findings 5-9. `1/√L` was applied per scalable edge instead of once per branch
-   at the merge.
-3. **Variance-reducing transforms** (2026-08-09, landed; empirical gate pending)
-   — findings 10-16. Nodes whose transform shrinks input variance were never
-   compensated, because the hook they report through could not express a
-   reduction.
+2. **Depth-factor placement** (2026-08-03/08, landed) — findings 5-9. `1/√L`
+   was applied per scalable edge instead of once per branch at the merge.
+3. **Variance-reducing transforms** (2026-08-09, landed) — findings 10-16.
+   Nodes whose transform shrinks input variance were never compensated, because
+   the hook they report through could not express a reduction.
+
+The empirical gate resolved 2026-08-10 in favor of rounds 2+3: ResNet-18
+31.50% → 33.71%, and a depth sweep on `mupc_demo.py` improving at every depth by
+a margin that grows with L (+1.2 at L = 8, +12.1 at L = 128). See "Empirical
+gate".
 
 Finding 8's resolution and one of its verification items are superseded by
 finding 14; both are marked in place.
@@ -705,23 +708,90 @@ Full suite: 339 passed, up from 309. black and ruff clean.
   pool `4.0`. Stem, branch and projection L-free; damping once per branch at the
   merge; the pool amplifying by `√n`.
 
-### Empirical gate (still pending, now three arms)
+### Empirical gate (three arms)
 
-Unchanged in force from the 2026-08-08 entry, and widened: the AvgPool fix
-changes the same graph as the merge-node rule, so a two-arm comparison can no
-longer separate them. At fixed seed and the original hyperparameters
-(lr 0.01, weight_decay 0.01, infer_steps 80):
+Widened from the 2026-08-08 entry: the AvgPool fix changes the same graph as the
+merge-node rule, so a two-arm comparison can no longer separate them.
 
 1. `main` — uniform-L, AvgPool `v = 1`.
 2. 2026-08-08 branch — merge-node rule, AvgPool `v = 1`.
 3. 2026-08-09 branch — merge-node rule, AvgPool `v = 1/n`.
 
-Plus the paired-depth sweep `examples/mupc_demo.py --num_blocks {8,16,32,64,128}`
-in both `--mode skip` and `--mode linear_residual`, which contains no pooling and
-so isolates the depth rule.
+Plus the paired-depth sweep `examples/mupc_demo.py --num_blocks {8,16,32,64,128}`,
+which contains no pooling and so isolates the depth rule. The ResNet graph cannot
+do this: it is fixed at L = 8, and its AvgPool change is confounded with the
+depth rule.
 
-The currently recorded ResNet result (37.08% → 35.00%, train energy 0.1096 →
-0.8319) was taken with lr, weight_decay and infer_steps changed in the same
-commit as the rule, so it does not measure the rule. It should be replaced by
-the arm-3 numbers once the matrix runs, and the demo docstring should label
-which arm each figure comes from.
+### 17. The recorded ResNet regression measured hyperparameter fragility, not the rule (2026-08-10)
+
+- The earlier figure (37.08% → 35.00%, train energy 0.1096 → 0.8319) was taken at
+  `lr = 0.01`, `infer_steps = 80`, with lr, weight_decay and infer_steps changed
+  in the same commit as the rule. Re-running showed why it could not measure the
+  rule: at `lr = 0.01` the run is not robust to small perturbations — accuracy
+  moves by more than the effect under test in response to changes that do not
+  alter the objective. Any scaling change reads as a regression at that lr.
+- New operating point, now the demo defaults
+  (`examples/resnet18_cifar10_demo.py`): `lr = 0.001`, `infer_steps = 120`,
+  `weight_decay = 0.01`, batch 256, 2 epochs, ReLU, no augmentation. Both arms
+  below use it, so the comparison isolates the scaling change.
+
+### Result (2026-08-10): arms 1 and 3, ResNet-18 / CIFAR-10
+
+| Arm | Scaling | Test accuracy | Train energy | Training time |
+| --- | --- | --- | --- | --- |
+| 1 (`main`) | uniform-L, AvgPool `v = 1` | 31.50% | not recorded | not recorded |
+| 3 (this branch) | merge-node rule, AvgPool `v = 1/n` | 33.71% | 0.4792 | 952.3s (476.2s/epoch) |
+
+RTX 3090, CUDA 13, JAX 0.10.2. The +2.21 point gap is the combined effect of the
+merge-node rule and the AvgPool variance factor, in the direction the derivation
+predicts. The gate passes for the ResNet arm.
+
+Qualifications, stated rather than left to the reader:
+
+- **Arm 2 was not run**, so the merge-node rule and the AvgPool factor remain
+  jointly measured. Their separation is still open.
+- Single seed per arm at 2 epochs. The demo header already warns that accuracy
+  varies a few points across JAX versions and hardware; a 2.21-point gap from one
+  seed each is directional, not a confidence interval. Repeated seeds would
+  settle it.
+- Arm 1's train energy and training time were not recorded, so only accuracy is
+  comparable across arms.
+
+The demo docstring's figures are arm 3; it does not yet say so.
+
+### Result: paired-depth sweep, FC-ResNet / MNIST
+
+`examples/mupc_demo.py --num_blocks {8,16,32,64,128}`, `--mode linear_residual`
+(the default), hidden 64, 3 epochs, lr 0.002, weight_decay 0.01. No pooling in
+this graph, so the comparison is the depth rule alone — uniform-L against the
+merge-node rule, uncontaminated by the AvgPool factor.
+
+| Depth L | `main` (uniform-L) | merge-node rule | Δ |
+| --- | --- | --- | --- |
+| 8 | 90.8% | 92.0% | +1.2 |
+| 16 | 89.7% | 89.7% | 0.0 |
+| 32 | 82.4% | 85.6% | +3.2 |
+| 64 | 77.1% | 84.1% | +7.0 |
+| 128 | 70.1% | 82.2% | +12.1 |
+
+The gain grows with depth, which is the signature finding 5 predicts. Under
+uniform-L the stem is damped by `1/√L`, so the stream starts at variance `1/L`
+and the final stream sits at ≈ e/L — an attenuation that worsens as L grows and
+that the merge-node rule removes by making the stem L-free. Accuracy under
+uniform-L falls 20.7 points from L = 8 to L = 128; under the merge-node rule it
+falls 9.8. Depth transfer is not restored, but the depth penalty is roughly
+halved.
+
+Two annotations on the table: depth 16 is identical in both arms, so it is either
+an unre-run cell or a coincidence — it is the one row that carries no signal.
+The `--mode skip` arm is not recorded in the demo docstring; the table above is
+`linear_residual` only. Under that mode `LinearResidual`'s "in" edge keeps its
+formula, so what the sweep measures is the stem and post-stream edges losing
+their L factor.
+
+### Gate outcome
+
+Both arms of the gate pass. The depth sweep confirms the merge-node rule in
+isolation and at five depths; the ResNet run confirms the combined change at a
+single depth. What remains unmeasured is the split between the merge-node rule
+and the AvgPool factor within the ResNet result (arm 2), which no run separates.
