@@ -16,23 +16,53 @@ shapes it checks against are only known once the graph is wired. Global
 muPC scaling note
 -----------------
 Pooling is a weightless *transformation*, not an identity skip-connection
-path. The framework distinguishes two cases:
+path, so its slot stays variance-scalable (``is_variance_scalable=False`` is
+strictly for identity-mapping skip paths — see SkipConnection and the
+transformer mask/residual edges). Pooling declares no skip slot, so a pool is
+never a merge node and its edges carry no depth factor L. What each pool
+reports through ``get_variance_factor`` is how its reduction changes input
+variance; muPC then applies ``a = gain / sqrt(v * K_slot)``.
 
-  * ``is_variance_scalable=False`` → strictly for identity-mapping skip-connection
-    paths (see SkipConnection, transformer mask/residual edges). The base class
-    even errors if ``is_skip_connection`` and ``is_variance_scalable=True`` are
-    set together.
-  * Weightless nodes that still perform a transformation (IdentityNode summing
-    multi-input edges, pooling nodes reducing spatial dims) follow the
-    IdentityNode convention: override ``get_weight_fan_in`` to return 1. The muPC
-    formula ``a = gain / sqrt(fan_in * K_slot * L)`` then reduces to
-    ``a = gain / sqrt(K_slot * L)`` — compensating only for multi-edge summation
-    variance, not for a non-existent weight matrix.
+The two reductions differ, and the difference is not cosmetic:
 
-With a single incoming edge in a non-residual graph (K_slot=1, L=1) and
-IdentityActivation (gain=1.0), the scale is exactly 1.0 — a no-op. Returning the
-upstream channel count instead (the base default) would silently attenuate
-activations and gradients through every pool by ``1/sqrt(C_in)``.
+  * ``AvgPool`` divides a sum of ``n`` cells by ``n``. For uncorrelated inputs
+    that multiplies variance by ``1/n`` exactly, independent of the input
+    distribution, because the mean is a linear operator. It returns
+    ``v = 1/n``, so muPC amplifies by ``sqrt(n)``. This is the same convention
+    muPC already applies to a ``K_slot``-way edge sum (``1/sqrt(K_slot)``, not
+    ``1/K_slot``): a spatial mean and an edge sum are both sums, and both are
+    normalized to preserve variance rather than magnitude.
+
+    Assumption: the pooled cells are uncorrelated. Real conv feature maps are
+    spatially correlated, so the true reduction lies between ``1/n``
+    (independent) and ``1`` (perfectly correlated), and ``sqrt(n)``
+    over-corrects in proportion. This is the same independence assumption
+    Kaiming/muPC already make across a weight matrix's fan_in.
+
+  * ``MaxPool`` has no distribution-free variance factor, so it returns
+    ``v = 1.0``. Measured variance of ``max`` over ``n`` iid cells, relative to
+    the input variance:
+
+        n     Gaussian N(0,1)     ReLU(N(0,1))
+        4     0.49                1.32
+        9     0.36                1.05
+        16    0.29                0.87
+        25    0.26                0.76
+
+    A max pool in a conv graph follows a ReLU, where the ratio at the usual
+    2x2 window is 1.32 — a Gaussian-derived correction (``1/sqrt(0.49)`` =
+    1.43) would be wrong by a factor of 2.7 for the inputs it actually sees.
+    No single constant is right for both columns, so no correction is applied.
+
+    A limitation no edge multiplier can fix: max pooling shifts the mean
+    (measured mean 1.05 at n=4 for ReLU inputs, against a standard deviation
+    of 0.67), and a scalar scale multiplies an offset rather than removing it.
+    In an un-normalized PC network that offset propagates downstream. Prefer
+    ``AvgPool`` where variance behavior through depth matters.
+
+Returning the upstream channel count (the ``NodeBase`` default) would be wrong
+for both: pooling has no weight matrix, so it would attenuate activations and
+gradients through every pool by ``1/sqrt(C_in)``.
 """
 
 from __future__ import annotations
@@ -90,14 +120,29 @@ class _PoolBase(NodeBase):
         return {"in": SlotSpec(name="in", is_multi_input=True)}
 
     @staticmethod
-    def get_weight_fan_in(source_shape: Tuple[int, ...], config: Dict[str, Any]) -> int:
-        """No weight matrix — return 1, matching the IdentityNode convention.
+    def _pool_cell_count(source_shape: Tuple[int, ...], config: Dict[str, Any]) -> int:
+        """Number of input cells reduced into one output cell.
 
-        With fan_in=1 the muPC formula ``a = gain / sqrt(fan_in * K_slot * L)``
-        reduces to ``a = gain / sqrt(K_slot * L)`` — compensating only for
-        multi-edge summation variance, not for a non-existent weight matrix.
+        Global mode collapses every spatial axis of the source (``source_shape``
+        excludes batch and ends in channels). Windowed mode reduces one window,
+        whose volume is ``prod(window_shape)`` — matching the divisor
+        ``count_include_pad=True`` (the default) uses. With
+        ``count_include_pad=False`` the divisor is the count of real cells,
+        which varies per window; the full window volume is used instead, exact
+        under the default ``"VALID"`` padding, which adds no padded cells.
         """
-        return 1
+        if config.get("global_pool", False):
+            return int(np.prod(source_shape[:-1]))
+        return int(np.prod(config["window_shape"]))
+
+    @staticmethod
+    def get_variance_factor(
+        source_shape: Tuple[int, ...],
+        config: Dict[str, Any],
+        weight_init: Optional["InitializerBase"],
+    ) -> float:
+        """Subclass-specific: how the reduction changes input variance. Override."""
+        raise NotImplementedError
 
     @staticmethod
     def initialize_params(
@@ -215,6 +260,22 @@ class MaxPool(_PoolBase):
         )
 
     @staticmethod
+    def get_variance_factor(
+        source_shape: Tuple[int, ...],
+        config: Dict[str, Any],
+        weight_init: Optional["InitializerBase"],
+    ) -> float:
+        """No correction: a max has no distribution-free variance factor.
+
+        The variance of ``max`` over ``n`` cells depends on the input
+        distribution, and the two distributions that matter here disagree — at
+        n=4 the ratio is 0.49 for Gaussian inputs but 1.32 for the ReLU outputs
+        a max pool actually receives. See the module docstring for the measured
+        table and for the mean shift, which no edge scale can remove.
+        """
+        return 1.0
+
+    @staticmethod
     def _pool(x_sum: jnp.ndarray, node_info: NodeInfo) -> jnp.ndarray:
         config = node_info.node_config
         window_shape = config["window_shape"]
@@ -313,6 +374,21 @@ class AvgPool(_PoolBase):
             count_include_pad=count_include_pad,
             pool_op_name="AvgPool",
         )
+
+    @staticmethod
+    def get_variance_factor(
+        source_shape: Tuple[int, ...],
+        config: Dict[str, Any],
+        weight_init: Optional["InitializerBase"],
+    ) -> float:
+        """``1/n`` for ``n`` pooled cells: the mean divides a sum of n terms by n.
+
+        For uncorrelated cells this is exact and distribution-free, so muPC
+        amplifies the in-edge by ``sqrt(n)`` and the pool preserves variance
+        instead of attenuating by ``1/sqrt(n)``. See the module docstring for
+        the independence assumption and how correlated feature maps weaken it.
+        """
+        return 1.0 / _PoolBase._pool_cell_count(source_shape, config)
 
     @staticmethod
     def _pool(x_sum: jnp.ndarray, node_info: NodeInfo) -> jnp.ndarray:

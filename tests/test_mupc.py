@@ -15,7 +15,7 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from fabricpc.nodes import Linear
+from fabricpc.nodes import Linear, LinearResidual
 from fabricpc.nodes.identity import IdentityNode
 from fabricpc.core.topology import Edge
 from fabricpc.graph_assembly import TaskMap, graph
@@ -189,6 +189,38 @@ class TestMuPCScaling:
         # y: fan_in=20, K=1 -> a = 1/(20 * 1) = 0.05
         edge_key = structure.nodes["y"].node_info.in_edges[0]
         assert abs(scaling.forward_scale[edge_key] - 1.0 / 20) < 1e-10
+
+    def test_include_output_depth_free_with_residual_blocks(self):
+        """Output scale carries no L; hidden scale does (L=2 residual chain)."""
+        x = IdentityNode(shape=(10,), name="x")
+        h1 = Linear(shape=(20,), name="h1", weight_init=MuPCInitializer())
+        r1 = LinearResidual(shape=(20,), name="r1", weight_init=MuPCInitializer())
+        r2 = LinearResidual(shape=(20,), name="r2", weight_init=MuPCInitializer())
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, h1, r1, r2, y],
+            edges=[
+                Edge(source=x, target=h1.slot("in")),
+                Edge(source=h1, target=r1.slot("in")),
+                Edge(source=h1, target=r1.slot("skip")),
+                Edge(source=r1, target=r2.slot("in")),
+                Edge(source=r1, target=r2.slot("skip")),
+                Edge(source=r2, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(eta_infer=0.1, infer_steps=5),
+            scaling=MuPCConfig(include_output=True),
+        )
+        # r1 and r2 carry is_skip_connection slots on the longest path -> L=2.
+        # Hidden r2 "in" edge: fan_in=20, K=1 -> a = 1/sqrt(20 * 1 * 2).
+        r2_scaling = structure.nodes["r2"].node_info.scaling_config
+        assert len(r2_scaling.forward_scale) == 1  # skip edge absent
+        (r2_a,) = r2_scaling.forward_scale.values()
+        assert abs(r2_a - 1.0 / math.sqrt(20 * 2)) < 1e-10
+        # Output y: fan_in=20, K=1 -> a = 1/(20 * sqrt(1)), independent of L.
+        y_scaling = structure.nodes["y"].node_info.scaling_config
+        y_edge = structure.nodes["y"].node_info.in_edges[0]
+        assert abs(y_scaling.forward_scale[y_edge] - 1.0 / 20) < 1e-10
 
 
 # ============================================================================
@@ -386,8 +418,53 @@ class TestVariancePropagation:
 class TestSkipConnectionScaling:
     """Test SkipConnection node and depth-dependent scaling."""
 
-    def test_skip_connection_unscaled(self):
-        """SkipConnection node gets scale 1.0 on all edges."""
+    def test_unconnected_skip_slot_is_rejected(self):
+        """The pre-two-slot edge layout — stream routed into "in" — must fail
+        loudly. Left to run, the node stops counting toward L and both stream
+        and branch get 1/sqrt(2), the 0.707^L decay it exists to prevent."""
+        from fabricpc.nodes.skip_connection import SkipConnection
+
+        x = IdentityNode(shape=(10,), name="x")
+        h = Linear(shape=(10,), name="h", weight_init=MuPCInitializer())
+        skip = SkipConnection(shape=(10,), name="skip")
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        with pytest.raises(ValueError, match="requires at least one edge into slot"):
+            graph(
+                nodes=[x, h, skip, y],
+                edges=[
+                    Edge(source=x, target=h.slot("in")),
+                    Edge(source=h, target=skip.slot("in")),
+                    Edge(source=x, target=skip.slot("in")),  # pre-migration stream
+                    Edge(source=skip, target=y.slot("in")),
+                ],
+                task_map=TaskMap(x=x, y=y),
+                inference=InferenceSGD(),
+                scaling=MuPCConfig(),
+            )
+
+    def test_linear_residual_without_skip_edge_is_allowed(self):
+        """The requirement is scoped to the node that declares it: an
+        unconnected LinearResidual skip slot stays legal (it only drops the
+        node from the merge count)."""
+        x = IdentityNode(shape=(10,), name="x")
+        r = LinearResidual(shape=(10,), name="r", weight_init=MuPCInitializer())
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, r, y],
+            edges=[
+                Edge(source=x, target=r.slot("in")),
+                Edge(source=r, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(),
+        )
+        a_r = structure.nodes["r"].node_info.scaling_config.forward_scale["x->r:in"]
+        assert abs(a_r - 1.0 / math.sqrt(10)) < 1e-10  # L-free, not a merge
+
+    def test_skip_connection_slot_scaling(self):
+        """SkipConnection: stream ("skip") edges unscaled, branch ("in") edge
+        gets gain/sqrt(K_slot * L)."""
         from fabricpc.nodes.skip_connection import SkipConnection
 
         x = IdentityNode(shape=(10,), name="x")
@@ -398,8 +475,8 @@ class TestSkipConnectionScaling:
             nodes=[x, h, skip, y],
             edges=[
                 Edge(source=x, target=h.slot("in")),
-                Edge(source=h, target=skip.slot("in")),
-                Edge(source=x, target=skip.slot("in")),  # skip path
+                Edge(source=h, target=skip.slot("in")),  # branch joins stream
+                Edge(source=x, target=skip.slot("skip")),  # stream
                 Edge(source=skip, target=y.slot("in")),
             ],
             task_map=TaskMap(x=x, y=y),
@@ -408,13 +485,15 @@ class TestSkipConnectionScaling:
         )
         scaling = structure.nodes["skip"].node_info.scaling_config
         assert scaling is not None
-        for a in scaling.forward_scale.values():
-            assert a == 1.0
-        for td in scaling.topdown_grad_scale.values():
-            assert td == 1.0
+        # Branch edge: fan_in=1, K_slot=1, L=1 (one merge) -> a = 1.0.
+        assert abs(scaling.forward_scale["h->skip:in"] - 1.0) < 1e-10
+        # Stream edge is absent from all per-edge dicts (unscaled pass-through).
+        assert "x->skip:skip" not in scaling.forward_scale
+        assert "x->skip:skip" not in scaling.topdown_grad_scale
+        assert "x->skip:skip" not in scaling.weight_grad_scale
 
-    def test_skip_depth_affects_compute_scaling(self):
-        """Compute nodes get depth factor L = number of SkipConnection nodes."""
+    def test_skip_depth_damps_merge_edges_only(self):
+        """L damps branch edges at the merge; branch-interior edges are L-free."""
         from fabricpc.nodes.skip_connection import SkipConnection
 
         x = IdentityNode(shape=(10,), name="x")
@@ -427,24 +506,27 @@ class TestSkipConnectionScaling:
             nodes=[x, h1, s1, h2, s2, y],
             edges=[
                 Edge(source=x, target=h1.slot("in")),
-                Edge(source=x, target=s1.slot("in")),  # skip
-                Edge(source=h1, target=s1.slot("in")),  # compute -> merge
+                Edge(source=x, target=s1.slot("skip")),  # stream
+                Edge(source=h1, target=s1.slot("in")),  # branch -> merge
                 Edge(source=s1, target=h2.slot("in")),
-                Edge(source=s1, target=s2.slot("in")),  # skip
-                Edge(source=h2, target=s2.slot("in")),  # compute -> merge
+                Edge(source=s1, target=s2.slot("skip")),  # stream
+                Edge(source=h2, target=s2.slot("in")),  # branch -> merge
                 Edge(source=s2, target=y.slot("in")),
             ],
             task_map=TaskMap(x=x, y=y),
             inference=InferenceSGD(),
             scaling=MuPCConfig(),
         )
-        # L = 2 (two SkipConnection nodes: s1, s2)
-        # h1: fan_in=10, K=1, L=2
-        # expected a = 1/sqrt(10 * 1 * 2)  (identity activation, gain=1)
-        h1_edge = structure.nodes["h1"].node_info.in_edges[0]
-        a_h1 = structure.nodes["h1"].node_info.scaling_config.forward_scale[h1_edge]
-        expected_a = 1.0 / math.sqrt(10 * 1 * 2)
-        assert abs(a_h1 - expected_a) < 1e-10
+        # L = 2 (two connected SkipConnection merges: s1, s2).
+        # h1 is not a merge node: fan_in=10, K=1 -> a = 1/sqrt(10), L-free.
+        a_h1 = structure.nodes["h1"].node_info.scaling_config.forward_scale["x->h1:in"]
+        assert abs(a_h1 - 1.0 / math.sqrt(10)) < 1e-10
+        # Merge branch edges: fan_in=1, K=1 -> a = 1/sqrt(2), damped once
+        # per branch, where the branch joins the stream.
+        a_s1 = structure.nodes["s1"].node_info.scaling_config.forward_scale["h1->s1:in"]
+        a_s2 = structure.nodes["s2"].node_info.scaling_config.forward_scale["h2->s2:in"]
+        assert abs(a_s1 - 1.0 / math.sqrt(2)) < 1e-10
+        assert abs(a_s2 - 1.0 / math.sqrt(2)) < 1e-10
 
     def test_no_skip_connections_degenerates_to_old_formula(self):
         """Without SkipConnection nodes, L=1 and formula = gain/sqrt(fan_in*K)."""
@@ -482,8 +564,10 @@ class TestSkipConnectionScaling:
         assert identity_slots["in"].is_skip_connection is False
 
         skip_slots = SkipConnection.get_slots()
-        assert skip_slots["in"].is_variance_scalable is False
-        assert skip_slots["in"].is_skip_connection is True
+        assert skip_slots["in"].is_variance_scalable is True
+        assert skip_slots["in"].is_skip_connection is False
+        assert skip_slots["skip"].is_variance_scalable is False
+        assert skip_slots["skip"].is_skip_connection is True
 
     def test_is_skip_connection_forces_unscalable(self):
         """is_skip_connection=True requires is_variance_scalable=False."""
@@ -528,8 +612,8 @@ class TestSkipConnectionScaling:
                 }
 
             @staticmethod
-            def get_weight_fan_in(source_shape, config):
-                return source_shape[-1]
+            def get_variance_factor(source_shape, config, weight_init):
+                return float(source_shape[-1])
 
             @staticmethod
             def initialize_params(key, node_shape, input_shapes, weight_init, config):
@@ -595,6 +679,295 @@ class TestSkipConnectionScaling:
         assert mn_meta_edge not in scaling.forward_scale
         assert mn_meta_edge not in scaling.topdown_grad_scale
         assert mn_meta_edge not in scaling.weight_grad_scale
+
+
+# ============================================================================
+# Merge-Node Rule Tests
+# ============================================================================
+
+
+class TestMergeNodeRule:
+    """The depth factor L sits only on scalable edges into merge nodes —
+    nodes with at least one connected is_skip_connection slot."""
+
+    def test_l_factor_placement(self):
+        """Stem, branch-interior, stream-projection, and post-stream edges are
+        L-free; each branch is damped exactly once, at its merge."""
+        from fabricpc.nodes.skip_connection import SkipConnection
+
+        x = IdentityNode(shape=(10,), name="x")
+        stem = Linear(shape=(10,), name="stem", weight_init=MuPCInitializer())
+        b1 = Linear(shape=(10,), name="b1", weight_init=MuPCInitializer())
+        b2 = Linear(shape=(10,), name="b2", weight_init=MuPCInitializer())
+        m1 = SkipConnection(shape=(10,), name="m1")
+        b3 = Linear(shape=(10,), name="b3", weight_init=MuPCInitializer())
+        proj = Linear(shape=(10,), name="proj", weight_init=MuPCInitializer())
+        m2 = SkipConnection(shape=(10,), name="m2")
+        post = Linear(shape=(10,), name="post", weight_init=MuPCInitializer())
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, stem, b1, b2, m1, b3, proj, m2, post, y],
+            edges=[
+                Edge(source=x, target=stem.slot("in")),
+                # Two-weighted-layer branch into merge m1
+                Edge(source=stem, target=b1.slot("in")),
+                Edge(source=b1, target=b2.slot("in")),
+                Edge(source=b2, target=m1.slot("in")),
+                Edge(source=stem, target=m1.slot("skip")),
+                # Weighted stream projection (downsample-style) into merge m2
+                Edge(source=m1, target=b3.slot("in")),
+                Edge(source=m1, target=proj.slot("in")),
+                Edge(source=b3, target=m2.slot("in")),
+                Edge(source=proj, target=m2.slot("skip")),
+                # Post-stream layer
+                Edge(source=m2, target=post.slot("in")),
+                Edge(source=post, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(),
+        )
+
+        def fwd(node, edge):
+            return structure.nodes[node].node_info.scaling_config.forward_scale[edge]
+
+        # L = 2 (merges m1, m2), but only merge branch edges carry it.
+        l_free = 1.0 / math.sqrt(10)  # fan_in=10, K=1, identity gain
+        assert abs(fwd("stem", "x->stem:in") - l_free) < 1e-10  # stem
+        assert abs(fwd("b1", "stem->b1:in") - l_free) < 1e-10  # branch interior
+        assert abs(fwd("b2", "b1->b2:in") - l_free) < 1e-10  # branch interior
+        assert abs(fwd("proj", "m1->proj:in") - l_free) < 1e-10  # stream projection
+        assert abs(fwd("post", "m2->post:in") - l_free) < 1e-10  # post-stream
+        # Branch damped exactly once, at the merge: fan_in=1, K=1, L=2.
+        assert abs(fwd("m1", "b2->m1:in") - 1.0 / math.sqrt(2)) < 1e-10
+        assert abs(fwd("m2", "b3->m2:in") - 1.0 / math.sqrt(2)) < 1e-10
+        # Stream edges into "skip" slots are absent (unscaled).
+        m1_scaling = structure.nodes["m1"].node_info.scaling_config
+        m2_scaling = structure.nodes["m2"].node_info.scaling_config
+        assert "stem->m1:skip" not in m1_scaling.forward_scale
+        assert "proj->m2:skip" not in m2_scaling.forward_scale
+
+    def test_unconnected_skip_slot_does_not_count(self):
+        """A declared-but-unconnected skip slot neither inflates L nor makes
+        its node a merge."""
+        x = IdentityNode(shape=(10,), name="x")
+        h1 = Linear(shape=(20,), name="h1", weight_init=MuPCInitializer())
+        r1 = LinearResidual(shape=(20,), name="r1", weight_init=MuPCInitializer())
+        r2 = LinearResidual(shape=(20,), name="r2", weight_init=MuPCInitializer())
+        r3 = LinearResidual(shape=(20,), name="r3", weight_init=MuPCInitializer())
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, h1, r1, r2, r3, y],
+            edges=[
+                Edge(source=x, target=h1.slot("in")),
+                Edge(source=h1, target=r1.slot("in")),
+                Edge(source=h1, target=r1.slot("skip")),
+                Edge(source=r1, target=r2.slot("in")),
+                Edge(source=r1, target=r2.slot("skip")),
+                # r3's declared "skip" slot receives no edge
+                Edge(source=r2, target=r3.slot("in")),
+                Edge(source=r3, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(),
+            scaling=MuPCConfig(),
+        )
+        # L = 2 (r1, r2 have connected skip slots); r3 does not raise it to 3.
+        a_r1 = structure.nodes["r1"].node_info.scaling_config.forward_scale["h1->r1:in"]
+        a_r2 = structure.nodes["r2"].node_info.scaling_config.forward_scale["r1->r2:in"]
+        assert abs(a_r1 - 1.0 / math.sqrt(20 * 2)) < 1e-10
+        assert abs(a_r2 - 1.0 / math.sqrt(20 * 2)) < 1e-10
+        # r3 is not a merge: its in-edge is L-free.
+        a_r3 = structure.nodes["r3"].node_info.scaling_config.forward_scale["r2->r3:in"]
+        assert abs(a_r3 - 1.0 / math.sqrt(20)) < 1e-10
+
+    def test_residual_stream_variance_bounded_across_depth(self, rng_key):
+        """Final stream variance stays O(1) (~ e) at several depths.
+
+        Identity-activation LinearResidual chain: the L-free stem produces a
+        unit-variance stream (v0 = 1), each block adds v/L, so the final
+        variance is (1+1/L)^L in [2.4, e]. Uniform-L damping of the stem
+        gave v0 = 1/L and a final variance of e/L — vanishing with depth
+        (0.08 at L=32)."""
+        width = 64
+        batch = 64
+        for num_blocks in (4, 16, 32):
+            x = IdentityNode(shape=(width,), name="x")
+            stem = Linear(shape=(width,), name="stem", weight_init=MuPCInitializer())
+            blocks = [
+                LinearResidual(
+                    shape=(width,), name=f"r{i}", weight_init=MuPCInitializer()
+                )
+                for i in range(num_blocks)
+            ]
+            y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+            edges = [Edge(source=x, target=stem.slot("in"))]
+            prev = stem
+            for r in blocks:
+                edges.append(Edge(source=prev, target=r.slot("in")))
+                edges.append(Edge(source=prev, target=r.slot("skip")))
+                prev = r
+            edges.append(Edge(source=prev, target=y.slot("in")))
+            structure = graph(
+                nodes=[x, stem, *blocks, y],
+                edges=edges,
+                task_map=TaskMap(x=x, y=y),
+                inference=InferenceSGD(eta_infer=0.1, infer_steps=5),
+                scaling=MuPCConfig(),
+            )
+            key = jax.random.fold_in(rng_key, num_blocks)
+            params = initialize_params(structure, key)
+            x_data = jax.random.normal(key, (batch, width))
+            state = initialize_graph_state(
+                structure, batch, key, clamps={"x": x_data}, params=params
+            )
+            var_final = float(jnp.var(state.nodes[f"r{num_blocks - 1}"].z_mu))
+            assert 1.2 < var_final < 6.0, f"L={num_blocks}: var={var_final}"
+
+
+class TestStorkeyHopfieldScaling:
+    """StorkeyHopfield self-normalizes; muPC must leave its probe edge alone."""
+
+    def test_slot_is_scalable_and_not_a_merge(self):
+        from fabricpc.nodes.storkey_hopfield import StorkeyHopfield
+
+        slots = StorkeyHopfield.get_slots()
+        # Scalable: the blend shrinks variance and muPC undoes it.
+        assert slots["in"].is_variance_scalable is True
+        # Not a skip: the activation wraps the identity path, so the node is
+        # not a residual-stream merge and must not count toward L.
+        assert slots["in"].is_skip_connection is False
+
+    def test_variance_factor_matches_measured_blend(self):
+        """v(s) = (1 + s^2 r)/(1 + s)^2 predicts the blend's variance ratio."""
+        from fabricpc.nodes.storkey_hopfield import StorkeyHopfield
+        from fabricpc.core.initializers import XavierInitializer, initialize
+
+        D = 64
+        init = XavierInitializer()
+        base_cfg = {"enforce_symmetry": True, "zero_diagonal": False}
+        key = jax.random.PRNGKey(7)
+        k_w, k_x = jax.random.split(key)
+        W = StorkeyHopfield._prepare_W(initialize(k_w, (D, D), init), base_cfg)
+        probe = jax.random.normal(k_x, (20000, D))
+
+        for s in (0.0, 0.5, 1.0, 2.0, 5.0):
+            cfg = dict(base_cfg, hopfield_strength=s)
+            predicted = StorkeyHopfield.get_variance_factor((D,), cfg, init)
+            blend = probe / (1 + s) + (probe @ W) * (s / (1 + s))
+            measured = float(jnp.var(blend) / jnp.var(probe))
+            assert (
+                abs(predicted - measured) < 0.05 * predicted
+            ), f"s={s}: predicted {predicted}, measured {measured}"
+
+    def test_variance_factor_minimum_and_bounds(self):
+        """v is at most 1, bottoms out at r/(1+r), and s=0 leaves it at 1."""
+        from fabricpc.nodes.storkey_hopfield import StorkeyHopfield
+        from fabricpc.core.initializers import XavierInitializer
+
+        D, init = 64, XavierInitializer()
+        cfg = {"enforce_symmetry": True, "zero_diagonal": False}
+        r = (D + 1) / (2 * D)  # Xavier 1/D, symmetrized
+
+        assert (
+            StorkeyHopfield.get_variance_factor(
+                (D,), {**cfg, "hopfield_strength": 0.0}, init
+            )
+            == 1.0
+        )
+        # Minimum at s = 1/r, value r/(1+r).
+        v_min = StorkeyHopfield.get_variance_factor(
+            (D,), {**cfg, "hopfield_strength": 1.0 / r}, init
+        )
+        assert abs(v_min - r / (1 + r)) < 1e-9
+        for s in (0.25, 0.5, 1.0, 2.0, 4.0, 16.0):
+            v = StorkeyHopfield.get_variance_factor(
+                (D,), {**cfg, "hopfield_strength": s}, init
+            )
+            assert v_min - 1e-9 <= v <= 1.0
+        # A learnable strength (None) is evaluated at softplus(raw_init) = 1.0.
+        assert StorkeyHopfield.get_variance_factor(
+            (D,), {**cfg, "hopfield_strength": None}, init
+        ) == StorkeyHopfield.get_variance_factor(
+            (D,), {**cfg, "hopfield_strength": 1.0}, init
+        )
+
+    def test_probe_edge_is_scaled_and_node_is_not_a_merge(self, rng_key):
+        from fabricpc.nodes.storkey_hopfield import StorkeyHopfield
+
+        x = IdentityNode(shape=(16,), name="x")
+        h = Linear(shape=(16,), name="h", weight_init=MuPCInitializer())
+        hop = StorkeyHopfield(shape=(16,), name="hop", hopfield_strength=0.0)
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        structure = graph(
+            nodes=[x, h, hop, y],
+            edges=[
+                Edge(source=x, target=h.slot("in")),
+                Edge(source=h, target=hop.slot("in")),
+                Edge(source=hop, target=y.slot("in")),
+            ],
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(eta_infer=0.1, infer_steps=5),
+            scaling=MuPCConfig(),
+        )
+        # At s=0 the blend is the identity, v=1, so a is the tanh gain alone —
+        # not gain/sqrt(D), which is what the inherited fan_in=D would give and
+        # which would collapse the pass-through toward tanh(0).
+        scaling = structure.nodes["hop"].node_info.scaling_config
+        gain = math.sqrt(5.0 / 3.0)
+        assert abs(scaling.forward_scale["h->hop:in"] - gain) < 1e-6
+        assert "h->hop:in" in scaling.topdown_grad_scale
+        # W is stored under the in-edge key, so it now has a weight-grad entry.
+        assert scaling.weight_grad_scale["h->hop:in"] == 1.0
+        # No connected skip slot, so the node does not count toward L:
+        # h's in-edge is 1/sqrt(16), not 1/sqrt(16 * 2).
+        a_h = structure.nodes["h"].node_info.scaling_config.forward_scale["x->h:in"]
+        assert abs(a_h - 1.0 / math.sqrt(16)) < 1e-10
+
+    @pytest.mark.parametrize("strength", [0.0, 1.0, 2.0])
+    def test_stacked_chain_reaches_a_variance_fixed_point(self, rng_key, strength):
+        """A chain of StorkeyHopfield nodes stops decaying instead of compounding.
+
+        The absolute level is set by tanh under the Kaiming gain, not by this
+        node: a plain Linear+tanh chain under muPC settles near 0.22 by the
+        same mechanism. What the variance factor buys is that the tail is
+        flat. Uncorrected, each node multiplies variance by v(s) — 0.375 at
+        s=1 — so the second half of the chain alone would cost 0.375^6 ~ 3e-3.
+        """
+        from fabricpc.nodes.storkey_hopfield import StorkeyHopfield
+
+        width, batch, depth = 64, 256, 12
+        x = IdentityNode(shape=(width,), name="x")
+        stem = Linear(shape=(width,), name="stem", weight_init=MuPCInitializer())
+        hops = [
+            StorkeyHopfield(shape=(width,), name=f"hop{i}", hopfield_strength=strength)
+            for i in range(depth)
+        ]
+        y = Linear(shape=(5,), name="y", weight_init=MuPCInitializer())
+        edges = [Edge(source=x, target=stem.slot("in"))]
+        prev = stem
+        for hop in hops:
+            edges.append(Edge(source=prev, target=hop.slot("in")))
+            prev = hop
+        edges.append(Edge(source=prev, target=y.slot("in")))
+
+        structure = graph(
+            nodes=[x, stem, *hops, y],
+            edges=edges,
+            task_map=TaskMap(x=x, y=y),
+            inference=InferenceSGD(eta_infer=0.1, infer_steps=5),
+            scaling=MuPCConfig(),
+        )
+        params = initialize_params(structure, rng_key)
+        x_data = jax.random.normal(rng_key, (batch, width))
+        state = initialize_graph_state(
+            structure, batch, rng_key, clamps={"x": x_data}, params=params
+        )
+        var_mid = float(jnp.var(state.nodes[f"hop{depth // 2 - 1}"].z_mu))
+        var_last = float(jnp.var(state.nodes[f"hop{depth - 1}"].z_mu))
+        assert 0.1 < var_last < 3.0, f"s={strength}: var={var_last}"
+        # Flat tail: the second half of the chain costs almost nothing.
+        assert var_last > 0.7 * var_mid, f"s={strength}: {var_mid} -> {var_last}"
 
 
 # ============================================================================

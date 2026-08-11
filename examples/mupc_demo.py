@@ -32,11 +32,11 @@ Usage:
 
 | Depth   | accuracy   |
 |---------|------------|
-| 8       | 90.8       |
+| 8       | 92.0       |
 | 16      | 89.7%      |
-| 32      | 82.4%      |
-| 64      | 77.1%      |
-| 128     | 70.1%      |
+| 32      | 85.6%      |
+| 64      | 84.1%      |
+| 128     | 82.2%      |
 """
 
 from jax_setup import set_jax_flags_before_importing_jax
@@ -138,8 +138,10 @@ def build_fc_resnet(num_blocks, hidden_dim, infer_steps=None, *, eta_infer):
         input(784) -> stem(hidden_dim) -> [N residual blocks] -> output(10)
 
     Each residual block has a Linear transform path and a SkipConnection
-    that sums the transform output with the identity skip. SkipConnection
-    nodes disable muPC variance scaling to preserve the identity mapping.
+    that sums the transform output with the identity skip. The stream
+    enters the SkipConnection's unscaled "skip" slot, preserving the
+    identity mapping; the branch enters its "in" slot, where muPC damps
+    it once by 1/sqrt(L).
 
     Args:
         num_blocks: Number of residual blocks.
@@ -187,8 +189,8 @@ def build_fc_resnet(num_blocks, hidden_dim, infer_steps=None, *, eta_infer):
         all_edges.extend(
             [
                 Edge(source=prev, target=linear.slot("in")),  # transform path
-                Edge(source=prev, target=skip.slot("in")),  # skip/identity path
-                Edge(source=linear, target=skip.slot("in")),  # merge into sum
+                Edge(source=prev, target=skip.slot("skip")),  # stream/identity path
+                Edge(source=linear, target=skip.slot("in")),  # branch joins stream
             ]
         )
         prev = skip

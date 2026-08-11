@@ -48,6 +48,55 @@ strength (inverted-U response to strength).
 
 Use moderate values for hopfield_strength (s) because it scales the hopfield energy term without normalization.
 
+muPC scaling:
+    The blend shrinks variance, and the "in" slot is scalable so that muPC
+    undoes exactly that shrinkage. The coefficients 1/(1+s) and s/(1+s) sum
+    to 1, but that preserves scale only for perfectly correlated terms. The
+    probe and probe @ W are close to independent, so their variances add in
+    quadrature:
+
+        v(s) = Var(blend)/Var(probe) = (1 + s^2 * r) / (1 + s)^2
+
+    with r = Var(probe @ W)/Var(probe) = sum_i E[W_ij^2], the variance gain
+    of one pass through W. v(s) <= 1 for every s >= 0, reaching its minimum
+    r/(1+r) at s = 1/r.
+
+    Under the node's own initialization — Xavier on (D, D), so E[W_ij^2] =
+    1/D, followed by _prepare_W's symmetrization W <- (W + W^T)/2, which
+    halves off-diagonal variance and leaves the diagonal alone:
+
+        r = (D-1)/(2D) + 1/D = (D+1)/(2D)   ->  1/2 for large D
+
+    So the worst case is s = 2, v = 1/3, a per-node standard-deviation ratio
+    of 0.577; at the default learnable strength (softplus(raw) = 1.0 at init)
+    v = 0.375, ratio 0.612. Left uncorrected that compounds — a chain of 32
+    such nodes attenuates by 0.612^32 ~ 1e-7. get_variance_factor returns
+    v(s), so muPC applies a = gain/sqrt(v(s) * K_slot) and the node holds
+    O(1) variance at any s and any depth.
+
+    The blend is linear in the probe, so the edge scale factors straight out:
+    activation(a * [blend] + b). At s = 0, v = 1 and a = gain, the same
+    treatment every other muPC node's identity-like path receives. Nothing is
+    scaled twice: muPC scales the edge, W's own scale is set by its
+    initializer, and v accounts for both.
+
+    Two caveats, both inherent to a scale computed once from topology:
+      - r depends on weight_init, which is why get_variance_factor receives
+        it and derives r from InitializerBase.element_variance rather than
+        assuming Xavier.
+      - With hopfield_strength=None (the default) s is learnable, so v is
+        computed at graph construction from s = softplus(raw_init) = 1.0 and
+        does not track training. This is muPC's standard contract: scales are
+        static and correct at initialization. The drift is bounded — v ranges
+        only over [r/(1+r), 1], i.e. [1/3, 1] at r = 1/2, so the scale is
+        never off by more than sqrt(3) ~ 1.73.
+
+    The slot is not a skip connection (is_skip_connection=False): the
+    activation wraps the identity path, so no raw identity stream passes
+    through the node. It is not a residual-stream merge and must not count
+    toward the residual depth L — counting it would raise L and over-damp
+    the graph's true merges.
+
 Notation:
     xi^mu = stored Hopfield patterns (absolute states in z-space)
     epsilon = z - mu = PC prediction error (context-dependent residual)
@@ -56,15 +105,15 @@ Notation:
 
 Architecture (internal to forward()):
 
-    probe --+--> probe / (1+s) ------+--> + bias --> activation --> z_mu
-            |                        |
-            +--> (probe @ W) * s/(1+s)
-
-    error = z - z_mu --> PC energy (E_pc) -->  z_latent --> Hopfield energy (E_hop)
-                                                   ^              |
-                                                   |______________|
+    probe ──┬──► probe / (1+s) ──────────┐
+            │                            ├──► + bias ──► activation ──► z_mu
+            └──► (probe @ W) * s/(1+s) ──┘
 
 Recurrency comes from the Hopfield energy gradient during inference steps.
+
+    error = z - z_mu ──► PC energy (E_pc) ──► z_latent ──► Hopfield energy (E_hop)
+                                                 ▲                    │
+                                                 └────────────────────┘
 """
 
 from __future__ import annotations
@@ -81,6 +130,7 @@ from fabricpc.core.initializers import (
     ZerosInitializer,
     NormalInitializer,
     XavierInitializer,
+    element_variance,
     initialize,
 )
 
@@ -164,8 +214,50 @@ class StorkeyHopfield(NodeBase):
 
     @staticmethod
     def get_slots() -> Dict[str, SlotSpec]:
-        """One single-input slot. Input shape must match node output shape (D)."""
+        """One single-input slot. Input shape must match node output shape (D).
+
+        Variance-scalable: the blend shrinks variance by v(s), and
+        get_variance_factor reports v(s) so muPC's edge scale undoes it
+        exactly. Not a skip connection: the activation wraps the identity
+        path, so the node is not a residual-stream merge and must not count
+        toward the residual depth L. See the module docstring, "muPC scaling".
+        """
         return {"in": SlotSpec(name="in", is_multi_input=False)}
+
+    @staticmethod
+    def get_variance_factor(
+        source_shape: Tuple[int, ...],
+        config: Dict[str, Any],
+        weight_init: Optional[InitializerBase],
+    ) -> float:
+        """Variance factor of the strength-weighted blend:
+
+            v(s) = (1 + s^2 * r) / (1 + s)^2
+
+        where s is the Hopfield strength and r = sum_i E[W_ij^2] is the
+        variance gain of one pass through W. r is derived from the
+        initializer's element variance and from _prepare_W's constraints,
+        which change W's second moment: symmetrization W <- (W + W^T)/2
+        halves the off-diagonal variance and leaves the diagonal alone, and
+        zero_diagonal drops the diagonal term.
+
+        With a learnable strength (hopfield_strength=None) s is evaluated at
+        its initial value, softplus(raw_init) = 1.0. See the module
+        docstring, "muPC scaling", for the derivation and the bounds.
+        """
+        D = source_shape[-1]
+        sigma_sq = element_variance((D, D), weight_init)
+
+        off_diag = sigma_sq / 2.0 if config.get("enforce_symmetry", True) else sigma_sq
+        diag = 0.0 if config.get("zero_diagonal", False) else sigma_sq
+        r = (D - 1) * off_diag + diag
+
+        s = config.get("hopfield_strength")
+        if s is None:
+            # Learnable: raw is initialized so that softplus(raw) = 1.0.
+            s = 1.0
+
+        return (1.0 + s**2 * r) / (1.0 + s) ** 2
 
     @staticmethod
     def initialize_params(

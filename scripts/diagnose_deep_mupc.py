@@ -77,7 +77,7 @@ def main():
     params = initialize_params(structure, graph_key)
 
     # Print scaling info
-    print(f"{'Node':<12} {'Shape':<12} {'K':>3} {'fan_in':>8} {'fwd_scale':>12}")
+    print(f"{'Node':<12} {'Shape':<12} {'K':>3} {'var_factor':>10} {'fwd_scale':>12}")
     print("-" * 50)
     for name in structure.node_order:
         node = structure.nodes[name]
@@ -87,12 +87,14 @@ def main():
             for ek, a in scaling.forward_scale.items():
                 source = structure.edges[ek].source
                 src_shape = structure.nodes[source].node_info.shape
-                fan_in = type(node).get_weight_fan_in(src_shape, ni.node_config)
+                v = type(node).get_variance_factor(
+                    src_shape, ni.node_config, ni.weight_init
+                )
                 print(
-                    f"{name:<12} {str(ni.shape):<12} {ni.in_degree:>3} {fan_in:>8} {a:>12.6f}"
+                    f"{name:<12} {str(ni.shape):<12} {ni.in_degree:>3} {v:>10.4g} {a:>12.6f}"
                 )
         else:
-            print(f"{name:<12} {str(ni.shape):<12}   - {'':>8} {'no scaling':>12}")
+            print(f"{name:<12} {str(ni.shape):<12}   - {'':>10} {'no scaling':>12}")
 
     # Initialize state with feedforward propagation
     x_data = jax.random.normal(data_key, (batch_size, 784))

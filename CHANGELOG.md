@@ -1,5 +1,23 @@
 # Changelog
 
+## [unreleased]
+muPC scaling correctness release. Deep residual and pooling graphs previously trained with an attenuated signal; activations, losses, and tuned learning rates will shift. See `docs/user_guides/05_initialization_and_scaling.md`.
+
+### Breaking changes
+- `SkipConnection` gained a `"skip"` slot: route the residual stream there, branch contributions to `"in"`. Construction raises when `"skip"` is unconnected (new `SlotSpec.require_connected`).
+- `NodeBase.get_weight_fan_in` is replaced by `get_variance_factor(source_shape, config, weight_init) -> float`. Custom nodes must rename and accept the third argument; weighted nodes keep their existing scaling. Migration: `docs/user_guides/06_custom_nodes.md`.
+
+### muPC scaling corrections
+- Depth damping `1/sqrt(L)` now applies only to branch edges entering merge nodes. Previously every scalable edge carried it, so stream variance vanished as `e/L` with depth.
+- Stems, branch interiors, stream projections, post-stream layers, and output-node readouts are now L-free — each reads a stream already held at O(1).
+- `L` counts only connected skip slots, so a declared-but-unconnected slot (`LinearResidual` with no skip edge) no longer inflates the residual depth.
+- `AvgPool` reports `v = 1/n` over its `n` pooled cells, so muPC amplifies its in-edge by `sqrt(n)`; previously each pool attenuated by up to `1/sqrt(n)`.
+- `MaxPool` is unchanged at `v = 1`: the variance of a max depends on the input distribution, so no distribution-free correction exists.
+- `StorkeyHopfield` reports its blend's variance factor rather than `fan_in`. The near-independent blend terms previously shrank variance to `1/3` at default init, compounding across chained nodes.
+
+### New
+- `InitializerBase.element_variance(shape, config)` returns the per-element variance an initializer draws, in closed form; implemented for all built-ins. `StorkeyHopfield` derives its factor from it. `StorkeyHopfield` uses it to derive `r` rather than assuming Xavier.
+
 ## [0.3.2] - 2026-07-17
 ### New features
 - Convolutional and pooling nodes: `ConvNode` (unified 1D/2D/3D) and the weight-free `MaxPool`/`AvgPool`, tensors in channels-last order. Declared output shapes are validated at `initialize_params` time, before the JIT-compiled forward pass. Demo: `examples/mnist_conv_demo.py`; see `docs/user_guides/10_api_nodes.md`.

@@ -198,15 +198,19 @@ class TransformerBlock(NodeBase):
         }
 
     @staticmethod
-    def get_weight_fan_in(source_shape: Tuple[int, ...], config: Dict[str, Any]) -> int:
-        """Return embed_dim as fan_in for muPC scaling.
+    def get_variance_factor(
+        source_shape: Tuple[int, ...],
+        config: Dict[str, Any],
+        weight_init: Optional[InitializerBase],
+    ) -> float:
+        """Return embed_dim as the muPC variance factor.
 
         Pre-norm LayerNorm absorbs the external muPC forward_scale a
         (LN(a*x) = LN(x)), so forward_and_weight_grads() compensates by scaling
         weight gradients by a. We return embed_dim so muPC computes the
         correct a for this node's width.
         """
-        return source_shape[-1]
+        return float(source_shape[-1])
 
     @staticmethod
     def initialize_params(

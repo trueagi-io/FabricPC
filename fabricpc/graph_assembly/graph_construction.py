@@ -180,6 +180,20 @@ def graph(
                     f"in node '{name}'. Available slots: {list(slots.keys())}"
                 )
 
+        # Validate slots the node declares as mandatory. A node whose whole
+        # purpose is a slot (SkipConnection's residual stream) degrades
+        # silently if that slot is left empty: muPC would scale the remaining
+        # edges as an ordinary sum and stop counting the node toward the
+        # residual depth L.
+        for slot_name, slot_spec in type(node).get_slots().items():
+            if slot_spec.require_connected and not slots[slot_name].in_neighbors:
+                raise ValueError(
+                    f"Node '{name}' ({type(node).__name__}) requires at least one "
+                    f"edge into slot '{slot_name}', which received none. "
+                    f"Connected slots: "
+                    f"{[s for s, i in slots.items() if i.in_neighbors] or 'none'}."
+                )
+
         node_info = NodeInfo(
             name=name,
             shape=node.shape,

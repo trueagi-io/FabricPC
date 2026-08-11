@@ -3,7 +3,7 @@ Unified convolutional node (1D, 2D, 3D) for predictive coding graphs.
 
 Spatial rank is inferred from ``len(shape) - 1`` at construction time.
 All gradient computation, energy accumulation, and the activation convention
-are handled by NodeBase; only ``get_slots``, ``get_weight_fan_in``,
+are handled by NodeBase; only ``get_slots``, ``get_variance_factor``,
 ``initialize_params``, and ``forward`` are implemented here.
 
 Design notes
@@ -135,10 +135,15 @@ class ConvNode(NodeBase):
         return {"in": SlotSpec(name="in", is_multi_input=True)}
 
     @staticmethod
-    def get_weight_fan_in(source_shape: Tuple[int, ...], config: Dict[str, Any]) -> int:
-        """fan_in = C_in × ∏(kernel_size). Overrides NodeBase (which returns only C_in)."""
+    def get_variance_factor(
+        source_shape: Tuple[int, ...],
+        config: Dict[str, Any],
+        weight_init: Optional["InitializerBase"],
+    ) -> float:
+        """Kaiming fan_in = C_in × ∏(kernel_size): each output unit sums that
+        many products. Overrides NodeBase (which returns only C_in)."""
         kernel_size = config.get("kernel_size")
-        return source_shape[-1] * int(np.prod(kernel_size))
+        return float(source_shape[-1] * int(np.prod(kernel_size)))
 
     @staticmethod
     def initialize_params(

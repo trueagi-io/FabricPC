@@ -97,27 +97,37 @@ class TestMaxPoolSlots:
 
     def test_slot_is_variance_scalable(self):
         """MaxPool is a weightless *transformation*, not a skip path —
-        its slot should remain variance-scalable. The muPC formula degenerates
-        to a = gain/sqrt(K*L) via get_weight_fan_in() returning 1."""
+        its slot should remain variance-scalable, so muPC applies
+        a = gain/sqrt(v*K_slot) with v from get_variance_factor()."""
         slots = MaxPool.get_slots()
         assert slots["in"].is_variance_scalable is True
         assert slots["in"].is_skip_connection is False
 
 
-# ── muPC fan_in ─────────────────────────────────────────────────────────
+# ── muPC variance factor ────────────────────────────────────────────────
 
 
 class TestMaxPoolMuPC:
-    def test_fan_in_is_one(self):
-        """Weightless nodes return fan_in=1 (IdentityNode convention).
+    def test_variance_factor_is_one(self):
+        """No correction: a max has no distribution-free variance factor.
 
-        Without this override, the base default returns source_shape[-1] (the
-        upstream channel count), which silently attenuates activations and
-        gradients through every pool by 1/sqrt(C_in).
+        The ratio at n=4 is 0.49 for Gaussian inputs but 1.32 for the ReLU
+        outputs a max pool actually receives, so no single constant is right.
+        The base default (source_shape[-1], the upstream channel count) would
+        be wrong in the other direction, attenuating by 1/sqrt(C_in).
         """
-        assert MaxPool.get_weight_fan_in((28, 28, 32), {}) == 1
-        assert MaxPool.get_weight_fan_in((14, 14, 64), {}) == 1
-        assert MaxPool.get_weight_fan_in((20, 8), {}) == 1
+        cfg = {"window_shape": (2, 2)}
+        assert MaxPool.get_variance_factor((28, 28, 32), cfg, None) == 1.0
+        assert MaxPool.get_variance_factor((14, 14, 64), cfg, None) == 1.0
+        assert MaxPool.get_variance_factor((20, 8), {"window_shape": (2,)}, None) == 1.0
+
+    def test_variance_factor_ignores_window_size(self):
+        """Unlike AvgPool, the factor does not track n."""
+        for window in ((2, 2), (3, 3), (5, 5)):
+            v = MaxPool.get_variance_factor(
+                (28, 28, 32), {"window_shape": window}, None
+            )
+            assert v == 1.0
 
 
 # ── Params ──────────────────────────────────────────────────────────────
@@ -339,8 +349,20 @@ class TestAvgPoolWindowed:
         node = AvgPool(shape=(14, 14, 16), name="avg", window_shape=(2, 2))
         assert node._extra_config["stride"] == (2, 2)
 
-    def test_fan_in_is_one(self):
-        assert AvgPool.get_weight_fan_in((28, 28, 32), {}) == 1
+    def test_variance_factor_is_one_over_window(self):
+        """A mean over n cells multiplies variance by 1/n, so muPC amplifies
+        by sqrt(n) instead of leaving the pool to attenuate by 1/sqrt(n)."""
+        for window, n in (((2, 2), 4), ((3, 3), 9), ((4, 4), 16), ((2,), 2)):
+            cfg = {"window_shape": window, "global_pool": False}
+            assert AvgPool.get_variance_factor((28, 28, 32), cfg, None) == 1.0 / n
+
+    def test_variance_factor_global_uses_all_spatial_dims(self):
+        """Global pooling collapses every spatial axis, so n = prod(spatial)."""
+        cfg = {"global_pool": True}
+        assert AvgPool.get_variance_factor((4, 4, 256), cfg, None) == 1.0 / 16
+        assert AvgPool.get_variance_factor((7, 7, 64), cfg, None) == 1.0 / 49
+        # Channels are not pooled and do not enter n.
+        assert AvgPool.get_variance_factor((4, 4, 512), cfg, None) == 1.0 / 16
 
     def test_slot_is_variance_scalable(self):
         slots = AvgPool.get_slots()

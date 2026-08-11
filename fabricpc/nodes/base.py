@@ -65,6 +65,9 @@ class SlotSpec:
     is_skip_connection: bool = (
         False  # True = identity bypass path that counts toward muPC depth L
     )
+    require_connected: bool = (
+        False  # True = graph construction errors if this slot receives no edge
+    )
 
     def __post_init__(self):
         if self.is_skip_connection and self.is_variance_scalable:
@@ -379,17 +382,32 @@ class NodeBase(ABC):
         pass
 
     # =========================================================================
-    # muPC fan_in for scaling — override per node type
+    # muPC variance factor for scaling — override per node type
     # =========================================================================
 
     @staticmethod
-    def get_weight_fan_in(source_shape: Tuple[int, ...], config: Dict[str, Any]) -> int:
+    def get_variance_factor(
+        source_shape: Tuple[int, ...],
+        config: Dict[str, Any],
+        weight_init: Optional[InitializerBase],
+    ) -> float:
         """
-        Return weight-matrix fan_in for muPC scaling (Kaiming convention).
+        Return the factor by which this node's input transform multiplies input
+        variance, before the activation. muPC scales each in-edge by
 
-        This is the number of input units that contribute to each output unit
-        of the weight matrix. Override in subclasses for node-specific logic
-        (e.g., Conv2D uses C_in * kH * kW instead of H * W * C).
+            a = gain / sqrt(v * K_slot)
+
+        so v is what the scale undoes.
+
+        For a matmul against unit-variance weights, v is the Kaiming fan_in:
+        each output unit sums fan_in independent products, so variance scales
+        by fan_in. The default below covers that case; override for
+        node-specific transforms (ConvNode uses C_in * prod(kernel_size)).
+
+        v is a float, not a dimension count, and may be below 1. A transform
+        that *reduces* variance returns v < 1, which amplifies the edge scale:
+        average pooling over n cells returns 1/n so that muPC applies sqrt(n).
+        Weightless summation nodes return 1.0, leaving only the K_slot term.
 
         - flatten_input=True (dense): all dims flattened → prod(source_shape)
         - flatten_input=False (per-position): last-axis features only
@@ -397,14 +415,18 @@ class NodeBase(ABC):
         Args:
             source_shape: Shape of the source (presynaptic) node, excluding batch.
             config: Node configuration dictionary (e.g., kernel_size, flatten_input).
+            weight_init: The node's weight initializer, or None for a weight-free
+                node. Needed only by nodes that build weight matrices internally
+                rather than one per in-edge (StorkeyHopfield's W); nodes whose
+                per-edge weights muPC already accounts for ignore it.
 
         Returns:
-            Integer fan_in for the weight matrix connecting source to this node.
+            Variance factor v > 0 for the transform connecting source to this node.
         """
         if config.get("flatten_input", False):
-            return int(np.prod(source_shape))
+            return float(np.prod(source_shape))
         # Typically nodes operate on the last (feature dimension)
-        return source_shape[-1]
+        return float(source_shape[-1])
 
     # =========================================================================
     # Default implementations - can be overridden for explicit gradients

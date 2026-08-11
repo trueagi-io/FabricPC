@@ -227,8 +227,8 @@ class FCInputNode(NodeBase):
         return {"in": SlotSpec(name="in", is_multi_input=False)}
 
     @staticmethod
-    def get_weight_fan_in(source_shape, config):
-        return int(np.prod(source_shape))
+    def get_variance_factor(source_shape, config, weight_init):
+        return float(np.prod(source_shape))
 
     @staticmethod
     def initialize_params(key, node_shape, input_shapes, weight_init=None, config=None):
@@ -282,8 +282,8 @@ class PreActResBlock(NodeBase):
     The skip connection is internal to this node — it does NOT appear as a
     graph edge. This means there is one z_latent per block, matching jpc.
 
-    In FabricPC's graph, this block decomposes into LinearNode -> IdentityNode(sum)
-    with in_degree=2. hidden_scale = gain/sqrt(fan_in*K) folds the linear
+    In FabricPC's graph, this block decomposes into LinearNode -> SkipConnection.
+    hidden_scale = gain/sqrt(fan_in*K) folds the linear
     forward scale with the summation scaling, and skip_scale = 1/sqrt(K)
     scales the identity path. Both are needed to preserve O(1) variance.
     """
@@ -316,8 +316,8 @@ class PreActResBlock(NodeBase):
         return {"in": SlotSpec(name="in", is_multi_input=False)}
 
     @staticmethod
-    def get_weight_fan_in(source_shape, config):
-        return source_shape[-1]
+    def get_variance_factor(source_shape, config, weight_init):
+        return float(source_shape[-1])
 
     @staticmethod
     def initialize_params(key, node_shape, input_shapes, weight_init=None, config=None):
@@ -397,8 +397,8 @@ class PreActReadout(NodeBase):
         return {"in": SlotSpec(name="in", is_multi_input=False)}
 
     @staticmethod
-    def get_weight_fan_in(source_shape, config):
-        return source_shape[-1]
+    def get_variance_factor(source_shape, config, weight_init):
+        return float(source_shape[-1])
 
     @staticmethod
     def initialize_params(key, node_shape, input_shapes, weight_init=None, config=None):

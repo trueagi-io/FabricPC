@@ -34,12 +34,14 @@ Usage:
 
 
 python examples/resnet18_cifar10_demo.py
-results (RTX3090, cuda13, jax 0.10.2, can vary a few points in accuracy in different jax versions / hardware due to sensitivity to floating point rounding)
+results (RTX3090, cuda13, jax 0.10.2; can vary a few points in accuracy across
+jax versions and hardware, from sensitivity to floating point rounding)
+
 Model: 31 nodes, 38 edges
 Total parameters: 2,795,210
-Train energy: 0.1096
-Test Accuracy: 37.08%
-Training time: 682.0s (341.0s per epoch)
+Train energy: 0.4792
+Test Accuracy: 33.71%
+Training time: 952.3s (476.2s per epoch)
 """
 
 from jax_setup import set_jax_flags_before_importing_jax
@@ -205,7 +207,8 @@ def make_residual_block(
     edges.append(Edge(source=conv_a, target=conv_b.slot("in")))
     edges.append(Edge(source=conv_b, target=skip_node.slot("in")))
 
-    # Skip connection
+    # Skip connection: the stream enters the merge's unscaled "skip" slot
+    # (via a 1x1 projection when the block downsamples).
     needs_downsample = (stride != 1) or (in_channels != channels)
     if needs_downsample:
         conv_skip = ConvNode(
@@ -219,9 +222,9 @@ def make_residual_block(
         )
         nodes.append(conv_skip)
         edges.append(Edge(source=prev_node, target=conv_skip.slot("in")))
-        edges.append(Edge(source=conv_skip, target=skip_node.slot("in")))
+        edges.append(Edge(source=conv_skip, target=skip_node.slot("skip")))
     else:
-        edges.append(Edge(source=prev_node, target=skip_node.slot("in")))
+        edges.append(Edge(source=prev_node, target=skip_node.slot("skip")))
 
     return nodes, edges, skip_node
 
@@ -461,13 +464,13 @@ def parse_args():
         "--batch_size", type=int, default=256, help="Batch size (default: 256)"
     )
     parser.add_argument(
-        "--infer_steps", type=int, default=80, help="Inference steps (default: 80)"
+        "--infer_steps", type=int, default=120, help="Inference steps (default: 120)"
     )
     parser.add_argument(
         "--eta_infer", type=float, default=0.1, help="Inference rate (default: 0.1)"
     )
     parser.add_argument(
-        "--lr", type=float, default=0.01, help="Learning rate (default: 0.01)"
+        "--lr", type=float, default=0.001, help="Learning rate (default: 0.001)"
     )
     parser.add_argument(
         "--weight_decay", type=float, default=0.01, help="Weight decay (default: 0.01)"
