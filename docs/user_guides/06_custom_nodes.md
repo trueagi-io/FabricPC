@@ -109,21 +109,25 @@ def get_slots():
     }
 ```
 
-### Step 3: Compute Weight Fan-In (Optional)
+### Step 3: Report the Variance Factor (Optional)
 
-For muPC scaling, override `get_weight_fan_in()` to return the correct fan-in:
+For muPC scaling, override `get_variance_factor()` to report how your node's input transform changes input variance, before the activation. muPC scales each in-edge by `a = gain / sqrt(v * K_slot)`, so `v` is what the scale undoes.
 
 ```python
 @staticmethod
-def get_weight_fan_in(source_shape, config):
+def get_variance_factor(source_shape, config, weight_init):
     kernel_size = config.get("kernel_size", (1, 1))
     C_in = source_shape[-1]  # channels-last format
-    return C_in * int(np.prod(kernel_size))
+    return float(C_in * int(np.prod(kernel_size)))
 ```
 
-For a 3x3 kernel with 16 input channels: `fan_in = 16 * 3 * 3 = 144`.
+For a matmul against unit-variance weights, `v` is the Kaiming fan_in — each output unit sums that many independent products. A 3x3 kernel with 16 input channels gives `v = 16 * 3 * 3 = 144`.
 
-If you don't override this method, the default implementation uses the flattened source shape, which works for fully-connected layers but not for convolutions.
+`v` is a float, not a dimension count, and may be **below 1**. A transform that *reduces* variance returns `v < 1`, and muPC amplifies instead of attenuating: `AvgPool` over `n` cells returns `1/n` so the edge scale becomes `sqrt(n)`. A weightless node that only sums its inputs returns `1.0`, leaving just the `K_slot` term.
+
+The `weight_init` argument is the node's own initializer. Ignore it unless your node builds a weight matrix internally rather than one per in-edge — `StorkeyHopfield` uses it with `InitializerBase.element_variance` to derive the variance gain of its internally-initialized Hopfield matrix.
+
+If you don't override this method, the default uses the flattened or last-axis source shape, which works for fully-connected layers but not for convolutions or reducing transforms.
 
 ### Step 4: Initialize Parameters
 
@@ -498,7 +502,7 @@ Creating custom nodes involves:
 3. **Implement `initialize_params()`**: Allocate and initialize weights/biases
 4. **Implement `forward()`**: Compute predictions, errors, and energy
 5. **Optional overrides**:
-   - `get_weight_fan_in()`: For correct muPC scaling
+   - `get_variance_factor()`: For correct muPC scaling
    - `forward_and_latent_grads()` / `forward_and_weight_grads()`: For explicit gradients
 6. **Test**: Verify shapes, energy convergence, and gradient flow
 

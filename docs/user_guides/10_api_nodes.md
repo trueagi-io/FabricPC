@@ -42,7 +42,7 @@ node = Linear(
 - `flatten_input=False`: `(in_features, out_features)` — matmul on last axis
 - `flatten_input=True`: `(in_numel, out_numel)` — fully-connected dense
 
-**muPC fan_in:**
+**muPC variance factor:** the Kaiming fan_in.
 - `flatten_input=False`: `source_shape[-1]` (last axis features)
 - `flatten_input=True`: `prod(source_shape)` (all dims flattened)
 
@@ -73,7 +73,7 @@ pixels = IdentityNode(shape=(784,), name="pixels")
 
 **Slots:** `"in"` (multi-input)
 
-**muPC fan_in:** Always returns `1` (weightless node).
+**muPC variance factor:** Always returns `1` (weightless node).
 
 ---
 
@@ -110,7 +110,9 @@ hopfield = StorkeyHopfield(
 | `weight_init` | `InitializerBase` | `XavierInitializer()` | Weight initializer for W matrix |
 | `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
 
-**Slots:** `"in"` (single-input, `is_variance_scalable=False`). The node self-normalizes — the blend coefficients `1/(1+s)` and `s/(1+s)` sum to 1 and W is initialized internally — so muPC leaves the probe edge unscaled; a muPC edge scale would collapse the s=0 pass-through toward `activation(0)` and scale W a second time. The slot is not a skip connection, so the node does not count toward the residual depth L.
+**Slots:** `"in"` (single-input, variance-scalable).
+
+**muPC variance factor:** `v(s) = (1 + s²r)/(1 + s)²`, where `r = Var(probe @ W)/Var(probe)`. The blend coefficients `1/(1+s)` and `s/(1+s)` sum to 1, but the two terms are near-independent so their variances add in quadrature — the blend shrinks variance rather than preserving it. `v` is at most 1 and bottoms out at `r/(1+r)` when `s = 1/r`; under the default Xavier initialization plus symmetrization, `r = (D+1)/(2D) ≈ 1/2`, so the worst case is `v = 1/3` and the default `s = 1` gives `v = 0.375`. Uncorrected that compounds through a chain of these nodes. `get_variance_factor` reports `v(s)`, so muPC applies `a = gain/sqrt(v(s) · K_slot)` and the node holds O(1) variance at any strength and depth. With a learnable strength the factor is evaluated at the initial `s = 1.0` and held fixed (muPC's static-scale contract); the drift is bounded by `sqrt(3)`. The slot is not a skip connection, so the node does not count toward the residual depth L.
 
 **Energy formulation:**
 ```
@@ -158,7 +160,7 @@ skip = SkipConnection(shape=(128,), name="res1")
 - `"in"` (multi-input, `is_variance_scalable=True`) — branch contributions, scaled `gain/sqrt(K_slot * L)`
 - `"skip"` (multi-input, `is_variance_scalable=False`, `is_skip_connection=True`) — residual stream, unscaled
 
-**muPC fan_in:** Always returns `1` (weightless node).
+**muPC variance factor:** Always returns `1` (weightless node).
 
 **Difference from IdentityNode:** IdentityNode has a single scalable slot and no skip slot, so it does not count toward the residual depth L and its edges carry no depth factor. SkipConnection's unscaled `"skip"` slot preserves the identity mapping through deep residual networks, and its `"in"` slot applies the once-per-branch `1/sqrt(L)` damping.
 
@@ -216,7 +218,7 @@ prev ─────────┤  slot("skip") ──────────
 
 **Weight shape:** Same as Linear — `(in_features, out_features)` or `(in_numel, out_numel)` if `flatten_input=True`. Only `"in"` slot edges get weight matrices.
 
-**muPC fan_in:** Same as Linear — `source_shape[-1]` or `prod(source_shape)` if `flatten_input=True`.
+**muPC variance factor:** Same as Linear — `source_shape[-1]` or `prod(source_shape)` if `flatten_input=True`.
 
 ---
 
@@ -260,7 +262,7 @@ conv1 = ConvNode(
 
 **Output shape validation:** the declared `shape` is checked against kernel, stride, and padding at `initialize_params`; a mismatch raises `ValueError` naming the node and the expected shape. Per spatial axis with input extent `n`, kernel extent `k`, and stride `s`: `"SAME"` gives `ceil(n / s)`; `"VALID"` gives `floor((n - k) / s) + 1`.
 
-**muPC fan_in:** `C_in * prod(kernel_size)` — the number of input values contributing to each output unit.
+**muPC variance factor:** `C_in * prod(kernel_size)` — the number of input values contributing to each output unit.
 
 ---
 
@@ -297,7 +299,7 @@ pool1 = MaxPool(
 
 Explicit padding that covers a full window on any axis is rejected at `initialize_params`: max pooling pads with negative infinity, and a window containing only padding would output negative infinity.
 
-**muPC fan_in:** Always returns `1` (weightless node).
+**muPC variance factor:** `1` — no correction. The variance of a max depends on the input distribution: at a 2×2 window the ratio is 0.49 for Gaussian inputs but 1.32 for the ReLU outputs a max pool actually receives, so no single constant is right. Max pooling also shifts the mean, which no edge scale can remove. Prefer `AvgPool` where variance behavior through depth matters.
 
 ---
 
@@ -332,7 +334,7 @@ avgpool = AvgPool(shape=(256,), name="avgpool", global_pool=True)
 
 **Slots:** `"in"` (multi-input)
 
-**muPC fan_in:** Always returns `1` (weightless node).
+**muPC variance factor:** `1/n`, where `n` is the window volume, or every spatial dimension under `global_pool=True`. A mean over `n` cells multiplies variance by `1/n` for uncorrelated cells, so muPC amplifies the in-edge by `sqrt(n)` instead of letting the pool attenuate by `1/sqrt(n)`.
 
 ---
 
@@ -497,7 +499,7 @@ Pre-norm multi-head self-attention with the residual added inside the node: `z_m
 - `"in"` (single-input, `is_variance_scalable=True`): attention-branch input, muPC-scaled.
 - `"skip"` (single-input, `is_variance_scalable=False`, `is_skip_connection=True`): residual bypass, unscaled.
 
-**muPC fan_in:** `source_shape[-1]` (base-class default) — `embed_dim` for the `"in"` edge.
+**muPC variance factor:** `source_shape[-1]` (base-class default) — `embed_dim` for the `"in"` edge.
 
 ### LnMlp1Node
 
@@ -518,7 +520,7 @@ LayerNorm followed by the first MLP projection: `z_mu = activation(W_ff1 @ Layer
 
 **Slots:** `"in"` (single-input)
 
-**muPC fan_in:** `source_shape[-1]` (base-class default) — `embed_dim`.
+**muPC variance factor:** `source_shape[-1]` (base-class default) — `embed_dim`.
 
 ### Mlp2ResidualNode
 
@@ -540,7 +542,7 @@ Second MLP projection with the block residual added inside the node: `z_mu = x_r
 - `"in"` (single-input, `is_variance_scalable=True`): MLP path, muPC-scaled.
 - `"residual"` (single-input, `is_variance_scalable=False`, `is_skip_connection=True`): residual bypass, unscaled.
 
-**muPC fan_in:** `source_shape[-1]` (base-class default) — `ff_dim` for the `"in"` edge.
+**muPC variance factor:** `source_shape[-1]` (base-class default) — `ff_dim` for the `"in"` edge.
 
 ### VocabProjectionNode
 
@@ -561,6 +563,6 @@ Projection to vocabulary logits: `z_mu = activation(W_out @ x_in + b_out)`, wher
 
 **Slots:** `"in"` (single-input)
 
-**muPC fan_in:** `source_shape[-1]` (base-class default) — `embed_dim`.
+**muPC variance factor:** `source_shape[-1]` (base-class default) — `embed_dim`.
 
 **See also:** the muPC residual depth of this architecture (`L = 2d`) is derived in [Initialization and Scaling](05_initialization_and_scaling.md); `examples/transformer_v2_demo.py` (`--mode pc|backprop`, `--tokenizer char|bpe`) for end-to-end training and generation; [Training and Evaluation](08_training_and_evaluation.md) for the autoregressive training API.

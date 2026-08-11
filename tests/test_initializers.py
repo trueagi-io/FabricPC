@@ -14,10 +14,14 @@ import jax.numpy as jnp
 from fabricpc.core.initializers import (
     InitializerBase,
     initialize,
+    element_variance,
     ZerosInitializer,
+    OnesInitializer,
     NormalInitializer,
+    UniformInitializer,
     XavierInitializer,
     KaimingInitializer,
+    MuPCInitializer,
 )
 
 # Weight shapes spanning every rank the ND fan extension must handle. The fan
@@ -136,3 +140,67 @@ class TestInitializerDeterminism:
         result2 = initialize(rng_key, shape, init)
 
         assert jnp.allclose(result1, result2)
+
+
+class TestElementVariance:
+    """element_variance() reports, in closed form, the variance each
+    initializer draws. StorkeyHopfield derives its muPC variance factor from
+    it, so a wrong closed form silently mis-scales that node."""
+
+    ALL = [
+        NormalInitializer(),
+        NormalInitializer(std=0.3, gain=2.0),
+        UniformInitializer(min_val=-0.5, max_val=0.5),
+        XavierInitializer(),
+        XavierInitializer(distribution="uniform"),
+        XavierInitializer(gain=2.0),
+        KaimingInitializer(),
+        KaimingInitializer(distribution="uniform"),
+        KaimingInitializer(mode="fan_out"),
+        KaimingInitializer(nonlinearity="leaky_relu", a=0.2),
+        MuPCInitializer(),
+        MuPCInitializer(gain=0.5),
+    ]
+
+    @pytest.mark.parametrize("init", ALL, ids=lambda i: type(i).__name__)
+    def test_matches_empirical_second_moment(self, init, rng_key):
+        """All of these are zero-mean, so E[w^2] is the variance."""
+        shape = (256, 256)
+        w = initialize(rng_key, shape, init)
+        predicted = element_variance(shape, init)
+        measured = float(jnp.mean(w**2))
+        assert abs(measured - predicted) < 0.05 * predicted
+
+    @pytest.mark.parametrize("shape", FAN_SHAPES)
+    def test_fan_based_schemes_track_shape(self, shape):
+        """Xavier and Kaiming are shape-dependent; the closed forms use the
+        same ND fan convention as initialize()."""
+        fan_in, fan_out = _expected_fans(shape)
+        assert element_variance(shape, XavierInitializer()) == pytest.approx(
+            2.0 / (fan_in + fan_out)
+        )
+        assert element_variance(shape, KaimingInitializer()) == pytest.approx(
+            2.0 / fan_in
+        )
+        assert element_variance(
+            shape, KaimingInitializer(mode="fan_out")
+        ) == pytest.approx(2.0 / fan_out)
+
+    def test_constant_initializers_have_no_variance(self):
+        assert element_variance((8, 8), ZerosInitializer()) == 0.0
+        assert element_variance((8, 8), OnesInitializer()) == 0.0
+
+    def test_mupc_is_shape_independent(self):
+        """muPC keeps weights at unit variance and puts width/depth scaling in
+        the per-edge forward scale, so the shape must not enter."""
+        assert element_variance((8, 8), MuPCInitializer()) == 1.0
+        assert element_variance((4096, 2), MuPCInitializer()) == 1.0
+
+    def test_unimplemented_raises(self):
+        class BareInitializer(InitializerBase):
+            @staticmethod
+            def initialize(key, shape, config=None):
+                return jnp.zeros(shape)
+
+        with pytest.raises(NotImplementedError, match="element_variance"):
+            element_variance((4, 4), BareInitializer())

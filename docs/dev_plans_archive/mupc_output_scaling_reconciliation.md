@@ -1,4 +1,21 @@
-# Reconcile muPC output-node scaling with the μPC paper (√L divergence)
+# Reconcile muPC scaling with the μPC paper
+
+Originally: the `√L` divergence on the output node. Two later audits found the
+same species of defect elsewhere, so this document now covers three rounds,
+each appended in place rather than rewritten:
+
+1. **Output node** (2026-07-24, landed) — findings 1-4. The readout carried a
+   `√L` that Depth-μP/μPC do not give it.
+2. **Depth-factor placement** (2026-08-03/08, landed; empirical gate pending) —
+   findings 5-9. `1/√L` was applied per scalable edge instead of once per branch
+   at the merge.
+3. **Variance-reducing transforms** (2026-08-09, landed; empirical gate pending)
+   — findings 10-16. Nodes whose transform shrinks input variance were never
+   compensated, because the hook they report through could not express a
+   reduction.
+
+Finding 8's resolution and one of its verification items are superseded by
+finding 14; both are marked in place.
 
 ## Context
 
@@ -276,6 +293,13 @@ on empirical verification.
   path, so no raw identity stream passes through the node. It must not
   count toward L — counting it would raise L and over-damp the graph's true
   merges.
+- **[Superseded 2026-08-09 — see finding 14.]** The diagnosis holds; the
+  resolution does not. "Coefficients sum to 1" preserves scale only for
+  perfectly correlated terms; `probe` and `probe @ W` are near-independent,
+  so their variances add in quadrature and the blend *shrinks* variance.
+  Exempting the slot leaves that shrinkage to compound through a chain. The
+  slot is scalable again, and the node now reports the shrinkage so muPC
+  undoes it. `is_skip_connection=False` and the L argument are unchanged.
 
 ### 9. L counts declared skip slots, not connected ones
 
@@ -399,8 +423,305 @@ rather than one global `max(skip_depth, 1)`.
 - StorkeyHopfield inside a muPC graph: its in-edge is absent from the
   per-edge scaling dicts (unscaled), and the s=0 forward reproduces
   `act(probe)` — the pass-through is preserved.
+  **[Superseded 2026-08-09.]** Literal pass-through was never the muPC
+  contract — no scaled node is a literal identity. Replaced by variance
+  assertions across `s` and along a chain; see the 2026-08-09 verification.
 - Deep-variance test: a residual chain at several L asserting final stream
   variance stays O(1) (the e-bound), which the current stem damping violates
   (≈ e/L).
 - Fixed-seed before/after runs of `resnet18_cifar10_demo.py`, reported
   alongside the paired-depth results.
+
+## Scope expansion: variance-reducing transforms (2026-08-09; implemented 2026-08-09 — empirical gate still pending)
+
+Findings 5-7 removed the depth factor from every edge outside a merge. That
+exposed a second species of defect underneath it: nodes whose transform
+*reduces* input variance were never compensated at all, because the hook they
+report through could not express a reduction. Findings 10-14 are that class.
+The root defect is the hook's type and arguments (finding 10); findings 11-14
+are the nodes it silenced.
+
+Additional symbols: `v` is a node's input-transform variance factor — the factor
+by which the transform multiplies input variance, before the activation, so that
+`a = gain/√(v·K_slot)` undoes it. `n` is the number of cells a pooling window
+reduces. `s` is `hopfield_strength`; `r = Var(probe @ W)/Var(probe)` is the
+variance gain of one pass through StorkeyHopfield's Hopfield matrix W on
+Hopfield dimension D.
+
+### 10. The fan-in hook cannot express a variance-reducing transform
+
+- `NodeBase.get_weight_fan_in(source_shape, config) -> int` is the only channel
+  through which a node tells muPC how its transform changes input variance.
+  Two limits, both structural:
+  - The `int` return can only *reduce* the edge scale. A transform that reduces
+    variance needs `v < 1` so the scale *amplifies*; no integer expresses that.
+  - No `weight_init` argument. A node that builds a weight matrix internally
+    rather than one per in-edge (StorkeyHopfield's W) cannot derive its own
+    variance factor without hardcoding an initializer.
+- The name is also wrong for the quantity: every existing implementation already
+  returns the variance factor, and "weight fan_in" is merely what that factor
+  equals for a matmul (each output unit sums `fan_in` independent products).
+  Weightless nodes returning 1 were already returning a variance factor, not a
+  fan_in.
+- Resolution: replace with
+  `get_variance_factor(source_shape, config, weight_init) -> float`. Pure
+  generalization — every existing implementation returns the same number, so
+  weighted-node scaling is unchanged. Migrated in one change, no alias and no
+  deprecation shim: `base.py`, `identity.py`, `pooling.py`,
+  `skip_connection.py`, `transformer.py`, `convolutional.py`, the call site
+  `mupc.py:360`, `scripts/diagnose_deep_mupc.py`, the three custom node classes
+  in `examples/jpc_fc_resnet_compare.py`, and the tests and user guides.
+
+### 11. AvgPool attenuates the signal by 1/√n
+
+- `_PoolBase.get_weight_fan_in` returned 1 for both pools, on the reasoning that
+  a weightless node has no weight matrix. True but incomplete: `AvgPool` divides
+  a sum of `n` cells by `n`, which for uncorrelated cells multiplies variance by
+  `1/n` exactly — a property of the mean, not of any weight matrix.
+- With `v = 1` the pool's in-edge is scaled 1.0 and the reduction passes
+  through uncorrected, attenuating everything downstream by up to `1/√n`. In
+  `examples/resnet18_cifar10_demo.py` the global pool collapses a 4×4 map, so
+  the head's input was attenuated by up to `1/4`. Finding 7 removed the extra
+  `1/√8` that had sat on that same edge, which left the pool's own reduction as
+  the largest remaining un-normalized factor in that graph.
+- Resolution: return `v = 1/n`, so muPC scales the in-edge by `√n`. `n` is the
+  window volume, or every spatial dimension under `global_pool=True`. Under
+  `count_include_pad=False` the divisor varies per window; the full window
+  volume is used, exact under the default `"VALID"` padding.
+- This is also the framework's own convention for a sum: muPC scales a
+  `K_slot`-way edge sum by `1/√K_slot`, not `1/K_slot`. A spatial mean and an
+  edge sum are both sums, and both are normalized to preserve variance rather
+  than magnitude.
+- Assumption, stated rather than hidden: the pooled cells are uncorrelated.
+  Real conv feature maps are spatially correlated, so the realized reduction
+  lies between `1/n` and `1` and `√n` over-corrects in proportion. This is the
+  same independence assumption Kaiming already makes across a weight matrix's
+  fan_in. Measured in a real conv graph (finding 11a below) rather than left as
+  a caveat.
+
+### 11a. Measured: the independence assumption holds well enough
+
+- Graph: `conv(3×3, stride 2, ReLU, MuPCInitializer) → global AvgPool → Linear`,
+  8×8×3 input, 4×4×32 feature map, `n = 16`, batch 512.
+- Realized spatial reduction was `1/14.1` against the predicted `1/16`. With
+  `v = 1/n` the conv→pool variance ratio is **1.13**; with `v = 1` it was
+  **0.07**. The correction lands within 13% of unity.
+- Recorded as a validation of the analytic `1/n`, not as a calibration: the hook
+  stays analytic, because a measured per-graph constant cannot go into a scale
+  derived from topology alone.
+
+### 12. MaxPool has no distribution-free variance factor
+
+- The variance of a max depends on the input distribution, and the two
+  distributions that matter disagree. Measured ratio of `Var(max over n)` to the
+  input variance, 4M samples:
+
+      n     Gaussian N(0,1)     ReLU(N(0,1))
+      4     0.49                1.32
+      9     0.36                1.05
+      16    0.29                0.87
+      25    0.26                0.76
+
+- Every `MaxPool` in this repo follows a ReLU conv at a 2×2 window
+  (`examples/mnist_conv_demo.py:57,76`), where the ratio is 1.32 — max pooling
+  slightly *increases* variance there. A Gaussian order-statistic correction
+  (`1/√0.49` = 1.43) would be wrong by a factor of 2.7 for the inputs the node
+  actually sees.
+- Resolution: `v = 1.0`, with the measured table recorded in the module
+  docstring as the reason. Deliberately not symmetric with finding 11: the
+  AvgPool correction is exact and distribution-free, the MaxPool one would not
+  be.
+- Recorded limitation, uncorrectable by this mechanism: max pooling shifts the
+  mean (measured mean 1.05 at n=4 for ReLU inputs, against a standard deviation
+  of 0.67). A scalar edge multiplier scales an offset rather than removing it.
+  In an un-normalized PC network that offset propagates downstream. The
+  docstrings direct users to `AvgPool` where variance behavior through depth
+  matters; a node-level centering option would be the fix, out of scope here.
+
+### 13. The SkipConnection two-slot migration fails silently for unmigrated callers
+
+- After the change item 2 above, `skip.slot("in")` still exists and still
+  accepts a stream edge — the layout every prior doc and example prescribed.
+  Routed there, the node has no connected skip slot, so it drops out of the
+  merge count (finding 9's rule), L collapses toward 1 across the graph, and
+  both stream and branch are scaled `1/√2`. That is the `0.707^L` decay
+  `SkipConnection` exists to prevent, reintroduced with no error and no warning.
+- In-repo callers were migrated in the same change, so this is a hazard for
+  external graphs and notebooks rather than a live defect here.
+- Resolution: `SlotSpec` gains `require_connected`; graph construction raises
+  when such a slot receives no edge. `SkipConnection`'s "skip" slot sets it — a
+  SkipConnection without a stream edge is an `IdentityNode` with extra steps.
+  Scoped to the slot that declares it, so `LinearResidual` without a skip edge
+  stays legal (finding 9 deliberately tolerates that).
+
+### 14. StorkeyHopfield's blend shrinks variance; exempting the slot lets it compound
+
+- Supersedes finding 8's resolution. The blend is
+  `act(probe/(1+s) + (probe @ W)·s/(1+s) + b)`. The coefficients sum to 1, but
+  that preserves scale only for perfectly correlated terms. `probe` and
+  `probe @ W` are near-independent, so their variances add in quadrature:
+
+      v(s) = Var(blend)/Var(probe) = (1 + s²·r) / (1 + s)²
+
+  which is at most 1 for every `s ≥ 0` and reaches its minimum `r/(1+r)` at
+  `s = 1/r`.
+- Under the node's own initialization — Xavier on (D, D), so `E[W_ij²] = 1/D`,
+  then `_prepare_W`'s symmetrization `W ← (W + Wᵀ)/2`, which halves off-diagonal
+  variance and leaves the diagonal alone:
+
+      r = (D−1)/(2D) + 1/D = (D+1)/(2D)   →  1/2 for large D
+
+  So the worst case is `s = 2`, `v = 1/3` (per-node standard-deviation ratio
+  0.577); at the default learnable strength (`softplus(raw_init) = 1.0`),
+  `v = 0.375`, ratio 0.612. Uncorrected that compounds: a 32-node chain
+  attenuates by `0.612³² ≈ 1e-7`.
+- The blend is linear in the probe, so an edge scale factors straight out:
+  `act(a·[blend] + b)`. Reporting `v(s)` therefore corrects it exactly.
+- Resolution: `is_variance_scalable=True` (the default) restored;
+  `is_skip_connection=False` unchanged, so the node still does not count toward
+  L — the activation wraps the identity path, so it is not a residual-stream
+  merge. `get_variance_factor` returns `v(s)`.
+- At `s = 0`, `v = 1` and `a = gain`, so the identity blend gets the same
+  treatment as any other muPC-scaled node. This is the defect finding 8 was
+  working around: the *inherited* `fan_in = D` gave `a = gain/√D` and collapsed
+  the blend toward `act(0)`. The correct factor removes it; exempting the slot
+  merely avoided it.
+- Two caveats, both inherent to a scale computed once from topology, both
+  recorded in the node docstring rather than left implicit:
+  - `r` depends on `weight_init`, which is what forced the third parameter in
+    finding 10. It is derived from `InitializerBase.element_variance` and the
+    `enforce_symmetry` / `zero_diagonal` config, not assumed Xavier.
+  - With `hopfield_strength=None` (the default) `s` is learnable, so `v` is
+    computed at construction from `s = softplus(raw_init) = 1.0` and does not
+    track training. This is muPC's standard contract — scales are static and
+    correct at initialization. The drift is bounded: `v` ranges only over
+    `[r/(1+r), 1]` = `[1/3, 1]` at `r = 1/2`, so the scale is never off by more
+    than `√3 ≈ 1.73`.
+
+### 15. `InitializerBase` does not expose the variance it draws
+
+- Finding 14 needs `E[W_ij²]` for an arbitrary initializer at an arbitrary
+  shape. Every initializer computes exactly that internally to draw its samples,
+  but none exposes it.
+- Alternatives considered:
+  - **Sample W once and measure**: needs no new interface, but the scale then
+    depends on a key and carries sampling noise (~9% in `r` at D=16), and a
+    scaling factor derived from topology should not consume randomness.
+    Rejected.
+  - **Hardcode the Xavier closed form in StorkeyHopfield**: silently wrong for
+    any non-default `weight_init`, which the constructor accepts. Rejected.
+  - **Normalize W internally so `r = 1` by construction**: removes the coupling,
+    but `E_hop = (s/2D)·zᵀ(W²−W)z` scales with W, so it would change the
+    attractor dynamics of every existing StorkeyHopfield experiment. Rejected
+    as an unrelated behavior change.
+- Resolution: `InitializerBase.element_variance(shape, config) -> float`, closed
+  form, implemented for all seven built-ins and verified against empirical
+  draws. Not abstract: it raises `NotImplementedError` with a message naming
+  what to implement, so a custom initializer fails loudly at graph construction
+  instead of silently mis-scaling.
+
+### 16. The merge-node predicate was duplicated
+
+- The rule from change item 1 landed as the same expression in two places:
+  `_count_skip_connections_depth` (`mupc.py:219-222`) and the per-node loop in
+  `compute_mupc_scalings` (`:317-320`). Which nodes count toward L and which
+  nodes' edges carry the factor must agree by construction, or the damping lands
+  on edges the depth count did not account for.
+- Resolution: extracted `_is_merge_node(node_info)`, called from both.
+
+### Change items (implemented 2026-08-09)
+
+1. `NodeBase.get_weight_fan_in(source_shape, config) -> int` →
+   `get_variance_factor(source_shape, config, weight_init) -> float`, with all
+   implementations, the call site, scripts, examples, tests and docs migrated in
+   the same change (finding 10). **Breaking** for custom nodes: rename plus a
+   third parameter.
+2. `AvgPool.get_variance_factor` returns `1/n` via a shared
+   `_PoolBase._pool_cell_count`; `MaxPool.get_variance_factor` returns 1.0 with
+   the measured table as its stated reason (findings 11, 12).
+3. `SlotSpec.require_connected`, enforced in `graph_construction.py` next to the
+   existing slot validation; set on `SkipConnection`'s "skip" slot (finding 13).
+4. `StorkeyHopfield`: slot scalable again, `get_variance_factor` returns `v(s)`,
+   and the four docstring sites that carried the "coefficients sum to 1" claim
+   (`storkey_hopfield.py` module docstring and `get_slots`, `CHANGELOG.md`,
+   `10_api_nodes.md`) restate the actual algebra (finding 14).
+5. `InitializerBase.element_variance` plus the module-level `element_variance`
+   convenience function; a shared `_fans(shape)` helper now backs both the
+   Xavier/Kaiming `initialize` and `element_variance` paths so the two cannot
+   drift (finding 15).
+6. `_is_merge_node` extracted in `mupc.py` (finding 16).
+7. Docs: `05_initialization_and_scaling.md` gains a "Variance Factor" section
+   replacing "Kaiming Fan_in Scaling", with the per-node table and the pooling
+   and StorkeyHopfield derivations; `06_custom_nodes.md` step 3 documents the
+   new hook; `04_building_models.md` and `10_api_nodes.md` take the per-node
+   values. Formula blocks throughout use `v` where they said `fan_in`.
+8. Stale text from the 2026-08-08 change: `transformer_demo.py`'s header still
+   claimed both SkipConnection inputs were at scale 1.0;
+   `resnet18_cifar10_demo.py`'s results block had an unclosed parenthesis.
+
+### Impact
+
+- `examples/resnet18_cifar10_demo.py` is again the only shipped graph whose
+  numerics change: its global AvgPool in-edge goes from 1.0 to 4.0. This stacks
+  with the 2026-08-08 merge-node change on the same graph, so the two cannot be
+  measured separately after the fact — see the gate below.
+- `examples/mnist_conv_demo.py` uses `MaxPool` only and is unchanged.
+- No StorkeyHopfield consumer passes `scaling=MuPCConfig`, so finding 14 changes
+  no shipped run, as with finding 8.
+- Weighted nodes report the same variance factor they reported as a fan_in, so
+  finding 10 changes no scaling anywhere on its own.
+
+### Verification (unit tests implemented 2026-08-09; empirical runs pending)
+
+Full suite: 339 passed, up from 309. black and ruff clean.
+
+- `element_variance` against empirical draws for all seven built-ins across
+  distributions and modes; shape tracking for the fan-based schemes against the
+  same ND fan convention `initialize` uses; `NotImplementedError` for an
+  initializer that omits it.
+- `AvgPool` variance factor `1/n` for windowed and global modes, including that
+  channels do not enter `n`; `MaxPool` fixed at 1.0 and independent of window
+  size.
+- Graph-level: `conv → global AvgPool → Linear`, asserting the pool in-edge
+  scale is `√16` and the head's input variance is not divided down (finding
+  11a's measurement, as a test).
+- StorkeyHopfield: closed-form `v(s)` against the measured blend ratio at
+  `s ∈ {0, 0.5, 1, 2, 5}`; the `v ≤ 1` bound and the `r/(1+r)` minimum at
+  `s = 1/r`; the learnable-strength case evaluating at `s = 1`; the probe edge
+  present in the per-edge dicts with `a = gain` at `s = 0`; a 12-node chain at
+  `s ∈ {0, 1, 2}` reaching a variance fixed point.
+  - Note on the chain test's bound: the chain settles near 0.28 at `s = 1`, not
+    near 1. The level is tanh under the Kaiming gain, not this node — a plain
+    `Linear + tanh` chain under muPC settles *lower*, at 0.22, by the same
+    mechanism. The test therefore asserts the flat tail
+    (`var_last > 0.7·var_mid`), which the uncorrected node misses by ~25x, not
+    an absolute band.
+- The pre-migration SkipConnection edge layout raises at graph construction;
+  `LinearResidual` without a skip edge still builds and stays L-free.
+- `scripts/diagnose_deep_mupc.py` (the only `include_output=True` consumer, L=1
+  pure chain, no pooling) prints numerics identical to before.
+- ResNet-18 scaling inspected end to end: stem `√2/√27`, branch convs
+  `√2/√288`, merge branch edge `1/√8`, downsample projection `1/√32`, global
+  pool `4.0`. Stem, branch and projection L-free; damping once per branch at the
+  merge; the pool amplifying by `√n`.
+
+### Empirical gate (still pending, now three arms)
+
+Unchanged in force from the 2026-08-08 entry, and widened: the AvgPool fix
+changes the same graph as the merge-node rule, so a two-arm comparison can no
+longer separate them. At fixed seed and the original hyperparameters
+(lr 0.01, weight_decay 0.01, infer_steps 80):
+
+1. `main` — uniform-L, AvgPool `v = 1`.
+2. 2026-08-08 branch — merge-node rule, AvgPool `v = 1`.
+3. 2026-08-09 branch — merge-node rule, AvgPool `v = 1/n`.
+
+Plus the paired-depth sweep `examples/mupc_demo.py --num_blocks {8,16,32,64,128}`
+in both `--mode skip` and `--mode linear_residual`, which contains no pooling and
+so isolates the depth rule.
+
+The currently recorded ResNet result (37.08% → 35.00%, train energy 0.1096 →
+0.8319) was taken with lr, weight_decay and infer_steps changed in the same
+commit as the rule, so it does not measure the rule. It should be replaced by
+the arm-3 numbers once the matrix runs, and the demo docstring should label
+which arm each figure comes from.

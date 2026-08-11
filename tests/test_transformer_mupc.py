@@ -2,7 +2,7 @@
 Tests for TransformerBlock muPC variance control.
 
 Verifies:
-- get_weight_fan_in returns embed_dim
+- get_variance_factor returns embed_dim
 - forward() with muPC scaling produces z_mu with Var ~ 1.0
 - forward() without muPC scaling preserves original behavior
 """
@@ -35,22 +35,24 @@ def rng_key():
 
 
 # ============================================================================
-# get_weight_fan_in tests
+# get_variance_factor tests
 # ============================================================================
 
 
-class TestTransformerFanIn:
+class TestTransformerVarianceFactor:
 
     def test_returns_embed_dim(self):
-        """get_weight_fan_in should return the last dimension (embed_dim)."""
-        assert TransformerBlock.get_weight_fan_in((128, 512), {}) == 512
-        assert TransformerBlock.get_weight_fan_in((64, 256), {}) == 256
-        assert TransformerBlock.get_weight_fan_in((32, 768), {}) == 768
+        """get_variance_factor should return the last dimension (embed_dim)."""
+        assert TransformerBlock.get_variance_factor((128, 512), {}, None) == 512
+        assert TransformerBlock.get_variance_factor((64, 256), {}, None) == 256
+        assert TransformerBlock.get_variance_factor((32, 768), {}, None) == 768
 
     def test_ignores_flatten_input(self):
-        """flatten_input should not affect transformer fan_in (always last dim)."""
+        """flatten_input should not affect the factor (always last dim)."""
         assert (
-            TransformerBlock.get_weight_fan_in((128, 512), {"flatten_input": True})
+            TransformerBlock.get_variance_factor(
+                (128, 512), {"flatten_input": True}, None
+            )
             == 512
         )
 

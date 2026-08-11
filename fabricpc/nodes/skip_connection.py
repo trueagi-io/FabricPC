@@ -89,13 +89,23 @@ class SkipConnection(NodeBase):
                 is_multi_input=True,
                 is_variance_scalable=False,
                 is_skip_connection=True,
+                # A SkipConnection with no stream edge is an IdentityNode with
+                # extra steps: it stops counting toward L, and edges meant for
+                # the stream get summed and scaled like ordinary branch inputs,
+                # reintroducing the 1/sqrt(K)^L decay this node exists to
+                # prevent. Fail at construction rather than train quietly wrong.
+                require_connected=True,
             ),
         }
 
     @staticmethod
-    def get_weight_fan_in(source_shape: Tuple[int, ...], config: Dict[str, Any]) -> int:
-        """No weight matrix — return 1."""
-        return 1
+    def get_variance_factor(
+        source_shape: Tuple[int, ...],
+        config: Dict[str, Any],
+        weight_init: Optional[InitializerBase],
+    ) -> float:
+        """No weight matrix and no reduction — the transform is a sum, so 1.0."""
+        return 1.0
 
     @staticmethod
     def initialize_params(

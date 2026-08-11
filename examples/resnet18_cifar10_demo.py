@@ -34,13 +34,14 @@ Usage:
 
 
 python examples/resnet18_cifar10_demo.py
-results (RTX3090, cuda13, jax 0.10.2, can vary a few points in accuracy in different jax versions / hardware due to sensitivity to floating point rounding;
+results (RTX3090, cuda13, jax 0.10.2; can vary a few points in accuracy across
+jax versions and hardware, from sensitivity to floating point rounding)
 
 Model: 31 nodes, 38 edges
 Total parameters: 2,795,210
-Train energy: 0.8319
-Test Accuracy: 35.00%
-Training time: 944.4s (472.2s per epoch)
+Train energy: 0.4792
+Test Accuracy: 33.71%
+Training time: 952.3s (476.2s per epoch)
 """
 
 from jax_setup import set_jax_flags_before_importing_jax
@@ -472,7 +473,7 @@ def parse_args():
         "--lr", type=float, default=0.001, help="Learning rate (default: 0.001)"
     )
     parser.add_argument(
-        "--weight_decay", type=float, default=0.1, help="Weight decay (default: 0.1)"
+        "--weight_decay", type=float, default=0.01, help="Weight decay (default: 0.01)"
     )
     parser.add_argument(
         "--activation",

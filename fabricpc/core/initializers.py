@@ -40,6 +40,19 @@ import jax.numpy as jnp
 
 from fabricpc.core._frozen import FrozenConfig
 
+
+def _fans(shape: Tuple[int, ...]) -> Tuple[int, int]:
+    """Shape-aware (fan_in, fan_out) for Linear and ND conv kernel layouts.
+
+    Linear ``(in, out)`` recovers fan_in=in / fan_out=out; an ND kernel
+    ``(*spatial, C_in, C_out)`` gives fan_in=prod(spatial)*C_in and
+    fan_out=prod(spatial)*C_out. A rank-1 shape uses fan_in = fan_out.
+    """
+    if len(shape) >= 2:
+        return int(np.prod(shape[:-1])), int(np.prod(shape[:-2])) * shape[-1]
+    return shape[0], shape[0]
+
+
 # =============================================================================
 # Initializer Base Class
 # =============================================================================
@@ -61,6 +74,13 @@ class InitializerBase(FrozenConfig, ABC):
 
     Required methods:
         - initialize(): Generate initialized array
+
+    Optional methods:
+        - element_variance(): Per-element variance of the distribution, in
+          closed form. Needed only by nodes that build a weight matrix
+          internally and must report their own muPC variance factor
+          (StorkeyHopfield's Hopfield matrix W). All built-in initializers
+          implement it.
     """
 
     @staticmethod
@@ -80,6 +100,31 @@ class InitializerBase(FrozenConfig, ABC):
             Initialized array of specified shape
         """
         pass
+
+    @staticmethod
+    def element_variance(
+        shape: Tuple[int, ...], config: Dict[str, Any] = None
+    ) -> float:
+        """
+        Per-element variance of the distribution this initializer draws from.
+
+        Shape-dependent for fan-based schemes (Xavier, Kaiming), constant for
+        the rest. This is the quantity muPC's scaling is built on, exposed so a
+        node holding an internally-initialized weight matrix can derive how
+        that matrix scales input variance.
+
+        Args:
+            shape: Shape the array would be initialized with.
+            config: Optional configuration dict, as passed to initialize().
+
+        Returns:
+            Variance of a single element, in closed form.
+        """
+        raise NotImplementedError(
+            "This initializer does not implement element_variance(). Implement "
+            "it to use the initializer with a node that derives its muPC "
+            "variance factor from its own weights (e.g. StorkeyHopfield)."
+        )
 
 
 # =============================================================================
@@ -104,6 +149,13 @@ class ZerosInitializer(InitializerBase):
         """Return array of zeros."""
         return jnp.zeros(shape)
 
+    @staticmethod
+    def element_variance(
+        shape: Tuple[int, ...], config: Dict[str, Any] = None
+    ) -> float:
+        """Constant zero, so no variance."""
+        return 0.0
+
 
 class OnesInitializer(InitializerBase):
     """
@@ -123,6 +175,13 @@ class OnesInitializer(InitializerBase):
         gain = config.get("gain", 1.0)
         """Return array of ones."""
         return gain * jnp.ones(shape)
+
+    @staticmethod
+    def element_variance(
+        shape: Tuple[int, ...], config: Dict[str, Any] = None
+    ) -> float:
+        """Constant ``gain``, so no variance."""
+        return 0.0
 
 
 class NormalInitializer(InitializerBase):
@@ -150,6 +209,14 @@ class NormalInitializer(InitializerBase):
         gain = config.get("gain", 1.0)
         return mean + gain * std * jax.random.normal(key, shape)
 
+    @staticmethod
+    def element_variance(
+        shape: Tuple[int, ...], config: Dict[str, Any] = None
+    ) -> float:
+        """``(gain * std)^2``. The mean shifts the distribution, not its spread."""
+        config = config or {}
+        return float(config.get("gain", 1.0) * config.get("std", 0.05)) ** 2
+
 
 class UniformInitializer(InitializerBase):
     """
@@ -173,6 +240,15 @@ class UniformInitializer(InitializerBase):
         min_val = config.get("min", -0.1) if config else -0.1
         max_val = config.get("max", 0.1) if config else 0.1
         return jax.random.uniform(key, shape, minval=min_val, maxval=max_val)
+
+    @staticmethod
+    def element_variance(
+        shape: Tuple[int, ...], config: Dict[str, Any] = None
+    ) -> float:
+        """``(max - min)^2 / 12``, the variance of U(min, max)."""
+        min_val = config.get("min", -0.1) if config else -0.1
+        max_val = config.get("max", 0.1) if config else 0.1
+        return float(max_val - min_val) ** 2 / 12.0
 
 
 class XavierInitializer(InitializerBase):
@@ -204,15 +280,8 @@ class XavierInitializer(InitializerBase):
         config = config or {}
         distribution = config.get("distribution", "normal")
         gain = config.get("gain", 1.0)
-        # Shape-aware: works for Linear (in, out) and conv kernels
-        # (kH..., C_in, C_out). PyTorch convention adapted to FabricPC's
-        # HWIO/LIO/DHWIO layout: fan_in = prod(shape[:-1]),
-        # fan_out = prod(shape[:-2]) * shape[-1].
-        if len(shape) >= 2:
-            fan_in = int(np.prod(shape[:-1]))
-            fan_out = int(np.prod(shape[:-2])) * shape[-1]
-        else:
-            fan_in = fan_out = shape[0]
+        # PyTorch convention adapted to FabricPC's HWIO/LIO/DHWIO layout.
+        fan_in, fan_out = _fans(shape)
 
         if distribution == "uniform":
             limit = gain * jnp.sqrt(6.0 / (fan_in + fan_out))
@@ -220,6 +289,21 @@ class XavierInitializer(InitializerBase):
         else:  # normal
             std = gain * jnp.sqrt(2.0 / (fan_in + fan_out))
             return std * jax.random.normal(key, shape)
+
+    @staticmethod
+    def element_variance(
+        shape: Tuple[int, ...], config: Dict[str, Any] = None
+    ) -> float:
+        """``2 * gain^2 / (fan_in + fan_out)``.
+
+        Both distributions land on the same variance: the normal branch draws
+        with that standard deviation directly, and the uniform branch's
+        ``limit^2 / 3`` reduces to it.
+        """
+        config = config or {}
+        gain = config.get("gain", 1.0)
+        fan_in, fan_out = _fans(shape)
+        return 2.0 * float(gain) ** 2 / (fan_in + fan_out)
 
 
 class KaimingInitializer(InitializerBase):
@@ -272,15 +356,7 @@ class KaimingInitializer(InitializerBase):
         distribution = config.get("distribution", "normal")
         gain_scaling = config.get("gain", 1.0)
 
-        # Shape-aware fan: works for Linear (in, out) and conv kernels
-        # (kH..., C_in, C_out). Linear shape (in, out) recovers fan_in=in
-        # / fan_out=out; Conv2D shape (kH, kW, C_in, C_out) gives
-        # fan_in=kH*kW*C_in, fan_out=kH*kW*C_out.
-        if len(shape) >= 2:
-            fan_in = int(np.prod(shape[:-1]))
-            fan_out = int(np.prod(shape[:-2])) * shape[-1]
-        else:
-            fan_in = fan_out = shape[0]
+        fan_in, fan_out = _fans(shape)
         fan = fan_out if mode == "fan_out" else fan_in
 
         if nonlinearity == "leaky_relu":
@@ -295,6 +371,32 @@ class KaimingInitializer(InitializerBase):
         else:  # normal
             std = gain_scaling * gain / jnp.sqrt(fan)
             return std * jax.random.normal(key, shape)
+
+    @staticmethod
+    def element_variance(
+        shape: Tuple[int, ...], config: Dict[str, Any] = None
+    ) -> float:
+        """``(gain_scaling * gain)^2 / fan``, with gain set by the nonlinearity.
+
+        Both distributions land on the same variance: the normal branch draws
+        with that standard deviation directly, and the uniform branch's
+        ``limit^2 / 3`` reduces to it.
+        """
+        config = config or {}
+        mode = config.get("mode", "fan_in")
+        nonlinearity = config.get("nonlinearity", "relu")
+        gain_scaling = float(config.get("gain", 1.0))
+
+        fan_in, fan_out = _fans(shape)
+        fan = fan_out if mode == "fan_out" else fan_in
+
+        if nonlinearity == "leaky_relu":
+            a = float(config.get("a", 0.01))
+            gain_sq = 2.0 / (1 + a**2)
+        else:  # relu
+            gain_sq = 2.0
+
+        return gain_scaling**2 * gain_sq / fan
 
 
 class MuPCInitializer(InitializerBase):
@@ -326,6 +428,15 @@ class MuPCInitializer(InitializerBase):
         gain = config.get("gain", 1.0)
         return gain * jax.random.normal(key, shape)
 
+    @staticmethod
+    def element_variance(
+        shape: Tuple[int, ...], config: Dict[str, Any] = None
+    ) -> float:
+        """``gain^2``: unit variance by construction, shape-independent. The
+        width and depth scaling lives in the per-edge forward scale, not here."""
+        config = config or {}
+        return float(config.get("gain", 1.0)) ** 2
+
 
 # =============================================================================
 # Convenience Functions
@@ -351,3 +462,21 @@ def initialize(
         arr = initialize(key, (784, 256), init)
     """
     return type(initializer).initialize(key, shape, initializer.config)
+
+
+def element_variance(shape: Tuple[int, ...], initializer: InitializerBase) -> float:
+    """
+    Per-element variance the initializer would draw at this shape.
+
+    Args:
+        shape: Shape the array would be initialized with
+        initializer: InitializerBase instance
+
+    Returns:
+        Variance of a single element, in closed form
+
+    Example:
+        init = XavierInitializer()
+        v = element_variance((256, 256), init)   # 1/256
+    """
+    return type(initializer).element_variance(shape, initializer.config)

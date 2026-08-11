@@ -11,7 +11,9 @@ Architecture (per block: TransformerBlock + SkipConnection)::
                                   └── (skip) ─────────┘
 
     Each SkipConnection sums the transformer output with the previous
-    node's output (identity skip path), both at scale 1.0.
+    node's output. The stream enters the unscaled "skip" slot at scale 1.0;
+    the block's output enters the "in" slot, where muPC damps it once by
+    1/sqrt(L).
 
 Usage:
     python examples/transformer_demo.py

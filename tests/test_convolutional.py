@@ -186,21 +186,25 @@ class TestConvNodeSlots:
 
 
 # =============================================================================
-# ConvNode — get_weight_fan_in
+# ConvNode — get_variance_factor
 # =============================================================================
 
 
-class TestConvNodeFanIn:
+class TestConvNodeVarianceFactor:
+    """A conv's variance factor is its Kaiming fan_in: C_in x prod(kernel)."""
+
     def test_fan_in_1d(self):
-        fan = ConvNode.get_weight_fan_in((10, 3), {"kernel_size": (5,)})
+        fan = ConvNode.get_variance_factor((10, 3), {"kernel_size": (5,)}, None)
         assert fan == 3 * 5  # C_in=3, kL=5
 
     def test_fan_in_2d(self):
-        fan = ConvNode.get_weight_fan_in((28, 28, 3), {"kernel_size": (3, 3)})
+        fan = ConvNode.get_variance_factor((28, 28, 3), {"kernel_size": (3, 3)}, None)
         assert fan == 3 * 3 * 3  # C_in=3, kH=3, kW=3
 
     def test_fan_in_3d(self):
-        fan = ConvNode.get_weight_fan_in((10, 10, 10, 4), {"kernel_size": (3, 3, 3)})
+        fan = ConvNode.get_variance_factor(
+            (10, 10, 10, 4), {"kernel_size": (3, 3, 3)}, None
+        )
         assert fan == 4 * 27  # C_in=4, 3^3=27
 
 

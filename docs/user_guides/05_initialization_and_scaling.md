@@ -113,7 +113,7 @@ W ~ U(min_val, max_val)
 
 muPC achieves this through four complementary scaling mechanisms:
 
-1. **Kaiming fan_in scaling** — normalizes for weight matrix width
+1. **Variance-factor scaling** — normalizes for the node's input transform (Kaiming fan_in for a weight matrix, `1/n` for an average pool)
 2. **Per-slot in-degree scaling (K_slot)** — normalizes for multiple inputs summing into a slot
 3. **Residual depth scaling (L)** — damps each branch contribution once, where it joins the residual stream at a merge node
 4. **Saturative activation compensation** — normalizes gradients for activations like tanh and GELU whose derivatives are < 1
@@ -171,11 +171,11 @@ muPC computes a scaling factor `a` for each incoming edge based on the target no
           │                           │
           │  Yes, non-merge target:   │   No (skip/mask):
           │  a = gain                 │   a = 1.0
-          │     / sqrt(fan_in*K_slot) │   (pass through)
+          │     / sqrt(v*K_slot)      │   (pass through)
           │                           │
           │  Yes, merge target:       │
           │  a = gain                 │
-          │     / sqrt(fan_in*K_slot  │
+          │     / sqrt(v*K_slot       │
           │            * L)           │
           └───────────────────────────┘
 ```
@@ -185,20 +185,20 @@ muPC computes a scaling factor `a` for each incoming edge based on the target no
 For edges into hidden nodes with `is_variance_scalable=True`:
 
 ```
-a = gain / sqrt(fan_in * K_slot)          (non-merge nodes)
-a = gain / sqrt(fan_in * K_slot * L)      (merge nodes)
+a = gain / sqrt(v * K_slot)          (non-merge nodes)
+a = gain / sqrt(v * K_slot * L)      (merge nodes)
 ```
 
 where:
 - `gain`: The activation function's variance gain (e.g., `sqrt(5/3)` for tanh, `sqrt(2)` for ReLU)
-- `fan_in`: The weight matrix fan_in (from `get_weight_fan_in()` — see Kaiming Fan_in below)
+- `v`: The node's input-transform variance factor (from `get_variance_factor()` — see Variance Factor below)
 - `K_slot`: The in-degree of the **specific slot** receiving this edge (not the whole node's in-degree)
 - `L`: The residual depth — number of merge nodes along the longest path (see Residual Depth below)
 
 A **merge node** is a node with at least one connected `is_skip_connection` slot — the point where a computed branch joins the residual stream. The `1/sqrt(L)` damps each branch contribution once, at the merge; edges elsewhere — stems, branch-interior layers, stream projections, post-stream layers — carry no depth factor.
 
 This scaling ensures:
-- **Width invariance**: O(1) activations as `fan_in` increases
+- **Width invariance**: O(1) activations as `v` increases
 - **Multi-input invariance**: O(1) activations when multiple edges sum into a slot
 - **Depth invariance**: O(1) activations as the number of residual blocks increases
 - **Activation invariance**: Correct variance preservation for any activation function
@@ -210,30 +210,45 @@ For edges into slots with `is_variance_scalable=False` (e.g., skip connections, 
 For edges into output nodes (when `include_output=True`):
 
 ```
-a = gain / (fan_in * sqrt(K_slot))
+a = gain / (v * sqrt(K_slot))
 ```
 
-The stronger `1/fan_in` scaling (instead of `1/sqrt(fan_in)`) is a feature-learning requirement: at initialization the readout sums `fan_in` uncorrelated terms (an O(sqrt(fan_in)) sum, giving O(1/sqrt(fan_in)) outputs), but after training the weight updates correlate with the incoming features and the sum grows as O(fan_in), so `1/fan_in` keeps trained outputs O(1). This scaling is optimal for regression tasks with identity activation and Gaussian energy (MSE loss).
+The stronger `1/v` scaling (instead of `1/sqrt(v)`) is a feature-learning requirement: at initialization the readout sums `fan_in` uncorrelated terms (an O(sqrt(fan_in)) sum, giving O(1/sqrt(fan_in)) outputs), but after training the weight updates correlate with the incoming features and the sum grows as O(fan_in), so `1/fan_in` keeps trained outputs O(1). This scaling is optimal for regression tasks with identity activation and Gaussian energy (MSE loss).
 
 The depth factor `L` is absent by design: the hidden `1/sqrt(L)` damps the L branch contributions summed into the residual stream, while the readout is applied once to the already-O(1) stream. This matches the muPC reference output scaling `a_L = 1/N` (Table 1 of arXiv:2505.13124), which carries no depth factor.
 
-### Kaiming Fan_in Scaling
+### Variance Factor
 
-Each node class implements `get_weight_fan_in()` to report the input dimension of its weight matrix:
+`v` is the factor by which a node's input transform multiplies input variance, before the activation. Each node class reports it through `get_variance_factor(source_shape, config, weight_init)`, and the edge scale `a = gain / sqrt(v * K_slot)` undoes it.
 
-| Node Type | fan_in | Notes |
-|-----------|--------|-------|
-| Linear (`flatten_input=False`) | `source_shape[-1]` | Last-axis features |
-| Linear (`flatten_input=True`) | `prod(source_shape)` | All dims flattened |
+For a matmul against unit-variance weights, `v` is the Kaiming fan_in: each output unit sums `fan_in` independent products. But `v` is a float, not a dimension count, and it can be **below 1** — a transform that *reduces* variance reports `v < 1`, and muPC amplifies rather than attenuates.
+
+| Node Type | `v` | Notes |
+|-----------|-----|-------|
+| Linear (`flatten_input=False`) | `source_shape[-1]` | Kaiming fan_in, last-axis features |
+| Linear (`flatten_input=True`) | `prod(source_shape)` | Kaiming fan_in, all dims flattened |
 | LinearResidual | Same as Linear | Only "in" slot has weights |
-| ConvNode | `C_in * prod(kernel_size)` | Input values per output unit |
-| MaxPool / AvgPool | 1 | No weight matrix |
+| ConvNode | `C_in * prod(kernel_size)` | Kaiming fan_in, input values per output unit |
 | TransformerBlock | `embed_dim` | Last axis of input shape |
 | Transformer v2 weighted nodes | `source_shape[-1]` | Base-class default (`embed_dim` or `ff_dim`) |
-| IdentityNode | 1 | No weight matrix |
-| SkipConnection | 1 | No weight matrix |
+| IdentityNode / SkipConnection | 1 | Weightless sum, no reduction |
+| AvgPool | `1/n` | Mean over `n` cells, so `a` amplifies by `sqrt(n)` |
+| MaxPool | 1 | No distribution-free factor exists — see below |
+| StorkeyHopfield | `(1 + s²r)/(1 + s)²` | Strength-weighted blend; `s` = hopfield_strength |
 
-For weighted nodes, this is the standard Kaiming convention — the number of input features to each output neuron. For weightless nodes, `fan_in=1` so the formula reduces to `a = gain / sqrt(K_slot)`, or `a = gain / sqrt(K_slot * L)` at a merge node.
+**AvgPool.** A mean over `n` cells divides a sum of `n` terms by `n`, so for uncorrelated cells it multiplies variance by `1/n` exactly, independent of the input distribution. `n` is the window volume, or every spatial dimension under `global_pool=True`. This is the same convention muPC applies to a `K_slot`-way edge sum (`1/sqrt(K_slot)`, not `1/K_slot`): both are sums, and both are normalized to preserve variance rather than magnitude. Real conv feature maps are spatially correlated, so the realized reduction lies between `1/n` and `1` and `sqrt(n)` over-corrects in proportion — the same independence assumption Kaiming already makes across a weight matrix's fan_in.
+
+**MaxPool.** The variance of a max depends on the input distribution, and the two that matter disagree. Measured ratio of `Var(max over n)` to the input variance:
+
+| n | Gaussian N(0,1) input | ReLU(N(0,1)) input |
+|---|---|---|
+| 4 | 0.49 | 1.32 |
+| 9 | 0.36 | 1.05 |
+| 16 | 0.29 | 0.87 |
+
+A max pool in a conv graph follows a ReLU, where the ratio at the usual 2×2 window is 1.32 — a Gaussian-derived correction would be wrong by a factor of 2.7 for the inputs it actually sees. No single constant is right, so `v = 1`. Max pooling also shifts the mean, which no edge multiplier can remove; prefer `AvgPool` where variance behavior through depth matters.
+
+**StorkeyHopfield.** The node blends an identity path and a learned path internally, and the blend shrinks variance: the coefficients `1/(1+s)` and `s/(1+s)` sum to 1, but the two terms are near-independent so their variances add in quadrature. With `r = Var(probe @ W)/Var(probe)`, `v(s) = (1 + s²r)/(1 + s)²`, which is at most 1 and bottoms out at `r/(1+r)` when `s = 1/r`. `r` is derived from `weight_init` (via `InitializerBase.element_variance`) and the node's symmetry constraints; under the defaults it is `(D+1)/(2D) ≈ 1/2`, so the worst case is `v = 1/3`. Left uncorrected that compounds through a chain. With a learnable strength the factor is evaluated at the initial `s = 1.0` and held fixed, muPC's standard static-scale contract; the drift is bounded by `sqrt(3)` since `v` never leaves `[1/3, 1]`.
 
 ### Per-Slot In-Degree Scaling (K_slot)
 
@@ -261,7 +276,7 @@ If multiple edges connect to the same scalable slot, each is scaled by `1/sqrt(K
 # Two edges into the same "in" slot: K_slot = 2
 Edge(source=a, target=node.slot("in"))
 Edge(source=b, target=node.slot("in"))
-# Each edge scaled by gain / sqrt(fan_in * 2), times 1/sqrt(L) if the
+# Each edge scaled by gain / sqrt(v * 2), times 1/sqrt(L) if the
 # target is a merge node
 ```
 
@@ -287,7 +302,7 @@ The `1/sqrt(L)` factor applies only to scalable edges **into merge nodes** — t
 
 | Topology | L | Effect |
 |----------|---|--------|
-| Pure sequential chain | 1 | No depth factor: `a = gain / sqrt(fan_in * K_slot)` |
+| Pure sequential chain | 1 | No depth factor: `a = gain / sqrt(v * K_slot)` |
 | ResNet with D blocks | D | Each branch scaled by `1/sqrt(L)` at its merge |
 | Decomposed transformer, depth d | 2d | Two merge nodes per block |
 | Mixed architecture | max skip depth | Computed from the longest merge-node path |
@@ -400,7 +415,7 @@ Each input slot on a node has two muPC-relevant flags:
 
 `SkipConnection` is a weightless merge node that sums inputs from two slots and passes the sum through — `LinearResidual`'s slot layout without the weights:
 
-- **"in"** (`is_variance_scalable=True`): receives computed branch contributions; each edge is scaled by `gain / sqrt(K_slot * L)` (fan_in=1), the once-per-branch depth damping applied where the branch joins the stream.
+- **"in"** (`is_variance_scalable=True`): receives computed branch contributions; each edge is scaled by `gain / sqrt(K_slot * L)` (`v`=1), the once-per-branch depth damping applied where the branch joins the stream.
 - **"skip"** (`is_skip_connection=True`): receives the residual stream; edges pass through at scale 1.0. Connecting this slot counts the node toward L.
 
 ```python

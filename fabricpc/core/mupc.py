@@ -12,10 +12,12 @@ Scaling is computed per in-edge, based on the target slot's properties:
 
   - Edges arriving at a slot with is_variance_scalable=True get
 
-        a = gain / sqrt(fan_in * K_slot)          (non-merge nodes)
-        a = gain / sqrt(fan_in * K_slot * L)      (merge nodes)
+        a = gain / sqrt(v * K_slot)          (non-merge nodes)
+        a = gain / sqrt(v * K_slot * L)      (merge nodes)
 
-    where fan_in is the weight-matrix fan_in (from get_weight_fan_in()),
+    where v is the target node's input-transform variance factor (from
+    get_variance_factor()) — the Kaiming fan_in for a weight matrix, 1.0
+    for a weightless sum, 1/n for an average pool over n cells —
     K_slot is the in-degree of the *specific slot* (not the whole node),
     gain = activation.variance_gain() is the Kaiming-style gain, and
     L is the residual depth. A merge node is a node with at least one
@@ -31,7 +33,7 @@ Scaling is computed per in-edge, based on the target slot's properties:
 
   - Edges into output nodes (out_degree=0, with include_output=True) get
 
-        a = gain / (fan_in * sqrt(K_slot))
+        a = gain / (v * sqrt(K_slot))
 
     with no depth factor: the readout is applied once to the O(1) stream,
     not summed L times. This matches a_L = 1/N in Table 1 of the muPC
@@ -175,22 +177,37 @@ class MuPCConfig:
             )
 
 
+def _is_merge_node(node_info: Any) -> bool:
+    """
+    True if this node is a residual-stream merge: it has at least one
+    is_skip_connection slot that receives at least one edge — the point
+    where a computed branch joins the stream.
+
+    Slots that are merely non-scalable (e.g., metadata like attention
+    masks) do not qualify, and neither do declared-but-unconnected skip
+    slots (e.g., a LinearResidual used without a skip edge).
+
+    This single predicate drives both halves of the depth rule: which
+    nodes count toward L (_count_skip_connections_depth) and which nodes'
+    scalable edges carry the 1/sqrt(L) factor (compute_mupc_scalings).
+    They must agree, or the damping lands on edges the depth count did
+    not account for.
+    """
+    return any(
+        s.is_skip_connection and len(s.in_neighbors) > 0
+        for s in node_info.slots.values()
+    )
+
+
 def _count_skip_connections_depth(
     nodes: Dict[str, Any],
     edges: Dict[str, Any],
     node_order: List[str],
 ) -> int:
     """
-    Count the number of nodes with connected skip connection slots along
-    the longest path in the graph. This is the "residual depth" — the
-    number of variance-accumulating merge points where skip and compute
-    paths sum.
-
-    A node counts as a merge point if it has at least one slot with
-    is_skip_connection=True that receives at least one edge. Slots that
-    are merely non-scalable (e.g., metadata like attention masks) do not
-    count, and neither do declared-but-unconnected skip slots (e.g., a
-    LinearResidual used without a skip edge).
+    Count the number of merge nodes (see _is_merge_node) along the longest
+    path in the graph. This is the "residual depth" — the number of
+    variance-accumulating points where skip and compute paths sum.
 
     In a pure sequential chain (no skip connections), returns 0.
     In a ResNet with D residual blocks, returns D.
@@ -215,13 +232,7 @@ def _count_skip_connections_depth(
             pred_skips = skip_counts.get(edge_info.source, 0)
             max_pred_skips = max(max_pred_skips, pred_skips)
 
-        # Check if this node has any connected skip connection slot
-        has_skip = any(
-            s.is_skip_connection and len(s.in_neighbors) > 0
-            for s in node_info.slots.values()
-        )
-
-        if has_skip:
+        if _is_merge_node(node_info):
             skip_counts[node_name] = max_pred_skips + 1
         else:
             skip_counts[node_name] = max_pred_skips
@@ -243,18 +254,19 @@ def compute_mupc_scalings(
     skip/residual connections) pass through at scale 1.0. Scalable slots
     get:
 
-        a = gain / sqrt(fan_in * K_slot)          (non-merge nodes)
-        a = gain / sqrt(fan_in * K_slot * L)      (merge nodes)
+        a = gain / sqrt(v * K_slot)          (non-merge nodes)
+        a = gain / sqrt(v * K_slot * L)      (merge nodes)
 
-    where K_slot is the in-degree of the *specific slot* (not the whole
-    node), L is the residual depth, and gain = activation.variance_gain().
-    A merge node has at least one connected is_skip_connection slot; the
-    1/sqrt(L) damps each branch contribution once, where it joins the
-    residual stream.
+    where v is the target node's input-transform variance factor (from
+    get_variance_factor()), K_slot is the in-degree of the *specific slot*
+    (not the whole node), L is the residual depth, and
+    gain = activation.variance_gain(). A merge node has at least one
+    connected is_skip_connection slot; the 1/sqrt(L) damps each branch
+    contribution once, where it joins the residual stream.
 
     For output nodes (include_output=True):
 
-        a = gain / (fan_in * sqrt(K_slot))
+        a = gain / (v * sqrt(K_slot))
 
     with no depth factor: the readout is applied once to the O(1) stream,
     not summed L times. This matches a_L = 1/N in Table 1 of the muPC
@@ -311,13 +323,9 @@ def compute_mupc_scalings(
 
         node_config = node_info.node_config
 
-        # Merge node: at least one connected is_skip_connection slot — the
-        # point where a computed branch joins the residual stream. Only
-        # edges into a merge node's scalable slots carry the depth factor L.
-        is_merge = any(
-            s.is_skip_connection and len(s.in_neighbors) > 0
-            for s in node_info.slots.values()
-        )
+        # Only edges into a merge node's scalable slots carry the depth
+        # factor L — the same predicate that counted this node toward L.
+        is_merge = _is_merge_node(node_info)
 
         # Activation-aware gain for variance preservation (Kaiming convention).
         activation = node_info.activation
@@ -354,28 +362,31 @@ def compute_mupc_scalings(
             source_node = nodes[edge_info.source]
             source_shape = source_node.node_info.shape
 
-            # Unified fan_in from node class. Weighted nodes return their
-            # weight-matrix fan_in (Kaiming convention); weightless nodes
-            # (e.g. IdentityNode) return 1.
-            fan_in = node_class.get_weight_fan_in(source_shape, node_config)
+            # How this node's input transform scales variance. Weighted nodes
+            # return their Kaiming fan_in; weightless sums (IdentityNode,
+            # SkipConnection) return 1.0; reducing transforms return less than
+            # 1.0 (AvgPool over n cells returns 1/n, so a amplifies by sqrt(n)).
+            v = node_class.get_variance_factor(
+                source_shape, node_config, node_info.weight_init
+            )
 
             # Forward scaling formula with activation gain:
-            #   Non-merge: a = gain/sqrt(fan_in * K_slot)
+            #   Non-merge: a = gain/sqrt(v * K_slot)
             #       — K_slot handles multi-input variance amplification per slot
-            #   Merge:     a = gain/sqrt(fan_in * K_slot * L)
+            #   Merge:     a = gain/sqrt(v * K_slot * L)
             #       — damps each branch contribution once, where it joins
             #         the residual stream; with unit stream variance the
             #         stream then grows as (1+1/L)^L ~ e over L merges
-            #   Output:    a = gain/(fan_in * sqrt(K_slot))
+            #   Output:    a = gain/(v * sqrt(K_slot))
             #       — no depth factor: the readout is applied once to the
             #         O(1) stream, not summed L times (a_L = 1/N in Table 1
             #         of the muPC paper, arXiv:2505.13124)
             if is_output:
-                a = gain / (fan_in * math.sqrt(K_slot))
+                a = gain / (v * math.sqrt(K_slot))
             elif is_merge:
-                a = gain / math.sqrt(fan_in * K_slot * L)
+                a = gain / math.sqrt(v * K_slot * L)
             else:
-                a = gain / math.sqrt(fan_in * K_slot)
+                a = gain / math.sqrt(v * K_slot)
 
             forward_scale[edge_key] = a
 

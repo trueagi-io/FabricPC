@@ -74,15 +74,19 @@ class IdentityNode(NodeBase):
         return {"in": SlotSpec(name="in", is_multi_input=True)}
 
     @staticmethod
-    def get_weight_fan_in(source_shape: Tuple[int, ...], config: Dict[str, Any]) -> int:
-        """Return fan_in for muPC scaling.
+    def get_variance_factor(
+        source_shape: Tuple[int, ...],
+        config: Dict[str, Any],
+        weight_init: Optional["InitializerBase"],
+    ) -> float:
+        """Return the muPC variance factor.
 
-        IdentityNode has no weight matrix — inputs are summed directly.
-        Returning fan_in=1 means the unified scaling formula a=1/sqrt(fan_in*K)
-        reduces to a=1/sqrt(K), which compensates only for multi-edge
-        summation variance amplification.
+        IdentityNode has no weight matrix and no reduction — inputs are summed
+        and passed through, so the transform leaves variance unchanged.
+        Returning 1.0 reduces a = gain/sqrt(v * K_slot) to a = gain/sqrt(K_slot),
+        compensating only for multi-edge summation variance amplification.
         """
-        return 1
+        return 1.0
 
     @staticmethod
     def initialize_params(

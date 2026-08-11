@@ -251,7 +251,9 @@ avgpool = AvgPool(shape=(256,), name="avgpool", global_pool=True)
 # (batch, H, W, 256) -> (batch, 256), then a Linear classifier head
 ```
 
-Pooling nodes are weightless, so their muPC fan_in is 1, and they declare no skip slots, so they are not merge nodes and their incoming edges carry no depth factor: `a = gain / sqrt(K_slot)` — `gain` the activation gain (1 for the identity default), `K_slot` the number of edges arriving at the slot. In `examples/resnet18_cifar10_demo.py` the global pool's incoming edge is scaled by 1.0 (`K_slot = 1`); the residual depth L damps only scalable edges into merge nodes. Constructor tables: [Nodes API](10_api_nodes.md).
+Pooling nodes declare no skip slots, so they are not merge nodes and their incoming edges carry no depth factor: `a = gain / sqrt(v * K_slot)` — `gain` the activation gain (1 for the identity default), `K_slot` the number of edges arriving at the slot, `v` the pool's variance factor.
+
+The two pools report different `v`. `AvgPool` averages `n` cells, which multiplies variance by `1/n` for uncorrelated cells, so it reports `v = 1/n` and muPC amplifies its in-edge by `sqrt(n)`. In `examples/resnet18_cifar10_demo.py` the global pool collapses a 4×4 map, so its incoming edge is scaled by 4.0. `MaxPool` reports `v = 1`: the variance of a max depends on the input distribution (at a 2×2 window the ratio is 0.49 for Gaussian inputs but 1.32 for the ReLU outputs a max pool actually receives), so no single constant is correct. Details and the measured table: [Initialization and Scaling](05_initialization_and_scaling.md#variance-factor). Constructor tables: [Nodes API](10_api_nodes.md).
 
 ### TransformerBlock
 
