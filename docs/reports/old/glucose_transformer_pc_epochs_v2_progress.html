@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Glucose PC Optuna progress</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0b0f14;
+      --card: #121820;
+      --text: #e7ecf3;
+      --muted: #9aa7b8;
+      --line: #243041;
+      --accent: #3dd68c;
+    }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+    }
+    main {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 32px 20px 64px;
+    }
+    h1, h2 { margin: 0 0 12px; font-weight: 650; }
+    h1 { font-size: 1.8rem; }
+    h2 { font-size: 1.2rem; margin-top: 28px; }
+    p, li { color: var(--muted); }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 20px 0;
+    }
+    .stat {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px 16px;
+    }
+    .stat strong {
+      display: block;
+      font-size: 1.4rem;
+      color: var(--text);
+    }
+    .stat span { color: var(--muted); font-size: 0.85rem; }
+    .chart {
+      margin: 16px 0;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--card);
+      padding: 16px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.92rem;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px 10px;
+      text-align: left;
+    }
+    th { color: var(--muted); font-weight: 600; }
+    code { color: var(--accent); }
+    .hint { font-size: 0.85rem; }
+    .arch-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr));
+      gap:14px; margin:16px 0; }
+    .arch-card { background:var(--card); border:1px solid var(--line);
+      border-radius:12px; padding:16px; position:relative; }
+    .arch-rank { position:absolute; top:12px; right:16px; font-size:1.6rem;
+      font-weight:700; color:var(--line); }
+    .arch-trial { font-size:0.85rem; font-weight:600; color:var(--muted);
+      margin-bottom:2px; letter-spacing:0.03em; }
+    .arch-mae { font-size:1.2rem; font-weight:650; color:var(--accent); margin-bottom:6px; }
+    .arch-desc { font-size:0.95rem; color:var(--text); margin-bottom:4px; }
+    .arch-detail { font-size:0.85rem; color:var(--muted); margin-bottom:10px; }
+    .arch-params { font-size:0.8rem; }
+    .arch-params td { padding:3px 8px; border-bottom:1px solid var(--line); }
+    .arch-params td:first-child { color:var(--muted); }
+    @media (max-width: 800px) {
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Glucose PC Optuna progress</h1>
+    <p>
+      Study <code>glucose_transformer_pc_epochs_v2</code> ·
+      predictive coding only · generated
+      <code>2026-07-23T22:08:26.811225+00:00</code>
+    </p>
+    <p class="hint">
+      Self-contained report — no external dependencies. Charts are inline SVG.
+    </p>
+    <div class="stats">
+      <div class="stat"><strong>3</strong><span>Trials</span></div>
+      <div class="stat"><strong>0</strong><span>Complete</span></div>
+      <div class="stat"><strong>0</strong><span>Pruned</span></div>
+      <div class="stat"><strong>—</strong><span>Best MAE (mg/dL)</span></div>
+    </div>
+    <section>
+      <h2>Best MAE by trial</h2>
+      <div class="chart"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 320" role="img" aria-label="Best MAE by trial">
+<rect width="920" height="320" fill="#0f1419"/>
+<text x="48" y="22" fill="#e7ecf3" font-size="14" font-family="Segoe UI, sans-serif">Best MAE by trial</text>
+<line x1="48" y1="264.8" x2="904" y2="264.8" stroke="#2a3441" stroke-width="1"/>
+<text x="40" y="268.8" fill="#9aa7b8" font-size="11" text-anchor="end" font-family="Segoe UI, sans-serif">20</text>
+<line x1="48" y1="188.5" x2="904" y2="188.5" stroke="#2a3441" stroke-width="1"/>
+<text x="40" y="192.5" fill="#9aa7b8" font-size="11" text-anchor="end" font-family="Segoe UI, sans-serif">30</text>
+<line x1="48" y1="112.2" x2="904" y2="112.2" stroke="#2a3441" stroke-width="1"/>
+<text x="40" y="116.2" fill="#9aa7b8" font-size="11" text-anchor="end" font-family="Segoe UI, sans-serif">40</text>
+<line x1="48" y1="36.0" x2="904" y2="36.0" stroke="#2a3441" stroke-width="1"/>
+<text x="40" y="40.0" fill="#9aa7b8" font-size="11" text-anchor="end" font-family="Segoe UI, sans-serif">50</text>
+<rect x="90.8" y="235.1" width="199.7" height="44.9" fill="#f5a524" rx="2"/>
+<text x="190.7" y="306" fill="#9aa7b8" font-size="9" text-anchor="middle" font-family="Segoe UI, sans-serif">0</text>
+<rect x="376.1" y="259.6" width="199.7" height="20.4" fill="#3dd68c" rx="2"/>
+<text x="476.0" y="306" fill="#9aa7b8" font-size="9" text-anchor="middle" font-family="Segoe UI, sans-serif">1</text>
+<rect x="661.5" y="204.2" width="199.7" height="75.8" fill="#f5a524" rx="2"/>
+<text x="761.3" y="306" fill="#9aa7b8" font-size="9" text-anchor="middle" font-family="Segoe UI, sans-serif">2</text>
+</svg></div>
+    </section>
+    <section>
+      <h2>Top trial learning curves</h2>
+      <div class="chart"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 360" role="img" aria-label="Top trial learning curves" style="max-width:100%;height:auto;">
+<rect width="920" height="360" fill="#0f1419"/>
+<text x="52" y="22" fill="#e7ecf3" font-size="14" font-family="Segoe UI, sans-serif">Top trial learning curves</text>
+<line x1="52" y1="332.0" x2="904" y2="332.0" stroke="#2a3441" stroke-width="1"/>
+<text x="44" y="336.0" fill="#9aa7b8" font-size="11" text-anchor="end" font-family="Segoe UI, sans-serif">19</text>
+<line x1="52" y1="295.0" x2="904" y2="295.0" stroke="#2a3441" stroke-width="1"/>
+<text x="44" y="299.0" fill="#9aa7b8" font-size="11" text-anchor="end" font-family="Segoe UI, sans-serif">21</text>
+<line x1="52" y1="258.0" x2="904" y2="258.0" stroke="#2a3441" stroke-width="1"/>
+<text x="44" y="262.0" fill="#9aa7b8" font-size="11" text-anchor="end" font-family="Segoe UI, sans-serif">23</text>
+<line x1="52" y1="221.0" x2="904" y2="221.0" stroke="#2a3441" stroke-width="1"/>
+<text x="44" y="225.0" fill="#9aa7b8" font-size="11" text-anchor="end" font-family="Segoe UI, sans-serif">25</text>
+<line x1="52" y1="184.0" x2="904" y2="184.0" stroke="#2a3441" stroke-width="1"/>
+<text x="44" y="188.0" fill="#9aa7b8" font-size="11" text-anchor="end" font-family="Segoe UI, sans-serif">27</text>
+<line x1="52" y1="147.0" x2="904" y2="147.0" stroke="#2a3441" stroke-width="1"/>
+<text x="44" y="151.0" fill="#9aa7b8" font-size="11" text-anchor="end" font-family="Segoe UI, sans-serif">29</text>
+<line x1="52" y1="110.0" x2="904" y2="110.0" stroke="#2a3441" stroke-width="1"/>
+<text x="44" y="114.0" fill="#9aa7b8" font-size="11" text-anchor="end" font-family="Segoe UI, sans-serif">31</text>
+<line x1="52" y1="73.0" x2="904" y2="73.0" stroke="#2a3441" stroke-width="1"/>
+<text x="44" y="77.0" fill="#9aa7b8" font-size="11" text-anchor="end" font-family="Segoe UI, sans-serif">33</text>
+<line x1="52" y1="36.0" x2="904" y2="36.0" stroke="#2a3441" stroke-width="1"/>
+<text x="44" y="40.0" fill="#9aa7b8" font-size="11" text-anchor="end" font-family="Segoe UI, sans-serif">35</text>
+<path d="M52.0,268.1 L222.4,275.5 L392.8,192.2 L563.2,301.1 L733.6,246.8 L904.0,272.5" fill="none" stroke="#3dd68c" stroke-width="2.2"/>
+<circle cx="52.0" cy="268.1" r="3" fill="#3dd68c"/>
+<circle cx="222.4" cy="275.5" r="3" fill="#3dd68c"/>
+<circle cx="392.8" cy="192.2" r="3" fill="#3dd68c"/>
+<circle cx="563.2" cy="301.1" r="3" fill="#3dd68c"/>
+<circle cx="733.6" cy="246.8" r="3" fill="#3dd68c"/>
+<circle cx="904.0" cy="272.5" r="3" fill="#3dd68c"/>
+<path d="M52.0,61.1 L222.4,188.2 L392.8,214.2 L563.2,239.0 L733.6,240.1 L904.0,241.6" fill="none" stroke="#006FEE" stroke-width="2.2"/>
+<circle cx="52.0" cy="61.1" r="3" fill="#006FEE"/>
+<circle cx="222.4" cy="188.2" r="3" fill="#006FEE"/>
+<circle cx="392.8" cy="214.2" r="3" fill="#006FEE"/>
+<circle cx="563.2" cy="239.0" r="3" fill="#006FEE"/>
+<circle cx="733.6" cy="240.1" r="3" fill="#006FEE"/>
+<circle cx="904.0" cy="241.6" r="3" fill="#006FEE"/>
+<path d="M52.0,89.0 L222.4,166.7" fill="none" stroke="#f5a524" stroke-width="2.2"/>
+<circle cx="52.0" cy="89.0" r="3" fill="#f5a524"/>
+<circle cx="222.4" cy="166.7" r="3" fill="#f5a524"/>
+</svg><div style="margin-top:8px;line-height:1.8;"><span style="display:inline-flex;align-items:center;gap:4px;margin-right:16px;margin-bottom:4px;font-size:0.8rem;"><span style="display:inline-block;width:20px;border-top:2px solid #3dd68c;"></span><span style="color:#3dd68c;">T1 128/d1/h2 lr=0.002485 eta_infer=1.13e-05 infer_steps=19 MAE=20.67 val</span></span><span style="display:inline-flex;align-items:center;gap:4px;margin-right:16px;margin-bottom:4px;font-size:0.8rem;"><span style="display:inline-block;width:20px;border-top:2px solid #006FEE;"></span><span style="color:#006FEE;">T0 64/d1/h1 lr=0.0003751 eta_infer=0.000271 infer_steps=19 MAE=23.89 val</span></span><span style="display:inline-flex;align-items:center;gap:4px;margin-right:16px;margin-bottom:4px;font-size:0.8rem;"><span style="display:inline-block;width:20px;border-top:2px solid #f5a524;"></span><span style="color:#f5a524;">T2 128/d3/h4 lr=0.000378 eta_infer=1.31e-05 infer_steps=18 MAE=27.94 val</span></span></div></div>
+    </section>
+    
+    <section>
+      <h2>Complete-trial leaderboard</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Trial</th><th>Best MAE</th><th>MARD%</th><th>Geometry</th>
+            <th>LR</th><th>η_infer</th><th>Infer steps</th><th>Grad clip</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td>1</td><td>20.673</td><td>16.84</td><td>128/d1/h2</td><td>0.002485</td><td>1.134e-05</td><td>19</td><td>2.0</td></tr><tr><td>0</td><td>23.886</td><td>18.60</td><td>64/d1/h1</td><td>0.0003751</td><td>0.0002705</td><td>19</td><td>1.0</td></tr><tr><td>2</td><td>27.937</td><td>22.61</td><td>128/d3/h4</td><td>0.000378</td><td>1.31e-05</td><td>18</td><td>2.0</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section>
+      <h2>What helped (auto-generated from top trials)</h2>
+      <pre style="font-size:0.85rem; color:var(--muted); white-space:pre-wrap;">- **seq_len=128** dominates top 5 (2/3)
+- **depth=1** dominates top 5 (2/3)
+- **num_heads**: mixed (2×1, 1×1, 4×1)
+- **lr**: range 0.0003751–0.002485, median 0.000378
+- **eta_infer**: range 1.134e-05–0.0002705, median 1.31e-05
+- **weight_init_std**: range 0.01307–0.02295, median 0.01499
+- **infer_steps**: 19×2, 18×1
+- **grad_clip**: 2.0×2, 1.0×1</pre>
+    </section>
+    <section>
+      <h2>Top model architectures</h2>
+      <p style="font-size:0.85rem; color:var(--muted);">
+        Full hyperparameter configurations of the top 5 performing models.
+      </p>
+      <div class="arch-grid"><div class="arch-card"><div class="arch-rank">#1</div><div class="arch-trial">Trial 1</div><div class="arch-mae">MAE 20.673 · MARD 16.8%</div><div class="arch-desc">seq_len=128, depth=1, heads=2</div><div class="arch-detail">readout: flatten</div><table class="arch-params"><tr><td>seq_len</td><td>128</td></tr><tr><td>depth</td><td>1</td></tr><tr><td>num_heads</td><td>2</td></tr><tr><td>lr</td><td>0.002485</td></tr><tr><td>eta_infer</td><td>1.134e-05</td></tr><tr><td>infer_steps</td><td>19</td></tr><tr><td>max_infer_norm</td><td>1</td></tr><tr><td>grad_clip</td><td>2</td></tr><tr><td>weight_init_std</td><td>0.02295</td></tr></table></div><div class="arch-card"><div class="arch-rank">#2</div><div class="arch-trial">Trial 0</div><div class="arch-mae">MAE 23.886 · MARD 18.6%</div><div class="arch-desc">seq_len=64, depth=1, heads=1</div><div class="arch-detail">readout: flatten</div><table class="arch-params"><tr><td>seq_len</td><td>64</td></tr><tr><td>depth</td><td>1</td></tr><tr><td>num_heads</td><td>1</td></tr><tr><td>lr</td><td>0.0003751</td></tr><tr><td>eta_infer</td><td>0.0002705</td></tr><tr><td>infer_steps</td><td>19</td></tr><tr><td>max_infer_norm</td><td>5</td></tr><tr><td>grad_clip</td><td>1</td></tr><tr><td>weight_init_std</td><td>0.01499</td></tr></table></div><div class="arch-card"><div class="arch-rank">#3</div><div class="arch-trial">Trial 2</div><div class="arch-mae">MAE 27.937 · MARD 22.6%</div><div class="arch-desc">seq_len=128, depth=3, heads=4</div><div class="arch-detail">readout: flatten</div><table class="arch-params"><tr><td>seq_len</td><td>128</td></tr><tr><td>depth</td><td>3</td></tr><tr><td>num_heads</td><td>4</td></tr><tr><td>lr</td><td>0.000378</td></tr><tr><td>eta_infer</td><td>1.31e-05</td></tr><tr><td>infer_steps</td><td>18</td></tr><tr><td>max_infer_norm</td><td>5</td></tr><tr><td>grad_clip</td><td>2</td></tr><tr><td>weight_init_std</td><td>0.01307</td></tr></table></div></div>
+    </section>
+    <section>
+      <h2>Hyperparameter glossary</h2>
+      <p style="font-size:0.85rem; color:var(--muted);">
+        What each tuned parameter controls in the predictive-coding transformer.
+      </p>
+      <table>
+        <thead><tr><th>Parameter</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>seq_len</code></td><td style="color:var(--muted);">Input sequence length (number of 5-min glucose readings fed to the model). Longer = more history but heavier.</td></tr><tr><td><code>depth</code></td><td style="color:var(--muted);">Number of transformer blocks stacked. More depth = more capacity but slower inference and higher memory.</td></tr><tr><td><code>num_heads</code></td><td style="color:var(--muted);">Number of parallel attention heads in multi-scale self-attention. More heads = finer-grained attention patterns.</td></tr><tr><td><code>embed_dim</code></td><td style="color:var(--muted);">Dimensionality of token embeddings inside the transformer. Larger = more expressive but more parameters.</td></tr><tr><td><code>lr</code></td><td style="color:var(--muted);">Outer learning rate for weight updates (Adam/AdamW). Controls how fast weights move each step.</td></tr><tr><td><code>eta_infer</code></td><td style="color:var(--muted);">PC inference learning rate. Step size for the inner-loop SGD that updates latent activations to minimise prediction errors.</td></tr><tr><td><code>infer_steps</code></td><td style="color:var(--muted);">Number of PC inference iterations per forward pass. More steps = tighter energy minimisation but slower training.</td></tr><tr><td><code>max_infer_norm</code></td><td style="color:var(--muted);">Maximum gradient norm during PC inference. Clips the inner-loop update to prevent latent activations from exploding.</td></tr><tr><td><code>grad_clip</code></td><td style="color:var(--muted);">Global gradient clipping threshold for weight updates. Stabilises training by capping large gradients.</td></tr><tr><td><code>lr_decay_epochs</code></td><td style="color:var(--muted);">Epoch at which the learning rate starts cosine decay toward zero. Later = longer warm phase at full LR.</td></tr><tr><td><code>weight_init_std</code></td><td style="color:var(--muted);">Standard deviation for weight initialisation (Normal). Smaller = more conservative start; interacts with depth.</td></tr><tr><td><code>weight_decay</code></td><td style="color:var(--muted);">L2 regularisation coefficient on weights. Higher = stronger penalty on large weights, can prevent overfitting.</td></tr><tr><td><code>readout</code></td><td style="color:var(--muted);">Regression head pooling mode: &#x27;flatten&#x27; (full seq*dim projection), &#x27;mean_pool&#x27; (average over time), or &#x27;last&#x27; (last timestep only).</td></tr><tr><td><code>seed_offset</code></td><td style="color:var(--muted);">Random seed offset for reproducibility and diversity across trials with otherwise similar configs.</td></tr><tr><td><code>energy</code></td><td style="color:var(--muted);">Energy functional for PC nodes: &#x27;gaussian&#x27; (MSE-based) or &#x27;huber&#x27; (robust to outliers).</td></tr><tr><td><code>huber_delta</code></td><td style="color:var(--muted);">Huber loss delta threshold. Only active when energy=&#x27;huber&#x27;. Smaller = more robust to outliers.</td></tr><tr><td><code>ipc</code></td><td style="color:var(--muted);">Incremental Predictive Coding. When True, updates latents layer-by-layer instead of all-at-once (can improve convergence).</td></tr><tr><td><code>infer_optimizer</code></td><td style="color:var(--muted);">Optimiser for PC inference loop: &#x27;sgd&#x27; (simple, fast) or &#x27;adam&#x27; (adaptive, may converge faster but uses more memory).</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Background</h2>
+      <p style="font-size:0.85rem; color:var(--muted);">
+        This work builds on our earlier results with conventional (non-PC) transformers for glucose forecasting
+        at <a href="https://github.com/GlucoseDAO/glucose-forecasting" style="color:var(--accent);"
+        >GlucoseDAO/glucose-forecasting</a>. Here we replace the standard forward pass with
+        <strong>predictive coding (PC)</strong> — an inner optimisation loop where each layer maintains its
+        own "belief" about what the input should look like, computes a prediction error, and iteratively
+        refines its activations before the outer weight update. This makes training more biologically
+        plausible and can improve generalisation.
+      </p>
+      <p style="font-size:0.85rem; color:var(--muted);">
+        We also explore a <strong>Hopfield extension</strong> — adding a content-addressable associative
+        memory layer (Storkey Hopfield network) that can store and recall learned glucose dynamics such as
+        meal responses, exercise patterns, and dawn phenomenon. The Hopfield memory gives the model an
+        explicit pattern-recall mechanism beyond what attention alone provides.
+      </p>
+    </section>
+    <section>
+      <h2>How the model works</h2>
+      <div class="chart"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 530" role="img" aria-label="Standard vs Hopfield PC Transformer" style="max-width:100%;height:auto;"><rect width="920" height="530" rx="12" fill="#0f1419"/><defs><marker id="ah" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6" fill="#4b5563"/></marker></defs><text x="460" y="30" fill="#e7ecf3" font-size="15" font-family="Segoe UI,sans-serif" font-weight="650" text-anchor="middle">Standard PC Transformer vs Hopfield Extension</text><text x="460" y="46" fill="#9aa7b8" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle">Same transformer backbone — Hopfield adds associative memory for glucose pattern recall</text><line x1="460" y1="56" x2="460" y2="375" stroke="#243041" stroke-width="1" stroke-dasharray="6,4"/><text x="230" y="60" fill="#006FEE" font-size="13" font-family="Segoe UI,sans-serif" font-weight="700" text-anchor="middle">Standard PC Transformer</text><text x="230" y="76" fill="#9aa7b8" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle">No associative memory</text><rect x="130" y="90" width="200" height="32" rx="6" fill="#1a2332" stroke="#3dd68c" stroke-width="1"/><text x="230" y="110" fill="#3dd68c" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Glucose Input (seq_len, 1)</text><line x1="230" y1="122" x2="230" y2="134" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="130" y="134" width="200" height="30" rx="6" fill="#1a2332" stroke="#006FEE" stroke-width="1"/><text x="230" y="154" fill="#006FEE" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Continuous Embedding</text><line x1="230" y1="164" x2="230" y2="184" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="120" y="184" width="220" height="120" rx="8" fill="#121820" stroke="#9aa7b8" stroke-width="1" stroke-dasharray="5,3"/><text x="136" y="200" fill="#9aa7b8" font-size="9" font-family="Segoe UI,sans-serif" font-style="italic">× depth</text><rect x="134" y="206" width="192" height="26" rx="5" fill="#1a2332" stroke="#f5a524" stroke-width="0.8"/><text x="230" y="224" fill="#f5a524" font-size="9.5" font-family="Segoe UI,sans-serif" text-anchor="middle">Multi-Scale MHA + Residual</text><rect x="134" y="238" width="192" height="24" rx="5" fill="#1a2332" stroke="#9353d3" stroke-width="0.8"/><text x="230" y="254" fill="#9353d3" font-size="9.5" font-family="Segoe UI,sans-serif" text-anchor="middle">LN → MLP → MLP + skip</text><rect x="134" y="268" width="192" height="26" rx="5" fill="#1a1a2e" stroke="#006FEE" stroke-width="1"/><text x="230" y="286" fill="#006FEE" font-size="9" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">PC Energy Node</text><line x1="230" y1="304" x2="230" y2="318" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="130" y="318" width="200" height="30" rx="6" fill="#1a2332" stroke="#3dd68c" stroke-width="1"/><text x="230" y="338" fill="#3dd68c" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Readout → Forecast</text><text x="230" y="366" fill="#9aa7b8" font-size="9" font-family="Segoe UI,sans-serif" text-anchor="middle">Direct path: embed → attend → predict</text><text x="690" y="60" fill="#f5a524" font-size="13" font-family="Segoe UI,sans-serif" font-weight="700" text-anchor="middle">Hopfield PC Transformer</text><text x="690" y="76" fill="#9aa7b8" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle">Associative memory for pattern recall</text><rect x="578" y="90" width="224" height="32" rx="6" fill="#1a2332" stroke="#3dd68c" stroke-width="1"/><text x="690" y="110" fill="#3dd68c" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Glucose Input (seq_len, 1)</text><line x1="690" y1="122" x2="690" y2="134" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="578" y="134" width="224" height="30" rx="6" fill="#1a2332" stroke="#006FEE" stroke-width="1"/><text x="690" y="154" fill="#006FEE" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Continuous Embedding</text><line x1="690" y1="164" x2="690" y2="176" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="574" y="176" width="232" height="38" rx="6" fill="#2a1f0a" stroke="#f5a524" stroke-width="2"/><text x="690" y="194" fill="#f5a524" font-size="11" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="700">Storkey Hopfield Memory</text><text x="690" y="208" fill="#9aa7b8" font-size="8.5" font-family="Segoe UI,sans-serif" text-anchor="middle">content-addressable pattern recall</text><line x1="690" y1="214" x2="690" y2="228" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="568" y="228" width="244" height="76" rx="8" fill="#121820" stroke="#9aa7b8" stroke-width="1" stroke-dasharray="5,3"/><text x="584" y="244" fill="#9aa7b8" font-size="9" font-family="Segoe UI,sans-serif" font-style="italic">× depth</text><rect x="582" y="250" width="216" height="24" rx="5" fill="#1a2332" stroke="#f5a524" stroke-width="0.8"/><text x="690" y="266" fill="#f5a524" font-size="9.5" font-family="Segoe UI,sans-serif" text-anchor="middle">Multi-Scale MHA + Residual</text><rect x="582" y="278" width="216" height="22" rx="5" fill="#1a2332" stroke="#9353d3" stroke-width="0.8"/><text x="690" y="294" fill="#9353d3" font-size="9.5" font-family="Segoe UI,sans-serif" text-anchor="middle">MLP + skip + PC Energy Node</text><line x1="690" y1="304" x2="690" y2="318" stroke="#4b5563" stroke-width="1" marker-end="url(#ah)"/><rect x="578" y="318" width="224" height="30" rx="6" fill="#1a2332" stroke="#3dd68c" stroke-width="1"/><text x="690" y="338" fill="#3dd68c" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Readout → Forecast</text><text x="690" y="366" fill="#9aa7b8" font-size="9" font-family="Segoe UI,sans-serif" text-anchor="middle">Memory recalls learned glucose dynamics</text><rect x="100" y="386" width="720" height="130" rx="8" fill="#121820" stroke="#f31260" stroke-width="1"/><text x="460" y="408" fill="#f31260" font-size="12" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="650">PC Inference Loop (runs at every node in both variants)</text><text x="460" y="428" fill="#e7ecf3" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle">1. Predict z_mu from inputs  →  2. error = z − z_mu  →  3. Compute energy  →  4. Update z via SGD/Adam</text><text x="460" y="448" fill="#9aa7b8" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle">Repeat infer_steps× · step size eta_infer · clip max_infer_norm · optimizer: sgd or adam (searched)</text><text x="460" y="468" fill="#9aa7b8" font-size="9.5" font-family="Segoe UI,sans-serif" text-anchor="middle">Outer loop: Adam weight update (lr, grad_clip) · cosine LR decay after lr_decay_epochs</text><text x="460" y="492" fill="#f5a524" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">Why Hopfield? Content-addressable memory stores learned glucose patterns (meals, exercise,</text><text x="460" y="506" fill="#f5a524" font-size="10" font-family="Segoe UI,sans-serif" text-anchor="middle" font-weight="600">dawn phenomenon) and recalls them during inference — giving the model explicit pattern memory.</text></svg></div>
+      <p style="font-size:0.85rem; color:var(--muted); margin-top:12px;">
+        The <strong>energy function</strong> at each PC node determines how prediction errors are penalised.
+        Tuning searches both Gaussian (standard MSE) and Huber (robust to outliers) energy variants,
+        along with SGD vs Adam inference optimisers and incremental PC (IPC) on/off.
+      </p>
+      <div class="chart"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 340" role="img" aria-label="Gaussian vs Huber Energy Comparison" style="max-width:100%;height:auto;">
+<rect width="920" height="340" rx="12" fill="#0f1419"/>
+<text x="460" y="30" fill="#e7ecf3" font-size="15" font-family="Segoe UI,sans-serif" font-weight="650" text-anchor="middle">Energy Functions: Gaussian (MSE) vs Huber (robust)</text>
+<line x1="60" y1="170" x2="860" y2="170" stroke="#4b5563" stroke-width="1"/>
+<line x1="460" y1="50" x2="460" y2="290" stroke="#4b5563" stroke-width="1"/>
+<text x="864" y="174" fill="#9aa7b8" font-size="10" font-family="Segoe UI,sans-serif">error</text>
+<text x="466" y="46" fill="#9aa7b8" font-size="10" font-family="Segoe UI,sans-serif">Energy</text>
+<polyline points="160.0,-46.0 170.0,-31.8 180.0,-18.2 190.0,-5.0 200.0,7.8 210.0,20.0 220.0,31.8 230.0,43.0 240.0,53.8 250.0,64.2 260.0,74.0 270.0,83.4 280.0,92.2 290.0,100.6 300.0,108.6 310.0,116.0 320.0,123.0 330.0,129.4 340.0,135.4 350.0,141.0 360.0,146.0 370.0,150.6 380.0,154.6 390.0,158.2 400.0,161.4 410.0,164.0 420.0,166.2 430.0,167.8 440.0,169.0 450.0,169.8 460.0,170.0 470.0,169.8 480.0,169.0 490.0,167.8 500.0,166.2 510.0,164.0 520.0,161.4 530.0,158.2 540.0,154.6 550.0,150.6 560.0,146.0 570.0,141.0 580.0,135.4 590.0,129.4 600.0,123.0 610.0,116.0 620.0,108.6 630.0,100.6 640.0,92.2 650.0,83.4 660.0,74.0 670.0,64.2 680.0,53.8 690.0,43.0 700.0,31.8 710.0,20.0 720.0,7.8 730.0,-5.0 740.0,-18.2 750.0,-31.8 760.0,-46.0" fill="none" stroke="#006FEE" stroke-width="2.5"/>
+<polyline points="60.0,2.0 70.0,6.8 80.0,11.6 90.0,16.4 100.0,21.2 110.0,26.0 120.0,30.8 130.0,35.6 140.0,40.4 150.0,45.2 160.0,50.0 170.0,54.8 180.0,59.6 190.0,64.4 200.0,69.2 210.0,74.0 220.0,78.8 230.0,83.6 240.0,88.4 250.0,93.2 260.0,98.0 270.0,102.8 280.0,107.6 290.0,112.4 300.0,117.2 310.0,122.0 320.0,126.8 330.0,131.6 340.0,136.4 350.0,141.2 360.0,146.0 370.0,150.6 380.0,154.6 390.0,158.2 400.0,161.4 410.0,164.0 420.0,166.2 430.0,167.8 440.0,169.0 450.0,169.8 460.0,170.0 470.0,169.8 480.0,169.0 490.0,167.8 500.0,166.2 510.0,164.0 520.0,161.4 530.0,158.2 540.0,154.6 550.0,150.6 560.0,146.0 570.0,141.2 580.0,136.4 590.0,131.6 600.0,126.8 610.0,122.0 620.0,117.2 630.0,112.4 640.0,107.6 650.0,102.8 660.0,98.0 670.0,93.2 680.0,88.4 690.0,83.6 700.0,78.8 710.0,74.0 720.0,69.2 730.0,64.4 740.0,59.6 750.0,54.8 760.0,50.0 770.0,45.2 780.0,40.4 790.0,35.6 800.0,30.8 810.0,26.0 820.0,21.2 830.0,16.4 840.0,11.6 850.0,6.8 860.0,2.0" fill="none" stroke="#f5a524" stroke-width="2.5"/>
+<line x1="360.0" y1="166" x2="360.0" y2="174" stroke="#f5a524" stroke-width="1.5"/>
+<line x1="560.0" y1="166" x2="560.0" y2="174" stroke="#f5a524" stroke-width="1.5"/>
+<text x="560.0" y="186" fill="#f5a524" font-size="9" font-family="Segoe UI,sans-serif" text-anchor="middle">delta</text>
+<text x="360.0" y="186" fill="#f5a524" font-size="9" font-family="Segoe UI,sans-serif" text-anchor="middle">-delta</text>
+<rect x="240" y="304" width="16" height="3" fill="#006FEE"/><text x="260" y="310" fill="#006FEE" font-size="11" font-family="Segoe UI,sans-serif">Gaussian: E = 0.5 ||error||&#xB2;  — penalises large errors heavily</text>
+<rect x="240" y="320" width="16" height="3" fill="#f5a524"/><text x="260" y="326" fill="#f5a524" font-size="11" font-family="Segoe UI,sans-serif">Huber: linear past delta — robust to glucose spikes / outliers</text>
+</svg></div>
+    </section>
+    <section>
+      <h2>Limitations</h2>
+      <ul style="font-size:0.85rem; color:var(--muted);">
+        <li><strong>Single participant data</strong> — we started only 1.5 days before the deadline,
+          so we used only Livia's personal CGM data rather than training across multiple participants.</li>
+        <li><strong>Glucose-only input</strong> — only continuous glucose values are fed to the model.
+          Carbohydrate intake, heart rate, step count, and other covariates that are available in the
+          full dataset are not included.</li>
+        <li><strong>Limited tuning budget</strong> — the tight timeline restricted the number of Optuna
+          trials and hyperparameter ranges we could explore.</li>
+      </ul>
+    </section>
+    <section>
+      <h2>How to run</h2>
+      <h3 style="font-size:0.95rem;">PC Transformer tuning (this report)</h3>
+      <p style="font-size:0.85rem; color:var(--muted);">
+        Searches both Gaussian and Huber energy, SGD and Adam inference,
+        IPC on/off, and all architecture params. Default: 32 trials, Hyperband pruning.
+      </p>
+      <table style="font-size:0.85rem;">
+        <tbody>
+          <tr><td style="color:var(--muted);">Start tuning</td>
+            <td><code>uv run glucose-transformer-tune run</code></td></tr>
+          <tr><td style="color:var(--muted);">Custom trial count</td>
+            <td><code>uv run glucose-transformer-tune run --n-trials 64</code></td></tr>
+          <tr><td style="color:var(--muted);">More parallel workers</td>
+            <td><code>uv run glucose-transformer-tune run --n-trials 64 --max-workers 4</code></td></tr>
+          <tr><td style="color:var(--muted);">Custom run directory</td>
+            <td><code>uv run glucose-transformer-tune run --run-dir runs/my_experiment --study-name my_study</code></td></tr>
+          <tr><td style="color:var(--muted);">Adjust epochs/patience</td>
+            <td><code>uv run glucose-transformer-tune run --max-epochs 20 --patience 5</code></td></tr>
+          <tr><td style="color:var(--muted);">Resume interrupted run</td>
+            <td><code>uv run glucose-transformer-tune run</code> (Optuna journal auto-resumes)</td></tr>
+          <tr><td style="color:var(--muted);">Regenerate this report</td>
+            <td><code>uv run python scripts/generate_glucose_tuning_report.py --format all</code></td></tr>
+        </tbody>
+      </table>
+      <h3 style="font-size:0.95rem; margin-top:1.2rem;">Hopfield variant tuning</h3>
+      <p style="font-size:0.85rem; color:var(--muted);">
+        Searches Hopfield memory placement (baseline / projection / embed-storkey / forecast-storkey)
+        and strength. Same PC dynamics search.
+      </p>
+      <table style="font-size:0.85rem;">
+        <tbody>
+          <tr><td style="color:var(--muted);">Start Hopfield tuning</td>
+            <td><code>uv run glucose-hopfield-tune run</code></td></tr>
+          <tr><td style="color:var(--muted);">Custom trial count</td>
+            <td><code>uv run glucose-hopfield-tune run --n-trials 48 --max-workers 3</code></td></tr>
+          <tr><td style="color:var(--muted);">Regenerate Hopfield report</td>
+            <td><code>uv run python scripts/generate_glucose_hopfield_tuning_report.py --format all</code></td></tr>
+        </tbody>
+      </table>
+      <h3 style="font-size:0.95rem; margin-top:1.2rem;">All reports</h3>
+      <table style="font-size:0.85rem;">
+        <tbody>
+          <tr><td style="color:var(--muted);">Generate all reports</td>
+            <td><code>uv run python scripts/generate_all_glucose_reports.py --format all</code></td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

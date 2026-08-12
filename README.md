@@ -32,14 +32,18 @@ pip install -U -e ".[all,cuda12]"   # GPU, CUDA 12
 pip install -U -e ".[all]"          # CPU only
 ```
 
-See [`docs/user_guides/01_installation.md`](docs/user_guides/01_installation.md) for details. Then set up hooks and run an example:
+See [`docs/user_guides/01_installation.md`](docs/user_guides/01_installation.md)
+for details. For development from this checkout, synchronize the locked
+environment, set up hooks, and run an example with `uv`:
 
 ```bash
+uv sync
+
 # Install pre-commit hooks for code quality
-pre-commit install
+uv run pre-commit install
 
 # Run an example
-python examples/mnist_demo.py
+uv run python examples/mnist_demo.py
 ```
 
 ## Build a Model
@@ -81,10 +85,73 @@ The [`examples`](examples/) folder includes working demonstrations across image 
 - [`resnet18_cifar10_demo.py`](examples/resnet18_cifar10_demo.py) — ResNet-18 as a PC graph, with global average pooling
 - [`transformer_v2_demo.py`](examples/transformer_v2_demo.py) — character- or BPE-level language modeling with text generation
 - [`transformer_tuning.py`](examples/transformer_tuning.py) — two-phase hyperparameter search minimizing validation perplexity
+- [`glucose_transformer.py`](examples/glucose_transformer.py) — GluMind-Uni-style glucose forecasting with predictive coding, backpropagation, or a controlled comparison
+- [`glucose_transformer_tuning.py`](examples/glucose_transformer_tuning.py) — resumable, process-isolated Optuna tuning of glucose PC dynamics and architecture
+- [`glucose_hopfield.py`](examples/glucose_hopfield.py) — glucose forecasting experiments with baseline, projection, and embedded Storkey-Hopfield variants
+
+### Glucose forecasting
+
+Run the glucose transformer with automatic GPU selection:
+
+```bash
+uv run glucose-transformer --mode pc --epochs 30 \
+  --out_dir runs/glucose_transformer
+```
+
+Use `--mode backprop` for the backpropagation baseline or `--mode compare` to
+run both methods on the same data and model geometry. Training validates after
+every epoch, saves resumable checkpoints and the best parameters, and stops
+early when validation MAE no longer improves. The run directory contains
+`config.json`, `history.csv`, checkpoints, and final metrics.
+
+The provisional PC defaults use the best configuration from the original
+short, update-budget Optuna study on the Livia validation split: context 64,
+depth 2, 1 attention head,
+learning rate 0.00327532, 19 inference steps, inference step size 1.44358e-5,
+inference norm clipping 1.0, gradient clipping 0.5, and weight initialization
+standard deviation 0.0218619.
+
+### Glucose Optuna search
+
+The tuning command runs every trial in a fresh process so JAX compilation
+caches and CUDA allocations are released when the trial exits. A shared
+journal makes the study resumable, and the coordinator limits parallel workers
+against a total GPU-memory budget:
+
+```bash
+uv run glucose-transformer-tune run \
+  --run-dir runs/glucose_tuning_epochs_v2 \
+  --study-name glucose_transformer_pc_epochs_v2 \
+  --n-trials 40 \
+  --max-workers 3 \
+  --gpu-memory-budget-mib 8192 \
+  --max-epochs 15 \
+  --min-pruning-epochs 3 \
+  --patience 4
+```
+
+The study minimizes validation MAE while searching context length (64 or 128),
+transformer depth, attention heads, learning rate, gradient clipping, inference
+step size and count, inference norm clipping, LR-decay horizon in epochs, and
+weight initialization scale. Every trial uses the same seed, trains in complete
+epochs, and reports validation MAE once per epoch. Hyperband begins pruning
+after epoch 3; explicit energy and consecutive-validation-regression guards
+remove unstable trials. Live histories are written under
+`runs/glucose_tuning_epochs_v2/trials/`, worker logs under
+`runs/glucose_tuning_epochs_v2/workers/`, and the final result to
+`best_trial.json`. Each epoch records validation MAE and online training MAE,
+including its batch-level standard deviation and minimum/maximum. An atomic
+epoch checkpoint stores model and optimizer state, RNG, early-stop counters,
+and history. Re-running the coordinator recovers dead running trials from
+their latest checkpoints while retaining the shared Optuna journal.
 
 ## Documentation
 
-User guides, API reference, and tutorials live in [`docs/user_guides`](docs/user_guides/00_index.md). Development plans and technical design documents are in [`docs/dev_plans`](docs/dev_plans/).
+User guides, API reference, and tutorials live in
+[`docs/user_guides`](docs/user_guides/00_index.md). Development plans and
+technical design documents are in [`docs/dev_plans`](docs/dev_plans/).
+Glucose forecasting experiment plans, training results, and architecture notes
+are grouped under [`docs/glucose_example`](docs/glucose_example/).
 
 ## Extending FabricPC
 

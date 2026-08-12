@@ -1,0 +1,59 @@
+seq_len:
+  type: categorical
+  values: [64]
+
+depth:
+  type: categorical
+  values: [1]
+
+num_heads:
+  type: categorical
+  values: [1]
+
+variant:
+  type: categorical
+  values: ["baseline", "projection", "embed-storkey", "forecast-storkey"]
+
+hopfield_strength:
+  type: categorical
+  values: ["0.5", "1.0", "1.5", "2.0", "learnable"]
+
+lr:
+  type: float
+  low: 1.8e-3
+  high: 3.8e-3
+  log: true
+
+eta_infer:
+  type: float
+  low: 9.0e-6
+  high: 2.5e-5
+  log: true
+
+infer_steps:
+  type: int
+  low: 12
+  high: 18
+
+max_infer_norm:
+  type: categorical
+  values: [0.5, 1.0]
+
+grad_clip:
+  type: categorical
+  values: [0.5, 1.0]
+
+lr_decay_epochs:
+  type: categorical
+  values: [5, 10, 15]
+
+weight_init_std:
+  type: float
+  low: 0.014
+  high: 0.021
+  log: true
+
+seed_offset:
+  type: int
+  low: 0
+  high: 40

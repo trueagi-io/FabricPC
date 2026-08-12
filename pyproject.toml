@@ -35,7 +35,29 @@ dependencies = [
     "numpy>=1.24.0",
     "tqdm>=4.65.0",
     "optuna",
+    "typer>=0.27.0",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0",
 ]
+
+[project.scripts]
+transformer = "examples.transformer_demo:main"
+transformer-v2 = "examples.transformer_v2_demo:main"
+transformer-tune = "examples.transformer_tuning:main"
+mnist = "examples.mnist_demo:main"
+mnist-cyclic = "examples.mnist_cyclic_graph:main"
+mnist-lateral = "examples.mnist_lateral_connections:main"
+mnist-conv = "examples.mnist_conv_demo:main"
+resnet18 = "examples.resnet18_cifar10_demo:main"
+mupc = "examples.mupc_demo:main"
+hopfield = "examples.storkey_hopfield_demo:main"
+hopfield-recall = "examples.storkey_hopfield_recall:main"
+pc-vs-bp = "examples.PC_backprop_compare:main"
+jpc-resnet = "examples.jpc_fc_resnet_compare:main"
+glucose-transformer = "examples.glucose_transformer:main"
+glucose-transformer-tune = "examples.glucose_transformer_tuning:main"
+glucose-hopfield = "examples.glucose_hopfield:app"
+glucose-hopfield-tune = "examples.glucose_hopfield_tuning:app"
 
 [project.optional-dependencies]
 dev = [
@@ -82,8 +104,11 @@ cuda13 = [
 ]
 # Everything except the hardware backend. Append a backend extra for GPU
 # (e.g. ".[all,cuda12]"), or omit it for the CPU build from the base jax dependency.
+glucose = [
+    "pandas>=2.0.0",
+]
 all = [
-    "fabricpc[dev,tfds,experiments,viz]",
+    "fabricpc[dev,tfds,experiments,viz,glucose]",
 ]
 
 [tool.setuptools]
@@ -91,7 +116,7 @@ py-modules = ["jax_setup"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["fabricpc*"]
+include = ["fabricpc*", "examples*"]
 
 [tool.black]
 line-length = 88

@@ -357,7 +357,13 @@ class StorkeyHopfield(NodeBase):
         z = state.z_latent  # (batch, ..., D)
         wz = z @ W  # (batch, ..., D)
         D = z.shape[-1]
-        E_hopfield = (0.5 / D) * jnp.sum(wz * (wz - z), axis=-1)  # (1/2D) z^T(W^2-W)z
+        E_hopfield = (0.5 / D) * jnp.sum(
+            wz * (wz - z), axis=-1
+        )  # (batch, ...)
+        if E_hopfield.ndim > 1:
+            E_hopfield = jnp.sum(
+                E_hopfield, axis=tuple(range(1, E_hopfield.ndim))
+            )
         return state._replace(
             energy=state.energy + strength * E_hopfield,
         )

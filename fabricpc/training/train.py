@@ -208,6 +208,66 @@ def train_step(
     return params, opt_state, energy, final_state
 
 
+def train_step_ipc(
+    params: GraphParams,
+    opt_state: optax.OptState,
+    batch: Dict[str, jnp.ndarray],
+    structure: GraphStructure,
+    optimizer: optax.GradientTransformation,
+    rng_key: jax.Array,
+) -> Tuple[GraphParams, optax.OptState, float, GraphState]:
+    """
+    Incremental Predictive Coding (iPC) training step.
+
+    Instead of running inference to convergence then updating weights once,
+    interleaves inference and weight updates at every step. This eliminates
+    the two-phase boundary and provably converges faster (Salvatori et al.,
+    ICLR 2024).
+
+    The optimizer is called once per inference step, so for T inference steps
+    the LR schedule advances T times per batch. Callers must scale
+    warmup_steps and decay_steps accordingly.
+
+    Returns:
+        Tuple of (updated_params, updated_opt_state, energy_per_sample, final_state)
+    """
+    batch_size = next(iter(batch.values())).shape[0]
+
+    clamps = {}
+    for task_name, task_value in batch.items():
+        if task_name in structure.task_map:
+            clamps[structure.task_map[task_name]] = task_value
+
+    init_state = initialize_graph_state(
+        structure, batch_size, rng_key, clamps=clamps, params=params,
+    )
+
+    inference_obj = structure.config["inference"]
+    infer_steps = inference_obj.config["infer_steps"]
+    inference_cls = type(inference_obj)
+    config = inference_obj.config
+
+    def body_fn(_t, carry):
+        p, o, state = carry
+        state = inference_cls.inference_step(p, state, clamps, structure, config)
+        grads = compute_local_weight_gradients(p, state, structure)
+        updates, o = optimizer.update(grads, o, p)
+        p = cast(GraphParams, optax.apply_updates(p, updates))
+        return p, o, state
+
+    params, opt_state, final_state = jax.lax.fori_loop(
+        0, infer_steps, body_fn, (params, opt_state, init_state)
+    )
+
+    energy = sum(
+        jnp.sum(final_state.nodes[n].energy)
+        for n in structure.nodes
+        if structure.nodes[n].node_info.in_degree > 0
+    ) / batch_size
+
+    return params, opt_state, energy, final_state
+
+
 def train_step_pmap(
     params: GraphParams,
     opt_state: optax.OptState,
