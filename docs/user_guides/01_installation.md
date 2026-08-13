@@ -96,6 +96,8 @@ This starts a web dashboard at `http://localhost:43800`. See the [Experiment Tra
 
 **JAX/CUDA version conflict**: If you see CUDA-related errors, install the backend matching your driver (`cuda12`, or `cuda13` for driver ≥580) and re-run with `-U` so the coupled JAX wheels upgrade together.
 
+**JAX falls back to CPU ("Outdated cuBLAS installation")  or segfaults if bypassed with JAX_SKIP_CUDA_CONSTRAINTS_CHECK) at the first TFDS data load**: The default Linux `tensorflow` wheel is a CUDA build that dlopens CUDA libraries by SONAME at import. On machines whose loader search path (`LD_LIBRARY_PATH`/ldconfig) carries a system CUDA 13 toolkit older than JAX's pip CUDA wheels, importing TF makes the system `libcublas.so.13` resident first; glibc deduplicates by SONAME, so JAX's CUDA plugin binds that older copy instead of its own pip copy, fails its version check, and falls back to CPU. The `[tfds]` extra now installs `tensorflow-cpu` on x86_64 Linux instead, which does no CUDA probing at import. Both packages install the same `tensorflow` package directory, so pip will not cleanly replace one with the other — in an environment that already has `tensorflow`, run `pip uninstall -y tensorflow` before reinstalling the extra.
+
 **GPU install fails on Windows / macOS**: If `pip install -U -e ".[all,cuda12]"` (or `cuda13`) fails with `No matching distribution found for jax-cuda12-plugin`, you are on a platform without JAX CUDA wheels — JAX publishes them for Linux x86_64/aarch64 only. Install CPU-only (`pip install -U -e ".[all]"`), or use WSL2 for GPU on Windows (JAX marks WSL2 GPU support experimental).
 
 **Triton GEMM errors**: If you see XLA errors mentioning Triton:

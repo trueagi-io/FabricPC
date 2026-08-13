@@ -50,7 +50,29 @@ dev = [
 ]
 tfds = [
     "tensorflow-datasets>=4.9.0",
-    "tensorflow>=2.15.0",
+    # TensorFlow is used only for tf.data input pipelines; every GPU op in
+    # FabricPC goes through JAX. On Linux the default `tensorflow` wheel is a
+    # CUDA build that dlopens CUDA libraries by SONAME during `import
+    # tensorflow` -- before the tf.config.set_visible_devices([], "GPU") calls
+    # in utils/data/dataloader.py can take effect. On a machine whose loader
+    # search path (LD_LIBRARY_PATH/ldconfig) carries a system CUDA 13 toolkit
+    # older than JAX's pip nvidia-* wheels, that import makes the system
+    # libcublas.so.13 resident first. JAX's cuda13 plugin later loads its pip
+    # copy by absolute path, but glibc deduplicates by SONAME and returns the
+    # older resident library; the plugin's version check fails ("Outdated
+    # cuBLAS installation") and JAX silently falls back to CPU (segfaults if
+    # bypassed with JAX_SKIP_CUDA_CONSTRAINTS_CHECK). Co-installed TF and JAX
+    # CUDA stacks alone do not collide: distinct SONAMEs (.so.12 vs .so.13)
+    # coexist in one process. tensorflow-cpu does no CUDA probing at import,
+    # so it cannot preload the stale system library. tensorflow-cpu publishes
+    # wheels for x86_64 Linux and Windows only, so the swap is gated to Linux
+    # x86_64. macOS and aarch64 Linux keep `tensorflow` because no
+    # tensorflow-cpu wheel exists there; Windows keeps it because native
+    # Windows TF has been CPU-only since 2.11. The two markers are exact
+    # complements: exactly one applies on every platform.
+    "tensorflow-cpu>=2.15.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
+    "tensorflow>=2.15.0; platform_system != 'Linux' or platform_machine != 'x86_64'",
+
     # tfds imports the third-party importlib_resources backport unconditionally
     # in its download path (dataset_builder.py), but declares it only for
     # python_version < "3.9". Without this, the first download of any dataset
