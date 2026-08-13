@@ -59,10 +59,13 @@ tfds = [
     # plugin then reads a bogus cuBLAS version, fails its constraints check, and
     # silently falls back to CPU (and segfaults if the check is bypassed with
     # JAX_SKIP_CUDA_CONSTRAINTS_CHECK). tensorflow-cpu has no CUDA loader, so the
-    # conflict cannot arise. tensorflow-cpu publishes no macOS arm64 wheels, and
-    # TF has had no Windows GPU support since 2.11, so the swap is Linux-only.
-    "tensorflow-cpu>=2.15.0; platform_system == 'Linux'",
-    "tensorflow>=2.15.0; platform_system != 'Linux'",
+    # conflict cannot arise. tensorflow-cpu publishes wheels for x86_64 Linux and
+    # Windows only, so the swap is gated to Linux x86_64. macOS and aarch64 Linux
+    # keep `tensorflow` because no tensorflow-cpu wheel exists there; Windows
+    # keeps it because native Windows TF has been CPU-only since 2.11. The two
+    # markers are exact complements: exactly one applies on every platform.
+    "tensorflow-cpu>=2.15.0; platform_system == 'Linux' and platform_machine == 'x86_64'",
+    "tensorflow>=2.15.0; platform_system != 'Linux' or platform_machine != 'x86_64'",
 
     # tfds imports the third-party importlib_resources backport unconditionally
     # in its download path (dataset_builder.py), but declares it only for
