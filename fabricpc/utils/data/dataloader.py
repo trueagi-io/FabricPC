@@ -65,9 +65,11 @@ class _TfdsImageLoader:
         import tensorflow as tf
 
         # Disable GPU for TensorFlow (we only use it for data loading).
-        # Defense-in-depth only: a CUDA-build TF has already initialized its
-        # CUDA loader by the time this runs. The `[tfds]` extra installs
-        # tensorflow-cpu on Linux for that reason.
+        # Defense-in-depth only: a CUDA-build TF dlopens CUDA libraries at
+        # import, before this line runs, and can make a stale system
+        # libcublas.so.13 resident ahead of JAX's pip copy (glibc dedupes by
+        # SONAME). The `[tfds]` extra installs tensorflow-cpu on x86_64 Linux
+        # for that reason.
         tf.config.set_visible_devices([], "GPU")
 
         self.batch_size = batch_size

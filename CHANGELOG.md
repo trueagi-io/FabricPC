@@ -19,7 +19,7 @@ muPC scaling correctness release. Deep residual and pooling graphs previously tr
 - `InitializerBase.element_variance(shape, config)` returns the per-element variance an initializer draws, in closed form; implemented for all built-ins. `StorkeyHopfield` derives its factor from it. `StorkeyHopfield` uses it to derive `r` rather than assuming Xavier.
 
 ### Fixed
-- `[tfds]` installs `tensorflow-cpu` on x86_64 Linux instead of `tensorflow`. The default Linux wheel is a CUDA build that initializes its own CUDA loader at import time, which conflicts with JAX's CUDA stack and caused JAX to fall back to CPU with a spurious "Outdated cuBLAS installation" error at the first TFDS data load. tensorflow-cpu publishes no aarch64 wheels, so aarch64 Linux keeps `tensorflow`.
+- `[tfds]` installs `tensorflow-cpu` on x86_64 Linux instead of `tensorflow`. The default Linux wheel is a CUDA build that dlopens CUDA libraries by SONAME at import. On machines whose loader search path carries a system CUDA 13 toolkit older than JAX's pip CUDA wheels, importing TF made the system `libcublas.so.13` resident first; glibc deduplicates by SONAME, so JAX's CUDA plugin bound that older copy instead of its own pip copy, failed its version check ("Outdated cuBLAS installation"), and fell back to CPU at the first TFDS data load. `tensorflow-cpu` does no CUDA probing at import, so it cannot preload the stale library. tensorflow-cpu publishes no aarch64 wheels, so aarch64 Linux keeps `tensorflow`.
 - Upgrade note: `tensorflow` and `tensorflow-cpu` install the same `tensorflow` package directory, so pip will not cleanly replace one with the other. Existing environments must run `pip uninstall -y tensorflow` before reinstalling the extra.
 
 ## [0.3.2] - 2026-07-17
