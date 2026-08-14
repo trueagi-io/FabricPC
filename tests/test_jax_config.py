@@ -20,7 +20,8 @@ import json, os
 import jax  # already imported when the helper runs — that is what is under test
 from fabricpc.jax_config import setup_jax
 
-setup_jax({call_arg})
+for _ in range({repeat}):
+    setup_jax({call_arg})
 
 payload = {{
     "jax_platforms": os.environ.get("JAX_PLATFORMS"),
@@ -33,9 +34,11 @@ print(json.dumps(payload))
 _QUERY_DEVICES = 'payload["platforms"] = sorted({d.platform for d in jax.devices()})'
 
 
-def _run(call_arg, query_devices=False, **env):
+def _run(call_arg, query_devices=False, repeat=1, **env):
     source = _PROBE.format(
-        call_arg=call_arg, device_line=_QUERY_DEVICES if query_devices else ""
+        call_arg=call_arg,
+        repeat=repeat,
+        device_line=_QUERY_DEVICES if query_devices else "",
     )
     child_env = {k: v for k, v in os.environ.items() if k not in _STRIPPED}
     child_env.update(env)
@@ -76,3 +79,23 @@ def test_triton_gemm_flag_is_opt_out():
     out = _run("", query_devices=False, FABRICPC_DISABLE_TRITON_GEMM="0")
     assert "--xla_gpu_enable_triton_gemm=false" not in out["xla_flags"]
     assert "--xla_gpu_deterministic_ops=true" in out["xla_flags"]
+
+
+def test_user_preset_xla_flag_values_win():
+    """Flags are guarded by name: a value already in XLA_FLAGS is kept as-is."""
+    out = _run(
+        "",
+        XLA_FLAGS="--xla_gpu_autotune_level=3 --xla_gpu_deterministic_ops=false",
+    )
+    assert "--xla_gpu_autotune_level=3" in out["xla_flags"]
+    assert "--xla_gpu_autotune_level=1" not in out["xla_flags"]
+    assert "--xla_gpu_deterministic_ops=false" in out["xla_flags"]
+    assert "--xla_gpu_deterministic_ops=true" not in out["xla_flags"]
+    # Flags the user did not preset are still appended.
+    assert "--xla_gpu_enable_triton_gemm=false" in out["xla_flags"]
+
+
+def test_repeated_calls_leave_xla_flags_unchanged():
+    once = _run("")
+    twice = _run("", repeat=2)
+    assert twice["xla_flags"] == once["xla_flags"]

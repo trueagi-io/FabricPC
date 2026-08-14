@@ -1,11 +1,14 @@
 """JAX environment configuration for FabricPC.
 
-Every setting `setup_jax` writes is consumed at JAX *backend initialization* —
-the first computation or device query — not at `import jax`, with one
-exception: the `JAX_PLATFORMS` environment variable is read once, while jax is
-imported. `setup_jax` therefore sets the platform two ways: in `os.environ`, so
+The settings `setup_jax` writes are consumed at JAX *backend initialization* —
+the first computation or device query — not at `import jax`, with two
+exceptions. `JAX_PLATFORMS` is read from the environment once, while jax is
+imported, so `setup_jax` sets the platform two ways: in `os.environ`, so
 spawned worker processes inherit it, and through `jax.config`, which selects the
-platform in a process that has already imported jax.
+platform in a process that has already imported jax. `TF_CPP_MIN_LOG_LEVEL` is
+cached when the native runtime emits its first log message, so it suppresses
+messages from backend initialization onward but not any emitted during
+`import jax`.
 """
 
 import os
@@ -37,14 +40,17 @@ def setup_jax(platform: str | None = None) -> None:
     # Keep deterministic kernels and default to disabling Triton GEMM, which can
     # trigger CUDA runtime errors on some GPUs for small/irregular matmuls.
     # Triton tiling logic fails when it encounters certain fused operations where dimension bounds are not divisible by the tile size.
+    # Each flag is guarded by name, not name=value: a value already present in
+    # XLA_FLAGS — from the caller's shell or a previous setup_jax call — wins.
     _xla_flags = os.environ.get("XLA_FLAGS", "")
-    if "--xla_gpu_deterministic_ops=true" not in _xla_flags:
+    if "--xla_gpu_deterministic_ops" not in _xla_flags:
         _xla_flags = (_xla_flags + " --xla_gpu_deterministic_ops=true").strip()
     if os.environ.get("FABRICPC_DISABLE_TRITON_GEMM", "1") == "1":
-        if "--xla_gpu_enable_triton_gemm=false" not in _xla_flags:
+        if "--xla_gpu_enable_triton_gemm" not in _xla_flags:
             _xla_flags = (_xla_flags + " --xla_gpu_enable_triton_gemm=false").strip()
 
-    # Set XLA flags for good performance and reproducibility
-    _xla_flags = (_xla_flags + " --xla_gpu_autotune_level=1").strip()
+    # Autotune level 1 for reproducible kernel selection at low compile cost
+    if "--xla_gpu_autotune_level" not in _xla_flags:
+        _xla_flags = (_xla_flags + " --xla_gpu_autotune_level=1").strip()
 
     os.environ["XLA_FLAGS"] = _xla_flags

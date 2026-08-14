@@ -53,6 +53,10 @@ FabricPC is installable today only by cloning the repo. Publishing to pypi.org m
 - `setup_jax`'s parameter is named `platform`, not `jax_platforms`; the three callsites passing it by keyword are migrated with the rest.
 - The module is `fabricpc/jax_config.py`, not `fabricpc/jax_setup.py`: `setup_jax` is the verb, the module is the noun, and "setup" no longer names a temporal constraint that the re-contracted helper does not have. Test file follows: `tests/test_jax_config.py`.
 - `import jax` sits at module scope, not inside `setup_jax`. A function-local import defers nothing here: `from fabricpc.jax_config import setup_jax` executes `fabricpc/__init__`, whose eager submodule imports pull in jax before the helper can run. Measured with `python -X importtime`: importing the helper costs 477 ms, of which jax is 380 ms, and `jax` is in `sys.modules` on return. The deferred import only hid a hard core dependency from the module header.
+- `setup_jax` guards each XLA flag by name (`"--xla_gpu_autotune_level" not in _xla_flags`), not by `name=value`: a value already present in `XLA_FLAGS` — from the caller's shell or a previous `setup_jax` call — wins, and repeated calls leave the string unchanged. The inherited assembly appended the autotune flag unconditionally, so every call grew `XLA_FLAGS` and the appended `=1` overrode a user-set level; the `name=value` guards on the other two flags missed user-set opposite values the same way. `tests/test_jax_config.py` pins both behaviors.
+- `TF_CPP_MIN_LOG_LEVEL` is a second exception to the consumed-at-backend-initialization rule, documented in the module docstring: the native runtime caches the level at its first emitted log message, so the post-import helper suppresses messages from backend initialization onward but not any emitted during `import jax`.
+- `publish-testpypi` sets `skip-existing: true`: TestPyPI enforces the same (name, version, filename) reservation as PyPI, so a second rehearsal at an already-uploaded version would otherwise fail at the upload step. With the flag, the rerun verifies `build` + `smoke` and uploads nothing. The production `publish` job never sets it.
+- `test.yml` runs pushes only on `main` — PR commits otherwise run twice, once per event — and cancels superseded runs through a per-ref `concurrency` group.
 
 ---
 
@@ -106,7 +110,7 @@ def setup_jax(platform: str | None = None) -> None:
         jax.config.update("jax_platforms", platform)    # effective in this process (Test B)
     os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
     os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
-    # ... XLA_FLAGS assembly unchanged (Test C: consumed at backend init) ...
+    # ... XLA_FLAGS assembly guarded by flag name (Test C: consumed at backend init) ...
 ```
 
 The `not os.environ.get("JAX_PLATFORMS")` guard preserves the current setdefault semantics: a platform set in the user's shell wins over the function argument, exactly as today. The env write plus `config.update` pair is one deterministic path — the env var covers spawned worker processes, the config call covers the already-imported current process.
@@ -222,7 +226,7 @@ The `[tool.ruff.lint.per-file-ignores]` E402 ignore for `examples/` and `scripts
 
 - `git mv jax_setup.py fabricpc/jax_config.py`; rewrite the function as sketched in §2 (rename to `setup_jax`, platform via env-write + `jax.config.update`, remaining env vars unchanged).
 - Migrate the 21 caller files listed in §2 (`from jax_setup import set_jax_flags_before_importing_jax` → `from fabricpc.jax_config import setup_jax`); delete the `sys.path` workaround in `tests/test_doc_snippets.py:51-52`.
-- New test `tests/test_jax_config.py`, run in a subprocess: `import jax` first, then `setup_jax("cpu")`, then assert every device in `jax.devices()` has `platform == "cpu"` and that `XLA_FLAGS` contains the deterministic-ops and Triton-GEMM entries. This pins the post-import contract that Option A depends on.
+- New test `tests/test_jax_config.py`, run in a subprocess: `import jax` first, then `setup_jax("cpu")`, then assert every device in `jax.devices()` has `platform == "cpu"` and that `XLA_FLAGS` contains the deterministic-ops and Triton-GEMM entries. This pins the post-import contract that Option A depends on. Two further cases pin the flag guards: values preset in `XLA_FLAGS` survive unchanged, and a second `setup_jax()` call leaves `XLA_FLAGS` identical.
 
 ### Step 3 — README and installation docs
 
@@ -235,9 +239,9 @@ The `[tool.ruff.lint.per-file-ignores]` E402 ignore for `examples/` and `scripts
   - `on: release: types: [published]` plus `workflow_dispatch` for the TestPyPI rehearsal.
   - Job `build`: `python -m build`, `twine check dist/*`, upload `dist/` as artifact. On release triggers, a tag–version guard: fail unless the release tag equals `v` + the `Version:` in the built wheel's metadata. `importlib.metadata` keeps `__version__` consistent with `pyproject.toml`, but nothing ties the git tag to either; without the guard a `v0.4.1` release can publish a wheel that reports 0.4.0.
   - Job `smoke`: matrix over Python {3.11, 3.13} × backend extra {none, cpu, cuda12, cuda13}: install the built wheel with that extra into a clean environment, `pip check`, `python -c "import fabricpc; print(fabricpc.__version__)"`; the cpu leg additionally asserts every `jax.devices()` platform is `cpu`. The cuda legs download the multi-GB nvidia wheel set (acceptable at release cadence) and verify install + import only — GitHub-hosted runners have no GPU; the device-level GPU check lives in §5's backend install matrix.
-  - Job `publish-testpypi` (`workflow_dispatch` only): environment `testpypi`, `permissions: id-token: write`, `pypa/gh-action-pypi-publish@release/v1` with `repository-url: https://test.pypi.org/legacy/`.
-  - Job `publish` (release only): environment `pypi`, `permissions: id-token: write`, `pypa/gh-action-pypi-publish@release/v1`.
-- `.github/workflows/test.yml`: pytest on ubuntu, CPU JAX, Python 3.11 and 3.13, on push and pull request.
+  - Job `publish-testpypi` (`workflow_dispatch` only): environment `testpypi`, `permissions: id-token: write`, `pypa/gh-action-pypi-publish@release/v1` with `repository-url: https://test.pypi.org/legacy/` and `skip-existing: true` (a re-rehearsal at an already-uploaded version verifies `build` + `smoke` and uploads nothing).
+  - Job `publish` (release only): environment `pypi`, `permissions: id-token: write`, `pypa/gh-action-pypi-publish@release/v1`. No `skip-existing` — a duplicate production upload must fail loudly.
+- `.github/workflows/test.yml`: pytest on ubuntu, CPU JAX, Python 3.11 and 3.13, on pull requests and pushes to `main`, with a per-ref `concurrency` group cancelling superseded runs.
 
 ### Step 5 — CHANGELOG
 
@@ -248,18 +252,9 @@ The `[tool.ruff.lint.per-file-ignores]` E402 ignore for `examples/` and `scripts
 1. On pypi.org, signed in as `MatthewBehrend` or `SingularityNET`: account → Publishing → add a **pending publisher** for project name `fabricpc`: owner `trueagi-io`, repository `FabricPC`, workflow `publish.yml`, environment `pypi`. Pending publishers work for names that do not exist yet; the first trusted-publish claims the name, and the account that created the pending publisher becomes the project's sole initial Owner. Same on test.pypi.org with environment `testpypi`.
 2. On GitHub `trueagi-io/FabricPC`: create environments `pypi` and `testpypi` (optionally with required reviewers as a release gate).
 
-### Release procedure
+### Release procedure and post-publish hygiene
 
-1. Merge the pending muPC output-scaling branch to `main`.
-2. Open the packaging PR (Steps 1–5) against `main`; test suite green; merge.
-3. Rehearse: run `publish.yml` via `workflow_dispatch` → TestPyPI; in a clean venv, `pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple fabricpc` and smoke-test; then run the PyPI row of §5's backend install matrix — `"fabricpc[cpu]"`, `"fabricpc[cuda12]"`, `"fabricpc[cuda13]"`, each in its own clean venv (jax's coupled wheel sets come from pypi.org via the extra index). The rehearsal is mandatory: PyPI permanently reserves every (name, version, filename) tuple — even a deleted release cannot be re-uploaded — so a botched production upload burns 0.4.0 forever, while TestPyPI mistakes cost nothing.
-4. Create GitHub release `v0.4.0` on `main` → workflow publishes to pypi.org.
-5. Post-publish check: pypi.org/project/fabricpc renders README, license, and links correctly; `pip install fabricpc` in a clean venv; run the README model-building snippet; repeat the PyPI row of §5's backend install matrix against pypi.org.
-
-### Post-publish hygiene
-
-- Immediately after the first upload, add the second account as Owner (§3): a single-owner project is one lost account from unmaintainable, and PyPI requires a second owner before some project-scoped settings can be changed. PyPI mandates 2FA — store the recovery codes in the org's shared secret storage, not on one person's device.
-- Bad release: **yank, never delete**. Yanking removes the version from default resolution while keeping it installable for anyone who already pinned it; deletion breaks those installs and still does not free the version for re-upload.
+Moved to §6 (Deployment) — the step-by-step runbook for the TestPyPI rehearsal, its verification, the install test, the production release, and post-publish hygiene.
 
 ---
 
@@ -295,6 +290,79 @@ When each row runs:
 
 - **Clone row:** on the packaging PR, before any release — it needs no published package.
 - **PyPI row:** at the TestPyPI rehearsal (release step 3) using `-i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple` (jax's coupled wheel sets resolve from pypi.org via the extra index), and again from pypi.org after publishing (release step 5). The publish workflow's smoke job (Step 4) automates the install + import half of this row on every release.
+
+---
+
+## 6. Deployment
+
+The release runbook. Prerequisites, all from §4: the packaging PR is merged to `main` (the `workflow_dispatch` trigger is only listed once `publish.yml` exists on the default branch), the Tests workflow is green on the release commit, and the one-time manual setup is done — pending publishers for `fabricpc` on test.pypi.org (environment `testpypi`) and pypi.org (environment `pypi`), and both GitHub environments created on `trueagi-io/FabricPC`.
+
+The rehearsal (§6.1–6.3) is mandatory before the first production release: PyPI permanently reserves every (name, version, filename) tuple — even a deleted release cannot be re-uploaded — so a botched production upload burns 0.4.0 forever, while a TestPyPI mistake costs only a rehearsal version.
+
+### 6.1 Test the publication on TestPyPI
+
+The `workflow_dispatch` trigger runs the same `build` and `smoke` jobs as a release, then uploads to test.pypi.org instead of pypi.org. The tag–version guard is skipped on dispatch (there is no tag).
+
+1. Confirm `version = "0.4.0"` in `pyproject.toml` on `main`.
+2. Trigger the workflow:
+   - CLI: `gh workflow run publish.yml --ref main`
+   - UI: repository → Actions → Publish → Run workflow → branch `main`.
+3. Watch the run (`gh run watch`, or the Actions UI). Jobs in order:
+   - `build` — sdist + wheel, `twine check`, `dist/` artifact.
+   - `smoke` — 8 legs: Python {3.11, 3.13} × extra {none, cpu, cuda12, cuda13}; each installs the built wheel into a clean runner, runs `pip check` and the import/version check; the cpu legs also assert every `jax.devices()` platform is `cpu`.
+   - `publish-testpypi` — environment `testpypi`, OIDC upload. If the environment has required reviewers, the run pauses here; approve the deployment.
+4. The first successful upload claims the name: the pending publisher on test.pypi.org becomes the `fabricpc` project's trusted publisher, with the creating account as sole Owner.
+
+**Retry rule.** TestPyPI enforces the same filename reservation as PyPI; the upload step's `skip-existing: true` turns a duplicate into a no-op rather than a failure. A failure in `build` or `smoke` uploads nothing — fix and dispatch again with the same version. If the upload succeeded but §6.2–6.3 verification fails, a rebuilt 0.4.0 cannot replace the reserved files: a green re-dispatch at 0.4.0 verifies `build` and `smoke` but uploads nothing. Bump to `0.4.0rc1` (then `rc2`, …) for the re-rehearsal, and restore `0.4.0` before the production release. TestPyPI reservations do not touch pypi.org; 0.4.0 stays available there.
+
+### 6.2 Verify the test publication
+
+On https://test.pypi.org/project/fabricpc/:
+
+- Version 0.4.0 is live with both files: the sdist and the `py3-none-any` wheel.
+- The README renders with working links (all converted to absolute GitHub URLs in Step 3).
+- Meta block: license `MIT`, author `SingularityNET Foundation <info@singularitynet.io>`, and the five `[project.urls]` entries (Homepage, Repository, Documentation, Changelog, Issues).
+
+### 6.3 Test the install from TestPyPI
+
+FabricPC's dependencies (jax, optax, …) do not exist on TestPyPI, so pypi.org is added as the extra index; the version pin keeps the resolver on the rehearsal artifact. Each check runs in its own clean venv.
+
+```bash
+python3.11 -m venv /tmp/fpc-rehearsal && source /tmp/fpc-rehearsal/bin/activate
+pip install -U pip
+pip install -i https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple "fabricpc==0.4.0"
+pip check
+python -c "import fabricpc; print(fabricpc.__version__)"   # 0.4.0
+python - <<'PY'
+import jax
+from fabricpc.jax_config import setup_jax
+setup_jax("cpu")
+assert all(d.platform == "cpu" for d in jax.devices())
+PY
+python -c "import fabricpc.tuning"   # must raise ModuleNotFoundError: optuna
+```
+
+Then run the README model-building snippet end-to-end, and the PyPI row of §5's backend install matrix — `"fabricpc[cpu]==0.4.0"`, `"fabricpc[cuda12]==0.4.0"`, `"fabricpc[cuda13]==0.4.0"`, each in its own clean venv with the same two index flags. Pass criteria per §5; the cuda device check needs a GPU host, otherwise record those cells as install-verified only.
+
+### 6.4 Publish the release to pypi.org
+
+1. Confirm §6.1–6.3 passed, `pyproject.toml` on `main` reads `0.4.0`, and `CHANGELOG.md` carries the `[0.4.0]` entry.
+2. Write the release notes (the CHANGELOG entry) to a temporary file in the project root, then create the GitHub release. The tag must be exactly `v0.4.0`: the `build` job fails the run on any mismatch with the built wheel's `Version`.
+   - CLI: `gh release create v0.4.0 --target main --title "v0.4.0" --notes-file release_notes_v0.4.0.md`
+   - UI: Releases → Draft a new release → tag `v0.4.0` on `main` → Publish release.
+3. Publishing the release fires `publish.yml` on the release trigger: `build` (now with the tag–version guard), `smoke`, then `publish` (environment `pypi`, OIDC). Approve the environment deployment if reviewers are configured.
+4. A failure before upload burns nothing: `publish` needs both `build` and `smoke`, so a red run leaves pypi.org untouched. Fix, delete the release and tag (`gh release delete v0.4.0 --cleanup-tag`), and re-create the release with the same version.
+5. As on TestPyPI, the first upload converts the pending publisher into the `fabricpc` project with the creating account as sole Owner.
+
+### 6.5 Verify the production release
+
+- https://pypi.org/project/fabricpc/ renders the README, license, and links; sdist and wheel both present.
+- In a clean venv with no index flags: `pip install "fabricpc==0.4.0"`, then `pip check`, the import/version check, the README snippet, and the PyPI row of §5's backend install matrix against pypi.org.
+
+### 6.6 Post-publish hygiene
+
+- Immediately after the first upload, add the second account as Owner (§3): a single-owner project is one lost account from unmaintainable, and PyPI requires a second owner before some project-scoped settings can be changed. PyPI mandates 2FA — store the recovery codes in the org's shared secret storage, not on one person's device.
+- Bad release: **yank, never delete**. Yanking removes the version from default resolution while keeping it installable for anyone who already pinned it; deletion breaks those installs and still does not free the version for re-upload. Follow a yank with a fixed 0.4.1 release.
 
 ---
 

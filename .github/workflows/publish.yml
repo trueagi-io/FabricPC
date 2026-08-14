@@ -107,6 +107,11 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
+          # TestPyPI rejects duplicate (name, version, filename) uploads like
+          # PyPI does; without this, a second rehearsal at the same version
+          # fails at upload. With it, the rerun verifies build + smoke but
+          # uploads nothing. Never set on the production publish job.
+          skip-existing: true
 
   publish:
     needs: [build, smoke]
