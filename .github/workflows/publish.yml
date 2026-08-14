@@ -1,0 +1,123 @@
+name: Publish
+
+# Two triggers, two destinations:
+#   release (published) -> pypi.org
+#   workflow_dispatch   -> test.pypi.org (rehearsal)
+# Uploads authenticate through PyPI Trusted Publishing (OIDC); no API tokens.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist and wheel
+        run: |
+          python -m pip install -U pip build twine
+          python -m build
+          twine check dist/*
+      - name: Release tag matches the built version
+        # `fabricpc.__version__` reads the installed metadata, so it always
+        # agrees with pyproject.toml — but nothing ties the git tag to either.
+        # Without this check, a `v0.4.1` release can publish a wheel that
+        # reports 0.4.0, and PyPI reserves that (name, version) tuple forever.
+        if: github.event_name == 'release'
+        run: |
+          version=$(python - <<'PY'
+          import email, glob, zipfile
+
+          wheel = glob.glob("dist/*.whl")[0]
+          with zipfile.ZipFile(wheel) as z:
+              path = next(n for n in z.namelist() if n.endswith(".dist-info/METADATA"))
+              print(email.message_from_bytes(z.read(path))["Version"])
+          PY
+          )
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "Release tag $GITHUB_REF_NAME does not match built version $version (expected v$version)" >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  smoke:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+        # "" is the bare install. The cuda legs verify that the coupled JAX
+        # wheel set resolves and imports; GitHub-hosted runners have no GPU, so
+        # the device-level check runs only on the cpu leg.
+        extra: ["", "cpu", "cuda12", "cuda13"]
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Install the built wheel
+        run: |
+          python -m pip install -U pip
+          wheel=$(ls dist/*.whl)
+          if [ -n "${{ matrix.extra }}" ]; then
+            pip install -U "${wheel}[${{ matrix.extra }}]"
+          else
+            pip install "$wheel"
+          fi
+      - name: Dependencies co-resolve
+        run: pip check
+      - name: Import and report version
+        run: python -c "import fabricpc; print(fabricpc.__version__)"
+      - name: CPU backend selects CPU devices
+        if: matrix.extra == 'cpu'
+        run: |
+          python - <<'PY'
+          import jax
+          from fabricpc.jax_config import setup_jax
+
+          setup_jax("cpu")
+          devices = jax.devices()
+          assert devices and all(d.platform == "cpu" for d in devices), devices
+          print(devices)
+          PY
+
+  publish-testpypi:
+    needs: [build, smoke]
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write        # OIDC token for Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  publish:
+    needs: [build, smoke]
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write        # OIDC token for Trusted Publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1

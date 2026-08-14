@@ -18,9 +18,9 @@ Test Accuracy: 98.14%
 4 nodes, 3 edges, 218,058 parameters
 """
 
-from jax_setup import set_jax_flags_before_importing_jax
+from fabricpc.jax_config import setup_jax
 
-set_jax_flags_before_importing_jax()  # options: "cpu", "cuda", "tpu"
+setup_jax()  # options: "cpu", "cuda", "tpu"
 
 import jax
 from fabricpc.nodes import Linear, IdentityNode

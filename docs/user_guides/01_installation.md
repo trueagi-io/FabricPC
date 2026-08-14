@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Python 3.10–3.13
+- Python 3.11–3.13
 - **Platform: GPU requires Linux (x86_64 or aarch64).** JAX publishes CUDA wheels for
   Linux only. Native Windows and macOS are CPU-only; for GPU on Windows, use WSL2 (JAX
   marks WSL2 GPU support experimental).
@@ -15,34 +15,53 @@
 > automatically on Windows and on Python 3.13, so `[viz]`/`[all]` still install everything
 > else; experiment tracking is unavailable in those cases.
 
-## Install from Source
+## Install from PyPI
 
-Clone the repository and install in editable mode. The one command below pulls FabricPC,
-all optional dependencies, and a version-matched JAX backend — pick the line for your hardware:
+The one command below pulls FabricPC, all optional dependencies, and a version-matched
+JAX backend — pick the line for your hardware:
 
 ```bash
 # GPU, CUDA 12:
-pip install -U -e ".[all,cuda12]"
+pip install -U "fabricpc[all,cuda12]"
 
 # GPU, CUDA 13 (needs NVIDIA driver ≥580):
-pip install -U -e ".[all,cuda13]"
+pip install -U "fabricpc[all,cuda13]"
 
 # CPU only (the base `jax` dependency is the CPU build):
-pip install -U -e ".[all]"
+pip install -U "fabricpc[all]"
 ```
 
-For a minimal install (core library only - no demos, utils, and dataloaders), omit `[all]`:
+For a minimal install (core library only — no demos, utils, and dataloaders), omit `[all]`:
 
 ```bash
-pip install -e .
+pip install fabricpc
+```
+
+## Install from Source
+
+Clone the repository and install in editable mode. `[dev]` adds the test, lint, and
+release tooling, which `[all]` deliberately leaves out:
+
+```bash
+git clone https://github.com/trueagi-io/FabricPC.git
+cd FabricPC
+
+# GPU, CUDA 12:
+pip install -U -e ".[all,dev,cuda12]"
+
+# GPU, CUDA 13 (needs NVIDIA driver ≥580):
+pip install -U -e ".[all,dev,cuda13]"
+
+# CPU only:
+pip install -U -e ".[all,dev]"
 ```
 
 ### Why `-U`?
 
 `jax[cuda12]` installs a coupled set of packages — `jax`, `jaxlib`, `jax-cuda12-plugin`,
 and `jax-cuda12-pjrt` — whose versions must match (the plugin and pjrt are tied to the
-exact `jaxlib` version). FabricPC's base dependencies install the plain CPU `jax`/`jaxlib`
-first, so they are already present. Without `-U`, pip treats them as "already satisfied"
+exact `jaxlib` version). FabricPC's base `jax` dependency installs the plain CPU
+`jax`/`jaxlib` first, so they are already present. Without `-U`, pip treats them as "already satisfied"
 and leaves them at the installed version while still pulling the newest
 `jax-cuda12-plugin` — a plugin newer than `jaxlib`, which makes JAX fail at import or at
 the first GPU operation. `-U` (`--upgrade`) forces pip to upgrade the whole set together
@@ -50,21 +69,24 @@ so `jaxlib` and the CUDA plugin/pjrt land on matching versions. The same applies
 
 ### Optional Dependency Groups
 
-`all` bundles every group except the hardware backend. Combine it with one backend extra
-(`cuda12`, `cuda13`, or `cpu`), or omit the backend for the CPU build. Backend extras also
-combine with narrower groups for a stripped-down install — e.g. core + GPU only with
-`pip install -U -e ".[cuda12]"`, or datasets + GPU with `pip install -U -e ".[tfds,cuda12]"`.
+`all` bundles every user-facing group except the hardware backend and `dev`. Combine it
+with one backend extra (`cuda12`, `cuda13`, or `cpu`), or omit the backend for the CPU
+build. Backend extras also combine with narrower groups for a stripped-down install —
+e.g. core + GPU only with `pip install -U "fabricpc[cuda12]"`, or datasets + GPU with
+`pip install -U "fabricpc[tfds,cuda12]"`.
 
 | Group | Contents | Install with |
 |-------|----------|--------------|
-| `dev` | pytest, hypothesis, black, mypy, pre-commit | `pip install -e ".[dev]"` |
-| `tfds` | TensorFlow Datasets for MNIST/CIFAR loaders | `pip install -e ".[tfds]"` |
-| `experiments` | SciPy for statistical analysis | `pip install -e ".[experiments]"` |
-| `viz` | Plotly, Aim, Pandas for dashboarding | `pip install -e ".[viz]"` |
-| `cpu` | JAX CPU build (explicit) | `pip install -e ".[cpu]"` |
-| `cuda12` | JAX CUDA 12 backend | `pip install -U -e ".[cuda12]"` |
-| `cuda13` | JAX CUDA 13 backend (driver ≥580) | `pip install -U -e ".[cuda13]"` |
-| `all` | Everything except the backend | `pip install -U -e ".[all,cuda12]"` |
+| `dev` | pytest, hypothesis, black, ruff, mypy, pre-commit, build, twine | `pip install -e ".[dev]"` |
+| `tfds` | TensorFlow Datasets for MNIST/CIFAR loaders | `pip install "fabricpc[tfds]"` |
+| `experiments` | SciPy for statistical analysis, Optuna for `fabricpc.tuning` | `pip install "fabricpc[experiments]"` |
+| `viz` | Plotly, Aim, Pandas for dashboarding | `pip install "fabricpc[viz]"` |
+| `cpu` | JAX CPU build (explicit) | `pip install "fabricpc[cpu]"` |
+| `cuda12` | JAX CUDA 12 backend | `pip install -U "fabricpc[cuda12]"` |
+| `cuda13` | JAX CUDA 13 backend (driver ≥580) | `pip install -U "fabricpc[cuda13]"` |
+| `all` | Everything except the backend and `dev` | `pip install -U "fabricpc[all,cuda12]"` |
+
+`dev` is a contributor group and is installed from a clone: `pip install -e ".[all,dev]"`.
 
 ## Verify Installation
 

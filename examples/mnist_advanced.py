@@ -14,9 +14,9 @@ Usage:
     FABRICPC_OPTIMIZER=ngd_diag PYTHONPATH=. python examples/mnist_advanced.py
 """
 
-from jax_setup import set_jax_flags_before_importing_jax
+from fabricpc.jax_config import setup_jax
 
-set_jax_flags_before_importing_jax()
+setup_jax()
 
 import os
 import argparse

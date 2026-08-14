@@ -40,9 +40,9 @@ M
 ----------------------------------------
 """
 
-from jax_setup import set_jax_flags_before_importing_jax
+from fabricpc.jax_config import setup_jax
 
-set_jax_flags_before_importing_jax()
+setup_jax()
 
 import argparse
 import math

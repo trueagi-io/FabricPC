@@ -142,9 +142,9 @@ Quick run results (default args, RTX3090, cuda13, jax 0.10.2)
     2hopfield : 64.26%
 """
 
-from jax_setup import set_jax_flags_before_importing_jax
+from fabricpc.jax_config import setup_jax
 
-set_jax_flags_before_importing_jax()
+setup_jax()
 
 import argparse
 from typing import Dict, List, Sequence, Tuple

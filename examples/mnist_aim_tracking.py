@@ -14,9 +14,9 @@ After running, launch the Aim UI with:  aim up
 Requirements: pip install fabricpc[viz]
 """
 
-from jax_setup import set_jax_flags_before_importing_jax
+from fabricpc.jax_config import setup_jax
 
-set_jax_flags_before_importing_jax()
+setup_jax()
 
 import time
 

@@ -1,32 +1,34 @@
+# setuptools>=77 emits PEP 639 `License-Expression` metadata from the `license`
+# field below and includes the LICENSE file in the distributions automatically.
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "fabricpc"
-version = "0.3.2"
+version = "0.4.0"
 description = "A flexible, performant predictive coding library using JAX"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
+license = "MIT"
 authors = [
-    {name = "FabricPC Authors"}
+    {name = "SingularityNET Foundation", email = "info@singularitynet.io"}
 ]
 keywords = ["predictive-coding", "jax", "neural-networks", "machine-learning"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
-    "Private :: Do Not Upload",
 ]
 
+# `jaxlib` is not listed: `jax` pins the matching `jaxlib`, and an unpinned
+# `jaxlib` here can fight the coupled wheel set that jax[cuda12]/jax[cuda13] install.
 dependencies = [
-    "jax",
-    "jaxlib",
+    "jax>=0.10",
     "optax>=0.1.7",
     "orbax-checkpoint>=0.4.0",
     "flax>=0.7.5",
@@ -34,8 +36,14 @@ dependencies = [
     "jaxtyping>=0.2.23",
     "numpy>=1.24.0",
     "tqdm>=4.65.0",
-    "optuna",
 ]
+
+[project.urls]
+Homepage = "https://github.com/trueagi-io/FabricPC"
+Repository = "https://github.com/trueagi-io/FabricPC"
+Documentation = "https://github.com/trueagi-io/FabricPC/blob/main/docs/user_guides/00_index.md"
+Changelog = "https://github.com/trueagi-io/FabricPC/blob/main/CHANGELOG.md"
+Issues = "https://github.com/trueagi-io/FabricPC/issues"
 
 [project.optional-dependencies]
 dev = [
@@ -47,6 +55,9 @@ dev = [
     "ruff==0.15.19",
     "mypy>=1.0.0",
     "pre-commit>=3.0.0",
+    # Release tooling: `python -m build` and `twine check dist/*`.
+    "build>=1.0.0",
+    "twine>=5.0.0",
 ]
 tfds = [
     "tensorflow-datasets>=4.9.0",
@@ -82,6 +93,9 @@ tfds = [
 ]
 experiments = [
     "scipy>=1.10.0",
+    # `fabricpc.tuning` (BayesianTuner) imports optuna; nothing in the core
+    # library does, so it ships with the experiment tooling rather than the core.
+    "optuna>=3.0.0",
 ]
 viz = [
     "plotly>=5.0.0",
@@ -102,14 +116,14 @@ cuda12 = [
 cuda13 = [
     "jax[cuda13]",
 ]
-# Everything except the hardware backend. Append a backend extra for GPU
-# (e.g. ".[all,cuda12]"), or omit it for the CPU build from the base jax dependency.
+# Everything a user needs except the hardware backend. Append a backend extra
+# for GPU (e.g. ".[all,cuda12]"), or omit it for the CPU build from the base jax
+# dependency. `dev` is deliberately excluded — `pip install "fabricpc[all]"`
+# must not drop black, mypy, ruff, and pre-commit into an end user's
+# environment. Contributors install ".[all,dev]".
 all = [
-    "fabricpc[dev,tfds,experiments,viz]",
+    "fabricpc[tfds,experiments,viz]",
 ]
-
-[tool.setuptools]
-py-modules = ["jax_setup"]
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -117,7 +131,7 @@ include = ["fabricpc*"]
 
 [tool.black]
 line-length = 88
-target-version = ["py310", "py311", "py312", "py313"]
+target-version = ["py311", "py312", "py313"]
 include = '\.pyi?$'
 extend-exclude = '''
 /(
@@ -129,7 +143,7 @@ extend-exclude = '''
 '''
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 extend-exclude = [".git", ".venv", "build", "dist"]
 
 [tool.ruff.lint]
@@ -148,9 +162,9 @@ extend-exclude = [".git", ".venv", "build", "dist"]
 extend-select = ["B006"]
 
 [tool.ruff.lint.per-file-ignores]
-# examples/ and scripts/ deliberately configure JAX
-# (set_jax_flags_before_importing_jax) before `import jax`; that import order is
-# E402 by design, so only that rule is ignored there. Everything else — B006,
-# pyflakes, the rest of pycodestyle — still applies.
+# examples/ and scripts/ deliberately configure JAX (setup_jax) before
+# `import jax`; that import order is E402 by design, so only that rule is
+# ignored there. Everything else — B006, pyflakes, the rest of pycodestyle —
+# still applies.
 "examples/**" = ["E402"]
 "scripts/**" = ["E402"]

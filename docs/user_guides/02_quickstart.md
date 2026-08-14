@@ -15,9 +15,9 @@ Every FabricPC workflow follows this pattern:
 ## Complete MNIST Example
 
 ```python
-from jax_setup import set_jax_flags_before_importing_jax
+from fabricpc.jax_config import setup_jax
 
-set_jax_flags_before_importing_jax(jax_platforms="cuda")
+setup_jax(platform="cuda")
 
 import jax
 from fabricpc.nodes import Linear, IdentityNode

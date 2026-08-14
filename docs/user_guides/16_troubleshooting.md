@@ -66,7 +66,7 @@ export FABRICPC_DISABLE_TRITON_GEMM=1
 
 **Python version**
 
-FabricPC supports Python 3.10–3.13. Only the optional Aim experiment tracker (in `[viz]`/`[all]`) is limited to Python ≤3.12; on Python 3.13 it is skipped automatically and the rest installs normally.
+FabricPC supports Python 3.11–3.13. Only the optional Aim experiment tracker (in `[viz]`/`[all]`) is limited to Python ≤3.12; on Python 3.13 it is skipped automatically and the rest installs normally.
 
 ---
 
@@ -99,10 +99,10 @@ This is expected — JAX JIT-compiles the training step on first invocation. Sub
 
 **JAX memory flags**
 
-Set before importing JAX:
+Set before the first JAX computation (import order does not matter):
 ```python
-from jax_setup import set_jax_flags_before_importing_jax
-set_jax_flags_before_importing_jax()
+from fabricpc.jax_config import setup_jax
+setup_jax()
 ```
 
 Or manually:
