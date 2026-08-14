@@ -14,10 +14,6 @@ After running, launch the Aim UI with:  aim up
 Requirements: pip install fabricpc[viz]
 """
 
-from fabricpc.jax_config import setup_jax
-
-setup_jax()
-
 import time
 
 import jax
@@ -47,6 +43,9 @@ from fabricpc.utils.dashboarding import (
     unstack_inference_history,
     summarize_inference_convergence,
 )
+from fabricpc.jax_config import setup_jax
+
+setup_jax()
 
 # Check if Aim is available
 if not is_aim_available():

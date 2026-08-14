@@ -11,10 +11,6 @@ Architecture (replicated across N GPUs)::
      Identity        Sigmoid          Sigmoid        Softmax+CE
 """
 
-from fabricpc.jax_config import setup_jax
-
-setup_jax()
-
 import jax
 import time
 
@@ -32,6 +28,9 @@ from fabricpc.core.inference import InferenceSGD
 import optax
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
+from fabricpc.jax_config import setup_jax
+
+setup_jax()
 
 # --- Network ---
 

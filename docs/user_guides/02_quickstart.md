@@ -15,10 +15,6 @@ Every FabricPC workflow follows this pattern:
 ## Complete MNIST Example
 
 ```python
-from fabricpc.jax_config import setup_jax
-
-setup_jax(platform="cuda")
-
 import jax
 from fabricpc.nodes import Linear, IdentityNode
 from fabricpc.core.topology import Edge
@@ -31,7 +27,9 @@ from fabricpc.core.initializers import XavierInitializer
 import optax
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
+from fabricpc.jax_config import setup_jax
 
+setup_jax(platform="cuda")
 jax.config.update("jax_default_prng_impl", "threefry2x32")
 
 # --- Step 1: Define Nodes ---

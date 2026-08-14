@@ -39,10 +39,6 @@ Usage:
 | 128     | 82.2%      |
 """
 
-from fabricpc.jax_config import setup_jax
-
-setup_jax()
-
 import argparse
 import time
 import jax
@@ -60,7 +56,9 @@ from fabricpc.core.initializers import MuPCInitializer, XavierInitializer
 from fabricpc.core.mupc import MuPCConfig
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
+from fabricpc.jax_config import setup_jax
 
+setup_jax()
 jax.config.update("jax_default_prng_impl", "threefry2x32")
 
 

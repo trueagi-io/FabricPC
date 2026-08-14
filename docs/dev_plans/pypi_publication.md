@@ -216,7 +216,7 @@ all = ["fabricpc[tfds,experiments,viz]"]
 # [tool.setuptools] py-modules table deleted (§2)
 ```
 
-The `[tool.ruff.lint.per-file-ignores]` comment names `set_jax_flags_before_importing_jax`; update it to `setup_jax`. The E402 ignore for `examples/` and `scripts/` stays — those scripts still call the helper above their `import jax` line.
+The `[tool.ruff.lint.per-file-ignores]` E402 ignore for `examples/` and `scripts/` is removed. With the post-import contract, those scripts place all imports first and call `setup_jax()` after the import block, so no import sits below a statement and E402 passes without exceptions.
 
 ### Step 2 — `jax_setup` relocation and re-contract (§2)
 

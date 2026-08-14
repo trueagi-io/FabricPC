@@ -23,10 +23,6 @@ Usage:
     python examples/PC_backprop_compare.py --verbose       # show per-epoch output
 """
 
-from fabricpc.jax_config import setup_jax
-
-setup_jax()  # "cpu", "cuda" or "tpu"
-
 import jax
 import argparse
 import importlib.util
@@ -48,6 +44,9 @@ from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.training.train_backprop import train_backprop, evaluate_backprop
 from fabricpc.experiments import ExperimentArm, ABExperiment
 from fabricpc.utils.data.dataloader import MnistLoader
+from fabricpc.jax_config import setup_jax
+
+setup_jax()  # "cpu", "cuda" or "tpu"
 
 # Import train_config and batch_size from mnist_demo without triggering examples/__init__.py
 _demo_path = os.path.join(os.path.dirname(__file__), "mnist_demo.py")

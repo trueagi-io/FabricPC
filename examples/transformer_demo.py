@@ -40,10 +40,6 @@ M
 ----------------------------------------
 """
 
-from fabricpc.jax_config import setup_jax
-
-setup_jax()
-
 import argparse
 import math
 import jax
@@ -94,7 +90,9 @@ from fabricpc.utils.dashboarding import (
     is_aim_available,
 )
 from fabricpc.utils.data import CharDataLoader
+from fabricpc.jax_config import setup_jax
 
+setup_jax()
 jax.config.update("jax_default_prng_impl", "threefry2x32")
 
 TRACKED_NODES = ["embed", "transformer_0"]

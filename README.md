@@ -48,15 +48,15 @@ python examples/mnist_demo.py
 Define the graph. Initialize the parameters. Start experimenting.
 
 ```python
-from fabricpc.jax_config import setup_jax
-setup_jax()
-
 import jax
 from fabricpc.nodes import Linear
 from fabricpc.core.topology import Edge
 from fabricpc.graph_assembly import TaskMap, graph
 from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.inference import InferenceSGD
+from fabricpc.jax_config import setup_jax
+
+setup_jax()
 
 layer1 = Linear(shape=(784,), name="input")
 layer2 = Linear(shape=(256,), name="hidden")

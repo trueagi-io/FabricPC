@@ -160,11 +160,3 @@ extend-exclude = [".git", ".venv", "build", "dist"]
 # flag every `= GaussianEnergy()` / `= KaimingInitializer()` signature default,
 # which is exactly the pattern being standardized on.
 extend-select = ["B006"]
-
-[tool.ruff.lint.per-file-ignores]
-# examples/ and scripts/ deliberately configure JAX (setup_jax) before
-# `import jax`; that import order is E402 by design, so only that rule is
-# ignored there. Everything else — B006, pyflakes, the rest of pycodestyle —
-# still applies.
-"examples/**" = ["E402"]
-"scripts/**" = ["E402"]

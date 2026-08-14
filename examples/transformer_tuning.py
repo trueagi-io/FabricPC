@@ -12,10 +12,6 @@ Architecture::
     input -> Embedding -> [MhaResidual -> LnMlp1 -> Mlp2Residual] x depth -> VocabProjection
 """
 
-from fabricpc.jax_config import setup_jax
-
-setup_jax()
-
 import optuna
 from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.inference import InferenceSGDNormClip
@@ -23,6 +19,9 @@ from fabricpc.models import create_deep_transformer
 from fabricpc.tuning.bayesian_tuner import BayesianTuner
 from fabricpc.utils.data import CharDataLoader, BpeDataLoader
 from optuna.storages import JournalStorage, JournalFileStorage
+from fabricpc.jax_config import setup_jax
+
+setup_jax()
 
 
 # Model Factory

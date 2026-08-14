@@ -7,10 +7,6 @@ Prints per-layer forward scales for a 20-layer chain to verify:
 - Energy is non-zero and weight gradients are non-zero after inference
 """
 
-from fabricpc.jax_config import setup_jax
-
-setup_jax(platform="cpu")
-
 import jax
 import jax.numpy as jnp
 
@@ -25,6 +21,9 @@ from fabricpc.core.activations import IdentityActivation, TanhActivation
 from fabricpc.core.inference import InferenceSGD, run_inference
 from fabricpc.core.initializers import MuPCInitializer
 from fabricpc.core.mupc import MuPCConfig
+from fabricpc.jax_config import setup_jax
+
+setup_jax(platform="cpu")
 
 
 def main():

@@ -44,10 +44,6 @@ Test Accuracy: 33.71%
 Training time: 952.3s (476.2s per epoch)
 """
 
-from fabricpc.jax_config import setup_jax
-
-setup_jax()
-
 import jax
 import numpy as np
 import optax
@@ -74,7 +70,9 @@ from fabricpc.core.initializers import (
 from fabricpc.core.mupc import MuPCConfig
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.dataloader import Cifar10Loader
+from fabricpc.jax_config import setup_jax
 
+setup_jax()
 jax.config.update("jax_default_prng_impl", "threefry2x32")
 
 
