@@ -440,6 +440,10 @@ def _print_final_summary(results: Sequence[TrainingResult]):
 
     if len(by_name) != 2:
         raise ValueError("final comparison requires exactly one ePC and one sPC arm")
+    epc_names = [name for name in by_name if name.startswith("ePC")]
+    spc_names = [name for name in by_name if name.startswith("sPC")]
+    if len(epc_names) != 1 or len(spc_names) != 1:
+        raise ValueError("final comparison requires named ePC and sPC arms")
     arm_rows = list(by_name.values())
     seed_sets = [{row.seed for row in rows} for rows in arm_rows]
     if any(len(seeds) != len(rows) for seeds, rows in zip(seed_sets, arm_rows)):
@@ -491,8 +495,8 @@ def _print_final_summary(results: Sequence[TrainingResult]):
             flush=True,
         )
 
-    epc_name = next(name for name in by_name if name.startswith("ePC"))
-    spc_name = next(name for name in by_name if name.startswith("sPC"))
+    epc_name = epc_names[0]
+    spc_name = spc_names[0]
     epc_by_seed = {row.seed: row for row in by_name[epc_name]}
     spc_by_seed = {row.seed: row for row in by_name[spc_name]}
     paired_seeds = sorted(seed_sets[0])

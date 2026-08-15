@@ -1,14 +1,19 @@
 """Pure protocol tests for the ePC ResNet time-to-accuracy follow-up."""
 
 import argparse
+import csv
 import importlib.util
 from pathlib import Path
+from statistics import fmean
 from types import SimpleNamespace
 
 import pytest
 
 _SCRIPT_PATH = (
     Path(__file__).resolve().parents[1] / "examples" / "epc_resnet18_time_accuracy.py"
+)
+_RESULTS_DIR = (
+    Path(__file__).resolve().parents[1] / "docs" / "benchmark_results" / "epc_resnet18"
 )
 _SPEC = importlib.util.spec_from_file_location(
     "epc_resnet18_time_accuracy", _SCRIPT_PATH
@@ -17,6 +22,11 @@ if _SPEC is None or _SPEC.loader is None:
     raise ImportError(_SCRIPT_PATH)
 protocol = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(protocol)
+
+
+def _read_result_csv(filename):
+    with (_RESULTS_DIR / filename).open(newline="") as handle:
+        return list(csv.DictReader(handle))
 
 
 def _observation(steps, learning_rate, seed, accuracy):
@@ -184,3 +194,88 @@ def test_final_runs_both_arms_with_endpoints_for_each_paired_seed(monkeypatch):
     assert [call["seed"] for call in calls] == [0, 0, 1000, 1000, 2000, 2000]
     assert len(summaries) == 1
     assert len(summaries[0]) == 6
+
+
+def _final_result(name, seed, training_seconds, accuracy):
+    return protocol.TrainingResult(
+        seed=seed,
+        name=name,
+        training_seconds=training_seconds,
+        curve=(protocol.CurvePoint(1, training_seconds, accuracy, 1.0),),
+        holdout_accuracy=accuracy,
+        official_test_accuracy=accuracy,
+    )
+
+
+def test_final_summary_pairs_by_seed_and_reports_both_gate_conditions(capsys):
+    results = [
+        _final_result("ePC", 2, 12.0, 0.30),
+        _final_result("sPC", 1, 20.0, 0.50),
+        _final_result("ePC", 1, 10.0, 0.40),
+        _final_result("sPC", 2, 20.0, 0.50),
+    ]
+
+    protocol._print_final_summary(results)
+
+    output = capsys.readouterr().out
+    assert "mean_difference=-0.15000000" in output
+    assert "accuracy_pass=False time_pass=True" in output
+    assert "overall_pass=False" in output
+
+
+def test_final_summary_rejects_unpaired_seed_sets():
+    results = [
+        _final_result("ePC", 1, 10.0, 0.40),
+        _final_result("sPC", 2, 20.0, 0.50),
+    ]
+
+    with pytest.raises(ValueError, match="identical paired seeds"):
+        protocol._print_final_summary(results)
+
+
+def test_published_tuning_rows_reproduce_the_locked_selection():
+    rows = _read_result_csv("2026-08-14-time-accuracy-tuning.csv")
+    candidates = {}
+    for row in rows:
+        key = (int(row["inference_steps"]), float(row["learning_rate"]))
+        candidates.setdefault(key, []).append(float(row["final_validation_accuracy"]))
+
+    selected = {
+        (int(row["inference_steps"]), float(row["learning_rate"]))
+        for row in rows
+        if row["selected"] == "true"
+    }
+    best = max(candidates, key=lambda key: fmean(candidates[key]))
+
+    assert len(rows) == 18
+    assert all(len(accuracies) == 2 for accuracies in candidates.values())
+    assert selected == {(10, 0.0003)}
+    assert best == (10, 0.0003)
+
+
+def test_published_final_rows_reproduce_pairing_and_practical_gate():
+    endpoints = _read_result_csv("2026-08-14-time-accuracy-final-endpoints.csv")
+    curves = _read_result_csv("2026-08-14-time-accuracy-final-curves.csv")
+    by_solver = {
+        solver: [row for row in endpoints if row["solver"] == solver]
+        for solver in ("ePC", "sPC")
+    }
+
+    assert len(endpoints) == 6
+    assert len(curves) == 45
+    assert (
+        {int(row["seed"]) for row in by_solver["ePC"]}
+        == {int(row["seed"]) for row in by_solver["sPC"]}
+        == {0, 1000, 2000}
+    )
+
+    epc_holdout = fmean(float(row["holdout_accuracy"]) for row in by_solver["ePC"])
+    spc_holdout = fmean(float(row["holdout_accuracy"]) for row in by_solver["sPC"])
+    epc_time = fmean(float(row["training_seconds"]) for row in by_solver["ePC"])
+    spc_time = fmean(float(row["training_seconds"]) for row in by_solver["sPC"])
+
+    assert epc_holdout == pytest.approx(0.1074)
+    assert spc_holdout == pytest.approx(0.3264666667)
+    assert epc_time / spc_time == pytest.approx(0.71796756)
+    assert epc_holdout < spc_holdout
+    assert epc_time < spc_time
