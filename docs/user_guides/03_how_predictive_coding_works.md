@@ -40,7 +40,8 @@ Predictive coding operates as a **bilevel optimization** process with two nested
 
 ### Inner Loop: Inference
 
-The **inference loop** minimizes energy by updating latent states `z_latent` while keeping weights fixed. This is gradient descent on the energy landscape:
+The **inference loop** minimizes energy while keeping weights fixed. State-based
+PC (`InferenceSGD` and `InferenceSGDNormClip`) updates latent states directly:
 
 ```
 z_latent -= eta_infer * dE/dz
@@ -57,6 +58,12 @@ inference = InferenceSGD(eta_infer=0.05, infer_steps=20)
 ```
 
 During training, the input node is clamped to `x` (the batch data) and the output node is clamped to `y` (the target labels). These clamped nodes provide boundary conditions, and the inference loop adjusts all unclamped latent states to minimize the total network energy given these constraints.
+
+On a DAG, `EPCInference` instead treats each prediction error `epsilon` as the
+relaxed variable and derives `z_latent = z_mu + epsilon` in topological order.
+This is a reparameterization of the same energy and equilibrium, but a global
+reverse-mode pass reaches every depth on each inference step. Weight learning
+remains local after the inferred state is finalized.
 
 ### Outer Loop: Learning
 
@@ -139,10 +146,10 @@ Here's how predictive coding concepts map to FabricPC types:
 |------------|---------------|-------------|
 | Latent state `z` | `NodeState.z_latent` | The node's current hypothesis about its state |
 | Prediction `mu` | `NodeState.z_mu` | The prediction from incoming connections |
-| Prediction error | `NodeState.error` | `z_latent - z_mu` |
+| Prediction error | `NodeState.error` | `z_latent - z_mu`; the relaxed epsilon under ePC |
 | Energy | `NodeState.energy` | Computed by the node's `EnergyFunctional` |
 | Latent gradient | `NodeState.latent_grad` | Gradient accumulator `dE/dz_latent` consumed by the inference update |
-| Inference update | `InferenceBase` | `z -= eta * dE/dz` (updates latent states) |
+| Inference update | `InferenceBase` | Relaxes states under sPC or errors under ePC |
 | Weight gradient | `compute_local_weight_gradients` | Local Hebbian gradient `dE/dW` |
 | Clamped node | `clamps` dict | Node whose `z_latent` is fixed to observed data |
 | Inference steps | `InferenceSGD.infer_steps` | Number of inner-loop iterations |
@@ -178,7 +185,7 @@ hidden_energy = final_state.nodes["hidden1"].energy  # Shape: (32,) - per-sample
 | **Information flow** | Bidirectional (predictions flow down, errors flow up) | Unidirectional (forward then backward) |
 | **Computation** | Iterative inference (multiple steps to convergence) | Single forward pass |
 | **Learning rule** | Local Hebbian (based on prediction error and input activity) | Credit assignment via chain rule |
-| **Network topology** | Arbitrary graphs (cycles, skip connections) | Typically acyclic (DAGs) |
+| **Network topology** | Arbitrary graphs with sPC; DAGs with ePC | Typically acyclic (DAGs) |
 | **Biological plausibility** | High (local learning, iterative dynamics) | Low (global error signals, weight transport problem) |
 
 ### When They Agree
@@ -199,7 +206,8 @@ This allows direct A/B testing of the two approaches on identical architectures.
 ### Advantages
 
 - **Neuromorphic hardware compatibility** — Local learning rules map naturally to distributed hardware without global synchronization
-- **Arbitrary topologies** — Handles recurrent connections, skip connections, and cycles without modification
+- **Arbitrary topologies with sPC** — Handles recurrent connections, skip connections, and explicitly scheduled cycles
+- **Fast deep DAG inference with ePC** — Global error gradients avoid sPC's per-layer attenuation in digital simulation
 - **Associative memory** — Nodes like `StorkeyHopfield` implement Hopfield networks for pattern completion and few-shot learning
 - **Biological grounding** — Offers insights into cortical computation and learning
 - **Novel plasticity rules** — Framework for exploring alternatives to backprop (e.g., attention-modulated learning, homeostatic plasticity)

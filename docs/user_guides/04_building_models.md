@@ -41,8 +41,8 @@ Each edge specifies:
 
 The `GraphStructure` is an immutable container assembled by the `graph()` builder function. It contains:
 - Topology information (nodes, edges, adjacency)
-- Node execution order
-- Configuration (inference algorithm, scaling strategy)
+- A unique node order plus a complete visit schedule
+- Configuration (inference algorithm, topology scheduler, scaling strategy)
 - Task map (mapping data to nodes)
 
 ## Defining Nodes
@@ -375,6 +375,7 @@ Key parameters:
 - `task_map`: Mapping from data keys to nodes
 - `inference`: Inference algorithm configuration (e.g., `InferenceSGD`)
 - `scaling`: Scaling strategy (e.g., `MuPCConfig` for deep networks)
+- `topology_scheduler`: Optional visit scheduler; defaults to `DAGScheduler()`
 
 ## Graph Topologies
 
@@ -469,7 +470,25 @@ Edge(source=hidden1, target=hidden2.slot("in"))
 Edge(source=hidden2, target=hidden1.slot("in"))
 ```
 
-The builder will emit a warning about topological sort when cycles are detected. Cyclic graphs may require more inference steps for information to propagate around the loops and reach equilibrium.
+Cycles must be selected explicitly so they cannot silently produce a partial
+initialization order:
+
+```python
+from fabricpc.graph_assembly import UnrolledCycleScheduler
+
+structure = graph(
+    nodes=[...],
+    edges=[...],
+    task_map=...,
+    inference=InferenceSGD(eta_infer=0.05, infer_steps=50),
+    topology_scheduler=UnrolledCycleScheduler(num_unrolls=3),
+)
+```
+
+The scheduler revisits each cyclic strongly connected component during
+feedforward state initialization, while acyclic nodes are visited once. Cyclic
+graphs currently require an sPC solver; `EPCInference` is DAG-only and raises
+even when `num_unrolls=1`.
 
 ## Shape Conventions
 

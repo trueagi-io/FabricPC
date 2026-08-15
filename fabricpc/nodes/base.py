@@ -433,6 +433,54 @@ class NodeBase(ABC):
     # =========================================================================
 
     @staticmethod
+    def forward_from_error(
+        params: NodeParams,
+        inputs: Dict[str, jnp.ndarray],
+        state: NodeState,
+        node_info: NodeInfo,
+        is_clamped: bool,
+    ) -> NodeState:
+        """Derive a node state from its first-class ePC prediction error.
+
+        For a free predicted node, ``state.error`` is the relaxed variable
+        epsilon. This method predicts ``z_mu`` from the current inputs, derives
+        ``z_latent = z_mu + epsilon``, and evaluates the node's complete forward
+        energy at that derived latent. It runs inside ``EPCInference``'s global
+        autodiff closure and therefore must remain differentiable with respect
+        to both ``inputs`` and ``state.error``.
+
+        Subclasses only need to override this method when their prediction
+        cannot use the standard ``forward`` contract. Explicit-gradient
+        overrides of ``forward_and_latent_grads`` do not affect this path.
+        ``latent_grad`` is never modified here.
+        """
+        node_class = node_info.node_class
+
+        if node_info.in_degree == 0:
+            new_state = state._replace(
+                z_mu=state.z_latent.astype(state.z_mu.dtype),
+                error=jnp.zeros_like(state.error),
+            )
+            return node_class.energy_functional(new_state, node_info)
+
+        if node_info.out_degree == 0 and not is_clamped:
+            predicted = node_class.forward(params, inputs, state, node_info)
+            return predicted._replace(
+                z_latent=predicted.z_mu,
+                error=jnp.zeros_like(predicted.error),
+                energy=jnp.zeros_like(predicted.energy),
+            )
+
+        if is_clamped:
+            return node_class.forward(params, inputs, state, node_info)
+
+        epsilon = state.error
+        predicted = node_class.forward(params, inputs, state, node_info)
+        derived = state._replace(z_latent=predicted.z_mu + epsilon)
+        derived = node_class.forward(params, inputs, derived, node_info)
+        return derived._replace(error=epsilon)
+
+    @staticmethod
     def forward_and_latent_grads(
         params: NodeParams,
         inputs: Dict[str, jnp.ndarray],

@@ -73,18 +73,23 @@ class InferenceBase(ABC):
     Abstract base class for inference algorithms.
 
     Inference algorithms control how latent states are updated during the
-    inference loop. The primary extension point is `latent_update()`.
+    inference loop. The primary sPC extension point is
+    ``compute_new_latent()``.
 
     Custom inference algorithms extend this class:
 
-    All computation methods are static for JAX compatibility (pure functions, no state).
+    Step-level computation methods are class/static methods for JAX compatibility
+    (pure functions, no dynamic Python state). ``run_inference`` is instance based
+    so it can use this solver's immutable configuration without re-resolving the
+    solver through ``GraphStructure``.
     """
 
     def __init__(self, **config):
         self.config = types.MappingProxyType(config)  # Immutable dictionary
 
-    @staticmethod
+    @classmethod
     def inference_step(
+        cls,
         params: GraphParams,
         state: GraphState,
         clamps: Dict[str, jnp.ndarray],
@@ -97,9 +102,6 @@ class InferenceBase(ABC):
         Override for algorithms that need a different phase structure
         (e.g., momentum that accumulates across steps).
         """
-        inference_obj = structure.config["inference"]
-        cls = type(inference_obj)
-
         # Phase 1: Zero the latent gradients
         state = cls.zero_grads(params, state, clamps, structure)
 
@@ -131,8 +133,9 @@ class InferenceBase(ABC):
 
         return state
 
-    @staticmethod
+    @classmethod
     def forward_value_and_grad(
+        cls,
         params: GraphParams,
         state: GraphState,
         clamps: Dict[str, jnp.ndarray],
@@ -198,8 +201,9 @@ class InferenceBase(ABC):
 
         return state
 
-    @staticmethod
+    @classmethod
     def update_latents(
+        cls,
         params: GraphParams,
         state: GraphState,
         clamps: Dict[str, jnp.ndarray],
@@ -209,9 +213,6 @@ class InferenceBase(ABC):
         """
         Update latent states for each node based on the accumulated latent gradients.
         """
-        inference_obj = structure.config["inference"]
-        cls = type(inference_obj)
-
         for node_name in structure.nodes:
             node_state = state.nodes[node_name]
 
@@ -242,8 +243,38 @@ class InferenceBase(ABC):
         """
         pass
 
-    @staticmethod
+    @classmethod
+    def begin_segment(
+        cls,
+        params: GraphParams,
+        state: GraphState,
+        clamps: Dict[str, jnp.ndarray],
+        structure: GraphStructure,
+    ) -> GraphState:
+        """Normalize state at the beginning of one solver segment.
+
+        Stateful parameterizations can override this hook to synchronize their
+        relaxed variables with a state produced by another solver.
+        """
+        return state
+
+    @classmethod
+    def finalize_state(
+        cls,
+        params: GraphParams,
+        state: GraphState,
+        clamps: Dict[str, jnp.ndarray],
+        structure: GraphStructure,
+    ) -> GraphState:
+        """Normalize state after the final step of one solver segment."""
+        return state
+
+    def segments(self):
+        """Return flattened tracking segments as ``(solver, step_count)`` pairs."""
+        return ((self, int(self.config["infer_steps"])),)
+
     def run_inference(
+        self,
         params: GraphParams,
         initial_state: GraphState,
         clamps: Dict[str, jnp.ndarray],
@@ -255,19 +286,18 @@ class InferenceBase(ABC):
         Override for scan-based tracking, adaptive stopping, etc.
         infer_steps is read from self.config['infer_steps'].
         """
-        inference_obj = structure.config["inference"]
-        inference_cls = type(inference_obj)
-        config = inference_obj.config
+        cls = type(self)
+        config = self.config
         infer_steps = config["infer_steps"]
 
+        state = cls.begin_segment(params, initial_state, clamps, structure)
+
         def body_fn(t, state):
-            return inference_cls.inference_step(
-                params, state, clamps, structure, config
-            )
+            return cls.inference_step(params, state, clamps, structure, config)
 
         # Use lax.fori_loop for efficiency
-        final_state = jax.lax.fori_loop(0, infer_steps, body_fn, initial_state)
-        return final_state
+        final_state = jax.lax.fori_loop(0, infer_steps, body_fn, state)
+        return cls.finalize_state(params, final_state, clamps, structure)
 
 
 # =============================================================================
@@ -356,6 +386,66 @@ class InferenceSGDNormClip(InferenceBase):
         )
 
 
+class InferenceSchedule(InferenceBase):
+    """Compose multiple inference solvers within one weight update."""
+
+    def __init__(self, *solvers: InferenceBase):
+        if not solvers:
+            raise ValueError("InferenceSchedule requires at least one solver")
+        invalid = tuple(
+            type(solver).__name__
+            for solver in solvers
+            if not isinstance(solver, InferenceBase)
+        )
+        if invalid:
+            raise TypeError(
+                "InferenceSchedule entries must be InferenceBase instances; "
+                f"invalid entries: {invalid}"
+            )
+        super().__init__(solvers=tuple(solvers))
+
+    @classmethod
+    def inference_step(
+        cls,
+        params: GraphParams,
+        state: GraphState,
+        clamps: Dict[str, jnp.ndarray],
+        structure: GraphStructure,
+        config: Dict[str, Any],
+    ) -> GraphState:
+        del params, state, clamps, structure, config
+        raise NotImplementedError(
+            "InferenceSchedule has no single inference step; iterate segments() "
+            "or call run_inference()."
+        )
+
+    @staticmethod
+    def compute_new_latent(node_name, node_state, config):
+        del node_name, node_state, config
+        raise NotImplementedError(
+            "InferenceSchedule has no single latent update; iterate segments() "
+            "or call run_inference()."
+        )
+
+    def segments(self):
+        segments = []
+        for solver in self.config["solvers"]:
+            segments.extend(solver.segments())
+        return tuple(segments)
+
+    def run_inference(
+        self,
+        params: GraphParams,
+        initial_state: GraphState,
+        clamps: Dict[str, jnp.ndarray],
+        structure: GraphStructure,
+    ) -> GraphState:
+        state = initial_state
+        for solver in self.config["solvers"]:
+            state = solver.run_inference(params, state, clamps, structure)
+        return state
+
+
 # =============================================================================
 # Convenience Function
 # =============================================================================
@@ -371,8 +461,8 @@ def run_inference(
     Run inference using the algorithm object stored in the graph structure.
 
     Convenience wrapper that extracts the inference object from
-    ``structure.config["inference"]`` and delegates to its class's
-    static ``run_inference`` method.
+    ``structure.config["inference"]`` and delegates to its instance
+    ``run_inference`` method.
 
     Args:
         params: Graph parameters.
@@ -384,6 +474,4 @@ def run_inference(
         Converged graph state after inference.
     """
     inference_object = structure.config["inference"]
-    return type(inference_object).run_inference(
-        params, initial_state, clamps, structure
-    )
+    return inference_object.run_inference(params, initial_state, clamps, structure)

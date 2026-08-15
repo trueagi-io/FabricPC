@@ -360,6 +360,19 @@ The mixin provides:
 
 It returns `(NodeState, input_grads, self_grad)`: the updated state, gradients w.r.t. each input edge (dE/d_input, unscaled), and this node's dE/dz_latent contribution (unscaled). muPC scaling and accumulation into `state.latent_grad` are handled by the callsite (the inference loop).
 
+### The `forward_from_error()` contract
+
+`EPCInference` calls `forward_from_error(params, inputs, state, node_info,
+is_clamped)` inside one global autodiff program. The base implementation predicts
+`z_mu`, derives a free predicted node's `z_latent = z_mu + state.error`, and calls
+`forward()` again so custom energy terms are evaluated at that derived latent.
+
+Most custom nodes should inherit this method unchanged. Override it only if the
+node cannot express its prediction through the normal `forward()` contract. An
+override must remain differentiable with respect to inputs and `state.error` and
+must not write `latent_grad`. Hand-written `forward_and_latent_grads()` methods
+are sPC shortcuts and do not affect the ePC path.
+
 ### Explicit Gradients
 
 By default, FabricPC computes gradients with JAX autodiff: it differentiates your `forward()` to obtain both the latent gradients (inference) and the weight gradients (learning). For hand-coded gradients (e.g. for efficiency or control), override `forward_and_latent_grads()` and `forward_and_weight_grads()`. These return gradients alongside the updated state, so their signatures differ from `forward()`:
@@ -503,6 +516,7 @@ Creating custom nodes involves:
 4. **Implement `forward()`**: Compute predictions, errors, and energy
 5. **Optional overrides**:
    - `get_variance_factor()`: For correct muPC scaling
+   - `forward_from_error()`: Only for a non-standard ePC prediction contract
    - `forward_and_latent_grads()` / `forward_and_weight_grads()`: For explicit gradients
 6. **Test**: Verify shapes, energy convergence, and gradient flow
 

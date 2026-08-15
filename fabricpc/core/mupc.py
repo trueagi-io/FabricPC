@@ -215,6 +215,15 @@ def _count_skip_connections_depth(
     The caller uses max(skip_depth, 1) as L in the scaling formula so that
     pure chains degenerate to a = gain/sqrt(fan_in * K) (no depth factor).
     """
+    if len(set(node_order)) != len(node_order):
+        duplicates = tuple(
+            name for index, name in enumerate(node_order) if name in node_order[:index]
+        )
+        raise ValueError(
+            "node_order must contain each node at most once; "
+            f"duplicate entries: {duplicates}"
+        )
+
     skip_counts: Dict[str, int] = {}
 
     for node_name in node_order:
@@ -277,8 +286,8 @@ def compute_mupc_scalings(
                (each has .node_info with shape, in_edges, out_edges, etc.)
         edges: Dictionary mapping edge keys to EdgeInfo objects
         config: MuPCConfig with scaling parameters.
-        node_order: Optional topological ordering of node names. If provided,
-                    nodes are processed in this order for determinism.
+        node_order: Optional unique node ordering. If provided, nodes are
+                    processed in this order for determinism; duplicates raise.
 
     Returns:
         Dictionary mapping node names to MuPCScalingFactors instances.

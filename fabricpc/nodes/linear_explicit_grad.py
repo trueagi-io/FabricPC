@@ -58,7 +58,9 @@ class LinearExplicitGrad(Linear):
         Demonstrates the override pattern: computes input gradients and
         self-latent gradient analytically using energy.grad_latent() and
         activation.derivative(). muPC scaling and accumulation into
-        ``state.latent_grad`` are handled by the callsite.
+        ``state.latent_grad`` are handled by the callsite. EPCInference does
+        not use this sPC shortcut; it inherits NodeBase.forward_from_error and
+        differentiates the complete graph globally.
         """
         node_class = node_info.node_class
 

@@ -4,7 +4,7 @@ All inference algorithms extend `InferenceBase` from `fabricpc.core.inference`.
 
 ## Overview
 
-Inference is the inner optimization loop of predictive coding. Given fixed weights and clamped data, it iteratively updates latent states to minimize total network energy.
+Inference is the inner optimization loop of predictive coding. Given fixed weights and clamped data, it iteratively updates either latent states (state-based PC, or sPC) or prediction errors (error-based PC, or ePC) to minimize total network energy.
 
 Each inference step has three phases:
 1. **Zero gradients** — Reset accumulated latent gradients
@@ -72,8 +72,49 @@ z_new = z * (1 - eta * latent_decay) - eta * clipped_grad
 | `max_norm` | 0.5–2.0 | For InferenceSGDNormClip; prevents gradient explosions |
 
 For deep networks (>10 layers), consider:
-- Increasing `infer_steps` to `max(20, 4 * num_layers)`
-- Using `InferenceSGDNormClip` for stability
+- Using `EPCInference` on a DAG to avoid layer-by-layer signal attenuation
+- Increasing sPC `infer_steps` to `max(20, 4 * num_layers)` when local state relaxation is required
+- Using `InferenceSGDNormClip` for sPC stability
+
+## EPCInference
+
+Error-based predictive coding relaxes each free predicted node's error `epsilon`
+and derives its latent as `z_latent = z_mu + epsilon`. One reverse-mode JAX pass
+through the complete DAG computes the error gradients for every depth.
+
+```python
+from fabricpc.core import EPCInference
+
+inference = EPCInference(eta_infer=0.1, infer_steps=5, latent_decay=0.0)
+structure = graph(..., inference=inference)
+```
+
+`EPCInference` supports directed acyclic graphs only. It rejects repeated topology
+schedules and back edges with `GraphCycleError`; use an sPC solver for cyclic
+graphs. Clamped integer source nodes remain constants outside autodiff, and the
+final state still feeds FabricPC's existing local weight-gradient path.
+
+muPC forward scaling is applied inside the global differentiated forward pass.
+The sPC-only per-hop gradient preconditioners are not applied by ePC; weight
+gradient scaling is unchanged.
+
+## InferenceSchedule
+
+Compose solvers sequentially within one weight update:
+
+```python
+from fabricpc.core import EPCInference, InferenceSchedule, InferenceSGD
+
+inference = InferenceSchedule(
+    EPCInference(eta_infer=0.1, infer_steps=5),
+    InferenceSGD(eta_infer=0.05, infer_steps=10),
+)
+structure = graph(..., inference=inference)
+```
+
+Each solver owns its configuration and state-boundary hooks. Nested schedules
+flatten for inference-history tracking. In the DAG-first ePC release, composition
+is supported on DAGs; putting an ePC segment on a cyclic graph still raises.
 
 ## Creating Custom Inference Algorithms
 
@@ -96,7 +137,10 @@ class InferenceMomentum(InferenceBase):
         return node_state.z_latent - eta * node_state.latent_grad
 ```
 
-For more radical changes, override `inference_step()`, `forward_value_and_grad()`, or `run_inference()`.
+For more radical changes, override the classmethods `inference_step()` or
+`forward_value_and_grad()`, or the instance method `run_inference()`. Solvers
+whose relaxed representation differs from `z_latent` can also override the
+`begin_segment()` and `finalize_state()` classmethod hooks.
 
 ## Convenience Function
 

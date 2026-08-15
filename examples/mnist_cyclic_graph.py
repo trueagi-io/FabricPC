@@ -34,7 +34,7 @@ import argparse
 
 from fabricpc.nodes import Linear, IdentityNode
 from fabricpc.core.topology import Edge
-from fabricpc.graph_assembly import TaskMap, graph
+from fabricpc.graph_assembly import TaskMap, UnrolledCycleScheduler, graph
 from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.activations import (
     SigmoidActivation,
@@ -105,6 +105,7 @@ def create_lateral_model(rng_key):
         ],
         task_map=TaskMap(x=pixels, y=output),
         inference=InferenceSGD(eta_infer=0.15, infer_steps=50),
+        topology_scheduler=UnrolledCycleScheduler(num_unrolls=3),
     )
     params = initialize_params(structure, rng_key)
     return params, structure

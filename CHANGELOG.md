@@ -4,6 +4,13 @@
 muPC scaling correctness release. Deep residual and pooling graphs previously trained with an attenuated signal; activations, losses, and tuned learning rates will shift. See `docs/user_guides/05_initialization_and_scaling.md`.
 
 ### Breaking changes
+- Cyclic graphs now require an explicit `UnrolledCycleScheduler`; the default
+  `DAGScheduler` raises `GraphCycleError` instead of returning a partial order.
+- `GraphStructure` gains a static `schedule` field beside unique `node_order`.
+- `InferenceBase.run_inference` is now an instance method. Custom solvers should
+  use classmethods for step-level overrides and instance dispatch for a run.
+- `examples.resnet18_cifar10_demo.build_resnet18` now takes a required
+  `inference` object instead of `infer_steps`/`eta_infer` keyword arguments.
 - `SkipConnection` gained a `"skip"` slot: route the residual stream there, branch contributions to `"in"`. Construction raises when `"skip"` is unconnected (new `SlotSpec.require_connected`).
 - `NodeBase.get_weight_fan_in` is replaced by `get_variance_factor(source_shape, config, weight_init) -> float`. Custom nodes must rename and accept the third argument; weighted nodes keep their existing scaling. Migration: `docs/user_guides/06_custom_nodes.md`.
 
@@ -16,9 +23,20 @@ muPC scaling correctness release. Deep residual and pooling graphs previously tr
 - `StorkeyHopfield` reports its blend's variance factor rather than `fan_in`. The near-independent blend terms previously shrank variance to `1/3` at default init, compounding across chained nodes.
 
 ### New
+- DAG-only `EPCInference` relaxes first-class prediction errors with one global
+  JAX gradient pass while retaining local weight updates.
+- `InferenceSchedule` composes solver segments and inference-history tracking.
+- `DAGScheduler` and `UnrolledCycleScheduler` provide validated, deterministic
+  topology schedules; cyclic sPC initialization now propagates through SCCs.
+- `examples/epc_spc_resnet18_compare.py` provides paired training and
+  same-state convergence benchmarks against the clipped-sPC baseline.
 - `InitializerBase.element_variance(shape, config)` returns the per-element variance an initializer draws, in closed form; implemented for all built-ins. `StorkeyHopfield` derives its factor from it. `StorkeyHopfield` uses it to derive `r` rather than assuming Xavier.
 
 ### Fixed
+- Inference subclasses no longer re-resolve themselves through
+  `structure.config["inference"]`, so composed solvers dispatch correctly.
+- Cyclic graphs no longer leave cycle members and downstream nodes at random
+  feedforward initialization or omit their muPC scaling silently.
 - `[tfds]` installs `tensorflow-cpu` on x86_64 Linux instead of `tensorflow`. The default Linux wheel is a CUDA build that dlopens CUDA libraries by SONAME at import. On machines whose loader search path carries a system CUDA 13 toolkit older than JAX's pip CUDA wheels, importing TF made the system `libcublas.so.13` resident first; glibc deduplicates by SONAME, so JAX's CUDA plugin bound that older copy instead of its own pip copy, failed its version check ("Outdated cuBLAS installation"), and fell back to CPU at the first TFDS data load. `tensorflow-cpu` does no CUDA probing at import, so it cannot preload the stale library. tensorflow-cpu publishes no aarch64 wheels, so aarch64 Linux keeps `tensorflow`.
 - Upgrade note: `tensorflow` and `tensorflow-cpu` install the same `tensorflow` package directory, so pip will not cleanly replace one with the other. Existing environments must run `pip uninstall -y tensorflow` before reinstalling the extra.
 

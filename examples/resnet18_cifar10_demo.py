@@ -56,7 +56,7 @@ import time
 from fabricpc.nodes import ConvNode, Linear, IdentityNode, SkipConnection, AvgPool
 from fabricpc.core.topology import Edge
 from fabricpc.graph_assembly import TaskMap, graph
-from fabricpc.core import InferenceSGDNormClip
+from fabricpc.core import InferenceBase, InferenceSGDNormClip
 from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.activations import (
     IdentityActivation,
@@ -235,8 +235,7 @@ def build_resnet18(
     output_weight_init=XavierInitializer(),
     activation=ReLUActivation(),
     *,
-    infer_steps,
-    eta_infer,
+    inference: InferenceBase,
 ):
     """
     Build ResNet-18 for CIFAR-10 as a predictive coding graph.
@@ -247,8 +246,7 @@ def build_resnet18(
         output_weight_init: InitializerBase for the output layer
             (default: XavierInitializer).
         activation: Activation for hidden conv layers (default: ReLU).
-        infer_steps: Number of PC inference steps.
-        eta_infer: Inference rate.
+        inference: Inference solver used by the graph.
 
     Returns:
         GraphStructure ready for initialize_params().
@@ -318,9 +316,7 @@ def build_resnet18(
         nodes=all_nodes,
         edges=all_edges,
         task_map=TaskMap(x=input_node, y=output),
-        inference=InferenceSGDNormClip(
-            eta_infer=eta_infer, infer_steps=infer_steps, max_norm=1.0
-        ),
+        inference=inference,
         scaling=scaling,
     )
 
@@ -332,15 +328,14 @@ def build_resnet18(
 # =============================================================================
 
 
-def _create_mupc_model(rng_key, *, infer_steps, eta_infer, activation=ReLUActivation()):
+def _create_mupc_model(rng_key, *, inference, activation=ReLUActivation()):
     """Create ResNet-18 with muPC parameterization."""
     structure = build_resnet18(
         weight_init=MuPCInitializer(),
         scaling=MuPCConfig(include_output=False),
         output_weight_init=XavierInitializer(),
         activation=activation,
-        infer_steps=infer_steps,
-        eta_infer=eta_infer,
+        inference=inference,
     )
     params = initialize_params(structure, rng_key)
     return params, structure
@@ -369,8 +364,11 @@ def run_single_mupc(args):
     # Build model
     params, structure = _create_mupc_model(
         graph_key,
-        infer_steps=args.infer_steps,
-        eta_infer=args.eta_infer,
+        inference=InferenceSGDNormClip(
+            eta_infer=args.eta_infer,
+            infer_steps=args.infer_steps,
+            max_norm=1.0,
+        ),
         activation=activation,
     )
 

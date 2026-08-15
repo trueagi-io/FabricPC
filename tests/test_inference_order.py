@@ -38,7 +38,7 @@ import jax
 import jax.numpy as jnp
 
 from fabricpc.core.topology import Edge
-from fabricpc.graph_assembly import TaskMap, graph
+from fabricpc.graph_assembly import TaskMap, UnrolledCycleScheduler, graph
 from fabricpc.core.activations import IdentityActivation, TanhActivation
 from fabricpc.core.inference import InferenceSGD
 from fabricpc.core.initializers import NormalInitializer
@@ -123,6 +123,7 @@ def _build_cycle(insertion_order, scaling=None):
         task_map=TaskMap(x=x, y=y),
         inference=InferenceSGD(eta_infer=0.05, infer_steps=1),
         scaling=scaling,
+        topology_scheduler=UnrolledCycleScheduler(num_unrolls=2),
     )
 
 

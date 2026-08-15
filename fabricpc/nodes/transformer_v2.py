@@ -108,6 +108,12 @@ class EmbeddingNode(NodeBase):
 
     @staticmethod
     def forward_and_latent_grads(params, inputs, state, node_info, is_clamped=False):
+        """Block gradients to discrete indices on the local sPC path.
+
+        EPCInference inherits ``NodeBase.forward_from_error`` instead. The
+        clamped integer source is excluded from its differentiable pytree, so
+        no special ePC override is required.
+        """
         new_state = node_info.node_class.forward(params, inputs, state, node_info)
         # Discrete indices: no gradient flows back through the input edge.
         input_grads = {

@@ -2,7 +2,7 @@
 
 import types
 from dataclasses import replace
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 from fabricpc.core.types import GraphStructure, NodeInfo, EdgeInfo, SlotInfo
 from fabricpc.core.inference import InferenceBase
 from fabricpc.core.mupc import MuPCConfig, compute_mupc_scalings
@@ -11,6 +11,11 @@ from fabricpc.nodes.base import NodeBase
 from fabricpc.graph_initialization.state_initializer import (
     StateInitBase,
     FeedforwardStateInit,
+)
+from fabricpc.graph_assembly.scheduling import (
+    DAGScheduler,
+    TopologySchedulerBase,
+    first_occurrence_order,
 )
 
 
@@ -62,49 +67,6 @@ def _build_slots(node: NodeBase, in_edges: Dict[str, EdgeInfo]) -> Dict[str, Slo
     return slots
 
 
-def _topological_sort(
-    nodes: Dict[str, NodeBase], edges: Dict[str, EdgeInfo]
-) -> Tuple[str, ...]:
-    """
-    BFS-based topological sort. Feedforward traversal for initialization uses this topological ordering of nodes.
-
-    Args:
-        nodes: Dictionary of NodeBase instances (access in_degree/out_edges via node.node_info)
-        edges: Dictionary of EdgeInfo instances
-
-    Returns:
-        Tuple of node names in topological order
-
-    Note:
-        If the graph contains cycles, some nodes may be omitted from the order.
-    """
-    # Count in-degrees from node.node_info
-    in_degree = {name: node.node_info.in_degree for name, node in nodes.items()}
-
-    # Queue of nodes, begin with nodes having no incoming edges
-    queue = [name for name, deg in in_degree.items() if deg == 0]
-    result = []
-
-    while queue:
-        node_name = queue.pop(0)
-        result.append(node_name)
-
-        # Reduce in-degree of neighbors
-        for out_edge_key in nodes[node_name].node_info.out_edges:
-            edge_info = edges[out_edge_key]
-            target_name = edge_info.target
-            in_degree[target_name] -= 1
-
-            if in_degree[target_name] == 0:
-                # Dependencies have been processed, now add next node to the queue
-                queue.append(target_name)
-
-    if len(result) != len(nodes):
-        print("Warning: Graph contains cycles, using partial topological order")
-
-    return tuple(result)
-
-
 def graph(
     nodes: List[NodeBase],
     edges: List[Edge],
@@ -112,6 +74,7 @@ def graph(
     inference: InferenceBase,
     graph_state_initializer: Optional[StateInitBase] = None,
     scaling=None,
+    topology_scheduler: Optional[TopologySchedulerBase] = None,
 ) -> GraphStructure:
     """
     Build a GraphStructure from node objects, edge objects, and a task map.
@@ -129,6 +92,8 @@ def graph(
         scaling: Optional MuPCConfig instance for muPC parameterization.
             When provided, per-node scaling factors are computed from graph
             topology and attached to each NodeInfo.scaling_config.
+        topology_scheduler: Node visit scheduler. Defaults to ``DAGScheduler``;
+            cyclic graphs must opt into a cycle-capable scheduler explicitly.
 
     Returns:
         GraphStructure with finalized nodes, edges, and topology
@@ -212,8 +177,25 @@ def graph(
         )
         finalized_nodes[name] = node._with_graph_info(node_info)
 
-    # 5. Topological sort
-    node_order = _topological_sort(finalized_nodes, edge_infos)
+    # 5. Compute and validate the full node visit schedule.
+    scheduler = topology_scheduler or DAGScheduler()
+    if not isinstance(scheduler, TopologySchedulerBase):
+        raise TypeError(
+            "topology_scheduler must be a TopologySchedulerBase instance, "
+            f"got {type(scheduler)}"
+        )
+    schedule = type(scheduler).compute_schedule(
+        finalized_nodes, edge_infos, scheduler.config
+    )
+    unknown = tuple(name for name in schedule if name not in finalized_nodes)
+    scheduled_names = set(schedule)
+    missing = tuple(name for name in finalized_nodes if name not in scheduled_names)
+    if unknown or missing:
+        raise ValueError(
+            "Topology scheduler must cover every graph node and may not return "
+            f"unknown nodes. Missing: {missing}; unknown: {unknown}."
+        )
+    node_order = first_occurrence_order(schedule)
 
     # 5b. Compute and attach muPC scalings if requested
     if scaling is not None:
@@ -249,6 +231,7 @@ def graph(
     gs_config = {
         "graph_state_initializer": graph_state_initializer or FeedforwardStateInit(),
         "inference": inference,
+        "topology_scheduler": scheduler,
     }
 
     return GraphStructure(
@@ -256,5 +239,6 @@ def graph(
         edges=edge_infos,
         task_map=task_map_dict,
         node_order=node_order,
+        schedule=schedule,
         config=gs_config,
     )

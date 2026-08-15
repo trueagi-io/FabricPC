@@ -115,7 +115,9 @@ class NodeState(NamedTuple):
     Attributes:
         z_latent: Latent states (what the network infers)
         z_mu: Predicted expectations (what the network predicts)
-        error: Prediction errors (z_latent - z_mu)
+        error: Prediction errors (z_latent - z_mu). Under EPCInference this is
+            the first-class relaxed variable epsilon, with z_latent derived as
+            z_mu + epsilon for free predicted nodes.
         energy: Energy
         latent_grad: Gradients w.r.t. latent states for inference updates
     """
@@ -156,14 +158,16 @@ class GraphStructure(NamedTuple):
         nodes: Dictionary mapping node names to NodeBase instances (with node_info attribute)
         edges: Dictionary mapping edge keys to EdgeInfo
         task_map: Dictionary mapping task names to node names
-        node_order: Topological order for forward pass
+        node_order: Unique first-occurrence order for one-visit consumers
+        schedule: Full node visit schedule; cycle members may repeat
         config: Graph configuration
     """
 
     nodes: Dict[str, Any]  # Dict[str, NodeBase] - node instances with node_info
     edges: Dict[str, EdgeInfo]
     task_map: Dict[str, str]
-    node_order: Tuple[str, ...]  # Topological sort for inference
+    node_order: Tuple[str, ...]  # Unique first-occurrence order
+    schedule: Tuple[str, ...]  # Complete forward visit schedule
     config: Dict[str, Any]  # Graph configuration
 
     def __repr__(self) -> str:
@@ -212,6 +216,9 @@ tree_util.register_pytree_node(
 # GraphStructure is static, so we register it as having no dynamic components
 tree_util.register_pytree_node(
     GraphStructure,
-    lambda gs: ((), (gs.nodes, gs.edges, gs.task_map, gs.node_order, gs.config)),
+    lambda gs: (
+        (),
+        (gs.nodes, gs.edges, gs.task_map, gs.node_order, gs.schedule, gs.config),
+    ),
     lambda aux, _: GraphStructure(*aux),  # Reconstruct from aux data
 )

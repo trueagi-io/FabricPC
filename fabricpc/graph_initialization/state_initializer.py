@@ -265,8 +265,9 @@ class FeedforwardStateInit(StateInitBase):
         state = GraphState(nodes=node_state_dict, batch_size=batch_size)
         state = set_latents_to_clamps(state, clamps)
 
-        # Second pass: feedforward propagation in topological order
-        for node_name in structure.node_order:
+        # Second pass: feedforward propagation in the configured visit schedule.
+        # Cycle-capable schedules may revisit a node with newer source latents.
+        for node_name in structure.schedule:
             node = structure.nodes[node_name]
             node_info = node.node_info
 
