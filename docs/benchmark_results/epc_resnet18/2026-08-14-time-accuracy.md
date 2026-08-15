@@ -1,5 +1,11 @@
 # ePC ResNet-18 time-to-accuracy follow-up — 2026-08-14
 
+> **Invalidated on 2026-08-15.** This run tested transfer of a short-horizon
+> selected learning rate into a differently scaled long-horizon schedule. It
+> does not answer whether independently optimized ePC reaches sPC's empirical
+> limit faster, and none of its endpoint values may influence the replacement
+> study. The retained report and CSVs are an audit record only.
+
 ## Preregistered protocol
 
 This protocol was written before running the follow-up grid or observing its
@@ -197,7 +203,9 @@ ePC learns quickly and is substantially cheaper, but its current optimizer
 schedule is not stable when its speed advantage is converted directly into
 more epochs. A credible next study should tune the full long-horizon schedule
 on validation data, save the best-validation checkpoint, and use a newly
-declared untouched endpoint; this holdout has now been consumed.
+declared endpoint under the replacement methodology. By project decision,
+`train[90%:]` is restored as that study's held-out endpoint and this invalid
+run is excluded from all decisions.
 
 ### Final verification
 
