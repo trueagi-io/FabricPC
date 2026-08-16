@@ -16,6 +16,7 @@ import argparse
 from dataclasses import dataclass
 import importlib.util
 import os
+from pathlib import Path
 import time
 from typing import Dict, Iterable, Optional, Sequence, Tuple
 
@@ -244,6 +245,252 @@ def time_to_accuracy(result: TrainingResult, target: float) -> Optional[float]:
     return None
 
 
+def _print_curve_point(recipe: Recipe, seed: int, point: CurvePoint) -> None:
+    print(
+        "CURVE "
+        f"name={recipe.name} seed={seed} epoch={point.epoch} "
+        f"train_seconds={point.training_seconds:.6f} "
+        f"validation_accuracy={point.validation_accuracy:.8f} "
+        f"best_accuracy={point.best_accuracy:.8f} "
+        f"validation_energy={point.validation_energy:.8g}",
+        flush=True,
+    )
+
+
+def _print_run_result(
+    result: TrainingResult,
+    epochs: int,
+    stability_tail_epochs: int,
+    stability_tolerance: float,
+) -> None:
+    print(
+        "RUN_RESULT "
+        f"name={result.recipe.name} seed={result.seed} epochs={epochs} "
+        f"total_train_seconds={result.total_training_seconds:.6f} "
+        f"best_epoch={result.best_epoch} "
+        f"time_to_best={result.best_training_seconds:.6f} "
+        f"best_validation_accuracy={result.best_validation_accuracy:.8f} "
+        f"final_validation_accuracy={result.final_validation_accuracy:.8f} "
+        f"stable={is_stable(result, stability_tail_epochs, stability_tolerance)} "
+        f"endpoint_accuracy={result.endpoint_accuracy} "
+        f"endpoint_seconds={result.endpoint_seconds}",
+        flush=True,
+    )
+
+
+def _replay_training_result(
+    result: TrainingResult,
+    epochs: int,
+    stability_tail_epochs: int,
+    stability_tolerance: float,
+) -> None:
+    """Replay a validated result so a resumed log remains self-contained."""
+    print(f"RESUME_REPLAY name={result.recipe.name} seed={result.seed}", flush=True)
+    for point in result.curve:
+        _print_curve_point(result.recipe, result.seed, point)
+    _print_run_result(
+        result,
+        epochs,
+        stability_tail_epochs,
+        stability_tolerance,
+    )
+
+
+def _parse_record(line: str, prefix: str, expected_fields: set) -> Optional[dict]:
+    stripped = line.strip()
+    if not stripped.startswith(f"{prefix} "):
+        return None
+    fields = {}
+    for token in stripped.split()[1:]:
+        if "=" not in token:
+            raise ValueError(f"malformed {prefix} record: {stripped}")
+        key, value = token.split("=", 1)
+        if key in fields:
+            raise ValueError(f"duplicate {prefix} field {key}")
+        fields[key] = value
+    if set(fields) != expected_fields:
+        raise ValueError(
+            f"unexpected {prefix} fields: expected {sorted(expected_fields)}, "
+            f"got {sorted(fields)}"
+        )
+    return fields
+
+
+def _finite_float(value: str, label: str) -> float:
+    try:
+        parsed = float(value)
+    except ValueError as error:
+        raise ValueError(f"{label} must be a float") from error
+    if not np.isfinite(parsed):
+        raise ValueError(f"{label} must be finite")
+    return parsed
+
+
+def load_screen_prefix(
+    path: Path,
+    candidates: Sequence[Recipe],
+    screen_seed: int,
+    epochs: int,
+    stability_tail_epochs: int,
+    stability_tolerance: float,
+) -> Tuple[Tuple[TrainingResult, ...], Optional[str]]:
+    """Load only a complete, endpoint-free prefix of screen results.
+
+    A trailing partial candidate is validated as the next candidate and then
+    discarded. This makes interruption recovery independent of observed
+    validation values and prevents selective reuse of completed runs.
+    """
+    curve_fields = {
+        "name",
+        "seed",
+        "epoch",
+        "train_seconds",
+        "validation_accuracy",
+        "best_accuracy",
+        "validation_energy",
+    }
+    result_fields = {
+        "name",
+        "seed",
+        "epochs",
+        "total_train_seconds",
+        "best_epoch",
+        "time_to_best",
+        "best_validation_accuracy",
+        "final_validation_accuracy",
+        "stable",
+        "endpoint_accuracy",
+        "endpoint_seconds",
+    }
+    candidate_by_name = {recipe.name: recipe for recipe in candidates}
+    if len(candidate_by_name) != len(candidates):
+        raise ValueError("candidate names must be unique")
+
+    completed = []
+    pending_recipe = None
+    pending_points = []
+    for line_number, line in enumerate(
+        path.read_text(errors="replace").splitlines(), 1
+    ):
+        curve = _parse_record(line, "CURVE", curve_fields)
+        run = _parse_record(line, "RUN_RESULT", result_fields)
+        if curve is None and run is None:
+            continue
+        record = curve if curve is not None else run
+        assert record is not None
+        name = record["name"]
+        if name not in candidate_by_name:
+            raise ValueError(f"line {line_number}: unknown candidate {name}")
+        if int(record["seed"]) != screen_seed:
+            raise ValueError(f"line {line_number}: resume log is not screen-only")
+        if len(completed) >= len(candidates):
+            raise ValueError(f"line {line_number}: duplicate or extra screen result")
+        expected_recipe = candidates[len(completed)]
+        if name != expected_recipe.name:
+            raise ValueError(
+                f"line {line_number}: expected contiguous candidate "
+                f"{expected_recipe.name}, got {name}"
+            )
+
+        if curve is not None:
+            if pending_recipe is None:
+                pending_recipe = expected_recipe
+            if pending_recipe != expected_recipe:
+                raise ValueError(f"line {line_number}: interleaved candidates")
+            epoch = int(curve["epoch"])
+            if epoch != len(pending_points) + 1 or epoch > epochs:
+                raise ValueError(f"line {line_number}: non-contiguous epoch {epoch}")
+            training_seconds = _finite_float(curve["train_seconds"], "training seconds")
+            accuracy = _finite_float(
+                curve["validation_accuracy"], "validation accuracy"
+            )
+            best_accuracy = _finite_float(curve["best_accuracy"], "best accuracy")
+            energy = _finite_float(curve["validation_energy"], "validation energy")
+            if training_seconds < 0 or (
+                pending_points
+                and training_seconds < pending_points[-1].training_seconds
+            ):
+                raise ValueError(f"line {line_number}: training time must be monotonic")
+            if not 0 <= accuracy <= 1 or not 0 <= best_accuracy <= 1:
+                raise ValueError(f"line {line_number}: accuracy must be a probability")
+            running_best = max(
+                [point.validation_accuracy for point in pending_points] + [accuracy]
+            )
+            if not np.isclose(best_accuracy, running_best, rtol=0, atol=5e-8):
+                raise ValueError(f"line {line_number}: inconsistent best accuracy")
+            pending_points.append(
+                CurvePoint(epoch, training_seconds, accuracy, energy, best_accuracy)
+            )
+            continue
+
+        if pending_recipe != expected_recipe or len(pending_points) != epochs:
+            raise ValueError(
+                f"line {line_number}: RUN_RESULT lacks a complete {epochs}-epoch curve"
+            )
+        if int(run["epochs"]) != epochs:
+            raise ValueError(f"line {line_number}: observation horizon mismatch")
+        if run["endpoint_accuracy"] != "None" or run["endpoint_seconds"] != "None":
+            raise ValueError(
+                f"line {line_number}: endpoint-bearing result is forbidden"
+            )
+
+        best_accuracy = max(point.validation_accuracy for point in pending_points)
+        best_point = next(
+            point
+            for point in pending_points
+            if point.validation_accuracy == best_accuracy
+        )
+        total_seconds = _finite_float(
+            run["total_train_seconds"], "total training seconds"
+        )
+        logged_best_seconds = _finite_float(run["time_to_best"], "time to best")
+        logged_best_accuracy = _finite_float(
+            run["best_validation_accuracy"], "best validation accuracy"
+        )
+        logged_final_accuracy = _finite_float(
+            run["final_validation_accuracy"], "final validation accuracy"
+        )
+        if total_seconds + 5e-6 < pending_points[-1].training_seconds:
+            raise ValueError(f"line {line_number}: total time precedes final epoch")
+        if int(run["best_epoch"]) != best_point.epoch:
+            raise ValueError(f"line {line_number}: inconsistent best epoch")
+        if not np.isclose(
+            logged_best_seconds, best_point.training_seconds, rtol=0, atol=5e-6
+        ):
+            raise ValueError(f"line {line_number}: inconsistent time to best")
+        if not np.isclose(logged_best_accuracy, best_accuracy, rtol=0, atol=5e-8):
+            raise ValueError(f"line {line_number}: inconsistent best accuracy")
+        if not np.isclose(
+            logged_final_accuracy,
+            pending_points[-1].validation_accuracy,
+            rtol=0,
+            atol=5e-8,
+        ):
+            raise ValueError(f"line {line_number}: inconsistent final accuracy")
+
+        result = TrainingResult(
+            recipe=expected_recipe,
+            seed=screen_seed,
+            total_training_seconds=total_seconds,
+            curve=tuple(pending_points),
+            best_epoch=best_point.epoch,
+            best_training_seconds=logged_best_seconds,
+            best_validation_accuracy=logged_best_accuracy,
+            final_validation_accuracy=logged_final_accuracy,
+        )
+        stable = {"True": True, "False": False}.get(run["stable"])
+        if stable is None or stable != is_stable(
+            result, stability_tail_epochs, stability_tolerance
+        ):
+            raise ValueError(f"line {line_number}: inconsistent stability result")
+        completed.append(result)
+        pending_recipe = None
+        pending_points = []
+
+    incomplete_name = pending_recipe.name if pending_recipe is not None else None
+    return tuple(completed), incomplete_name
+
+
 def _run_training(
     *,
     recipe: Recipe,
@@ -318,15 +565,7 @@ def _run_training(
             best_accuracy=best_validation_accuracy,
         )
         curve.append(point)
-        print(
-            "CURVE "
-            f"name={recipe.name} seed={seed} epoch={point.epoch} "
-            f"train_seconds={point.training_seconds:.6f} "
-            f"validation_accuracy={point.validation_accuracy:.8f} "
-            f"best_accuracy={point.best_accuracy:.8f} "
-            f"validation_energy={point.validation_energy:.8g}",
-            flush=True,
-        )
+        _print_curve_point(recipe, seed, point)
         callback_seconds += time.perf_counter() - callback_start
         return metrics
 
@@ -379,18 +618,11 @@ def _run_training(
         endpoint_accuracy=endpoint_accuracy,
         endpoint_seconds=endpoint_seconds,
     )
-    print(
-        "RUN_RESULT "
-        f"name={recipe.name} seed={seed} epochs={epochs} "
-        f"total_train_seconds={result.total_training_seconds:.6f} "
-        f"best_epoch={result.best_epoch} "
-        f"time_to_best={result.best_training_seconds:.6f} "
-        f"best_validation_accuracy={result.best_validation_accuracy:.8f} "
-        f"final_validation_accuracy={result.final_validation_accuracy:.8f} "
-        f"stable={is_stable(result, stability_tail_epochs, stability_tolerance)} "
-        f"endpoint_accuracy={endpoint_accuracy} "
-        f"endpoint_seconds={endpoint_seconds}",
-        flush=True,
+    _print_run_result(
+        result,
+        epochs,
+        stability_tail_epochs,
+        stability_tolerance,
     )
     return result
 
@@ -522,8 +754,27 @@ def run_tuning(args):
         args.spc_eta,
     )
     by_solver = {"ePC": epc_candidates, "sPC": spc_candidates}
+    candidates_in_order = epc_candidates + spc_candidates
     all_results: Dict[Recipe, list] = {}
     tuning_cost = {"ePC": 0.0, "sPC": 0.0}
+
+    resumed = {}
+    resume_log = getattr(args, "resume_log", None)
+    if resume_log is not None:
+        loaded, incomplete_name = load_screen_prefix(
+            resume_log,
+            candidates_in_order,
+            args.screen_seed,
+            args.epochs,
+            args.stability_tail_epochs,
+            args.stability_tolerance,
+        )
+        resumed = {result.recipe: result for result in loaded}
+        print(
+            f"RESUME source={resume_log} complete={len(loaded)} "
+            f"discarded_incomplete={incomplete_name}",
+            flush=True,
+        )
 
     print("PHASE tune", flush=True)
     print(
@@ -540,7 +791,16 @@ def run_tuning(args):
     for solver, candidates in by_solver.items():
         screen_rows = []
         for recipe in candidates:
-            result = _run_recipe(recipe, args.screen_seed, args, False)
+            result = resumed.get(recipe)
+            if result is None:
+                result = _run_recipe(recipe, args.screen_seed, args, False)
+            else:
+                _replay_training_result(
+                    result,
+                    args.epochs,
+                    args.stability_tail_epochs,
+                    args.stability_tolerance,
+                )
             all_results.setdefault(recipe, []).append(result)
             tuning_cost[solver] += result.total_training_seconds
             screen_rows.append(result)
@@ -782,6 +1042,11 @@ def parse_args():
     parser.add_argument("--confirm_seed", type=int, default=CONFIRM_SEED)
     parser.add_argument("--shortlist_size", type=int, default=SHORTLIST_SIZE)
     parser.add_argument(
+        "--resume-log",
+        type=Path,
+        help="resume tuning from a validated contiguous screen-result prefix",
+    )
+    parser.add_argument(
         "--stability_tail_epochs", type=int, default=STABILITY_TAIL_EPOCHS
     )
     parser.add_argument(
@@ -841,6 +1106,8 @@ def parse_args():
         parser.error("final seeds must be disjoint from tuning seeds")
 
     if args.mode == "final":
+        if args.resume_log is not None:
+            parser.error("--resume-log is valid only in tune mode")
         required_positive = {
             "epc_steps": args.epc_steps,
             "epc_lr": args.epc_lr,

@@ -2,7 +2,7 @@
 
 ## Status
 
-Preregistered; results pending. This protocol follows
+Preregistered; validation-only tuning recovery pending. This protocol follows
 [the repository validation methodology](../../validation_methodology.md) and
 replaces the invalidated 2026-08-14 recipe-transfer study.
 
@@ -147,6 +147,37 @@ The study is invalid if tuning constructs the endpoint loader, endpoint values
 influence a recipe or target, the final command differs from the printed lock,
 or non-finite values occur. Failure to find a stable recipe is a valid negative
 result and blocks endpoint evaluation rather than changing the protocol.
+
+## Execution recovery amendment — 2026-08-15
+
+This amendment was recorded before resuming tuning and before any endpoint
+loader was constructed.
+
+- The first tuning process was stopped after an unrelated CUDA training job
+  began using the accelerator. The entire process log is excluded, including
+  candidates that completed before the conflict.
+- A fresh process was continuously monitored. Its first 19 screen candidates
+  completed without competing CUDA compute. During the 20th candidate, a
+  mixed compute/graphics application registered nonzero accelerator use, so
+  the process was stopped immediately and that candidate is excluded in full.
+- The 19 complete candidates are retained because they are the exact
+  contiguous prefix of the committed candidate order, not because of their
+  validation values. Each has eight curve records, one internally consistent
+  result record, and `endpoint_accuracy=None`; the partial 20th candidate is
+  rerun from epoch 1.
+- The runner validates all of those conditions, rejects non-prefix or
+  endpoint-bearing records, and replays accepted records into the new log so
+  it remains self-contained. Tuning cost includes retained runs.
+- This recovery applies only to validation-only screening. Before final mode,
+  the accelerator must pass an isolation preflight. There is no selective
+  retry or resume after the first held-out endpoint evaluation.
+
+Resume command:
+
+```text
+./ve/bin/python examples/epc_resnet18_optimized.py --mode tune \
+  --resume-log /tmp/fabricpc-epc-independent-20260815-Qa88Va/tune-clean-prefix.log
+```
 
 ## Results
 

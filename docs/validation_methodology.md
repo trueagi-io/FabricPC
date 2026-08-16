@@ -56,6 +56,13 @@ endpoint evaluation time is excluded from training time and recorded
 separately when material. Runs use the same hardware without a competing
 compute workload.
 
+On an active-display machine, ordinary graphics contexts are recorded as host
+conditions but are not classified as competing compute unless they consume
+measurable accelerator execution during a timed run. A second CUDA or mixed
+compute/graphics process with nonzero accelerator utilization is competing
+compute. The affected in-progress run is excluded in full; timing samples are
+never trimmed after the fact.
+
 ## 4. Data isolation and selection
 
 Every study declares disjoint training, validation, and endpoint splits before
@@ -92,6 +99,21 @@ The protocol and executable runner are committed before tuning. Raw per-epoch
 curves, per-seed endpoints, selected recipes, environment details, and exact
 commands are retained in machine-readable artifacts. Deviations are documented
 before further endpoint evaluation.
+
+Validation-only tuning may resume after an operational interruption only when
+the runner can verify a complete, endpoint-free, contiguous prefix of the
+preregistered candidate order. Complete means the full declared epoch curve
+and internally consistent timing, checkpoint, stability, and result records.
+The interrupted candidate is discarded in full and rerun from its first
+epoch. Prefix retention is determined solely by order, record completeness,
+and compute-isolation monitoring—not by observed validation values. A resumed
+log replays the accepted prefix so every subsequent log is self-contained.
+
+This recovery rule ends when endpoint evaluation begins. Final runs are
+started only after an accelerator-isolation preflight; once any held-out
+endpoint has been evaluated, the study is not retried or selectively resumed.
+An interruption or competing compute after that point is reported as a study
+failure requiring a newly preregistered endpoint protocol.
 
 ## 6. Claims and uncertainty
 

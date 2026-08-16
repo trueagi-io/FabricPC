@@ -62,6 +62,7 @@ def _args(**overrides):
         "screen_seed": 11,
         "confirm_seed": 12,
         "shortlist_size": 1,
+        "resume_log": None,
         "final_seeds": (0, 1, 2),
         "epc_steps": 2,
         "epc_lr": 0.0001,
@@ -74,6 +75,31 @@ def _args(**overrides):
     }
     values.update(overrides)
     return SimpleNamespace(**values)
+
+
+def _result_log(result, epochs=8):
+    lines = []
+    for point in result.curve:
+        lines.append(
+            "CURVE "
+            f"name={result.recipe.name} seed={result.seed} epoch={point.epoch} "
+            f"train_seconds={point.training_seconds:.6f} "
+            f"validation_accuracy={point.validation_accuracy:.8f} "
+            f"best_accuracy={point.best_accuracy:.8f} "
+            f"validation_energy={point.validation_energy:.8g}"
+        )
+    lines.append(
+        "RUN_RESULT "
+        f"name={result.recipe.name} seed={result.seed} epochs={epochs} "
+        f"total_train_seconds={result.total_training_seconds:.6f} "
+        f"best_epoch={result.best_epoch} "
+        f"time_to_best={result.best_training_seconds:.6f} "
+        f"best_validation_accuracy={result.best_validation_accuracy:.8f} "
+        f"final_validation_accuracy={result.final_validation_accuracy:.8f} "
+        f"stable={protocol.is_stable(result)} "
+        "endpoint_accuracy=None endpoint_seconds=None"
+    )
+    return lines
 
 
 def test_preregistered_candidate_spaces_are_solver_specific():
@@ -186,6 +212,60 @@ def test_tuning_runs_screen_and_confirmation_without_endpoint_access(monkeypatch
     assert len(calls) == 6
     assert all(evaluate_endpoint is False for _, _, evaluate_endpoint in calls)
     assert {seed for _, seed, _ in calls} == {11, 12}
+
+
+def test_tuning_resume_reuses_only_complete_contiguous_prefix(
+    monkeypatch, tmp_path, capsys
+):
+    args = _args()
+    candidates = protocol.make_candidate_grid(
+        "ePC", (2,), (0.0001,), (3, 5), 0.1
+    ) + protocol.make_candidate_grid("sPC", (120,), (0.001,), (3, 5), 0.1)
+    completed = _result(candidates[0], args.screen_seed, (0.31,) * args.epochs)
+    partial = _result(candidates[1], args.screen_seed, (0.32,) * args.epochs)
+    lines = _result_log(completed)
+    lines.append(_result_log(partial)[0])
+    resume_log = tmp_path / "interrupted.log"
+    resume_log.write_text("\n".join(lines) + "\n")
+    args.resume_log = resume_log
+    calls = []
+
+    def fake_run(recipe, seed, run_args, evaluate_endpoint):
+        calls.append((recipe, seed, evaluate_endpoint))
+        base = 0.31 + 0.01 * recipe.decay_epochs
+        return _result(recipe, seed, (base,) * run_args.epochs)
+
+    monkeypatch.setattr(protocol, "_run_recipe", fake_run)
+
+    protocol.run_tuning(args)
+
+    assert len(calls) == 5
+    assert calls[0][:2] == (candidates[1], args.screen_seed)
+    assert all(not evaluate_endpoint for _, _, evaluate_endpoint in calls)
+    output = capsys.readouterr().out
+    assert "complete=1" in output
+    assert f"discarded_incomplete={candidates[1].name}" in output
+    assert output.count(f"RUN_RESULT name={candidates[0].name}") == 1
+
+
+def test_resume_rejects_nonprefix_and_endpoint_bearing_results(tmp_path):
+    candidates = protocol.make_candidate_grid("ePC", (2,), (0.0001,), (3, 5), 0.1)
+    nonprefix = _result(candidates[1], 11, (0.31,) * 8)
+    nonprefix_log = tmp_path / "nonprefix.log"
+    nonprefix_log.write_text("\n".join(_result_log(nonprefix)) + "\n")
+
+    with pytest.raises(ValueError, match="expected contiguous candidate"):
+        protocol.load_screen_prefix(nonprefix_log, candidates, 11, 8, 3, 0.01)
+
+    endpoint_lines = _result_log(_result(candidates[0], 11, (0.31,) * 8))
+    endpoint_lines[-1] = endpoint_lines[-1].replace(
+        "endpoint_accuracy=None", "endpoint_accuracy=0.31"
+    )
+    endpoint_log = tmp_path / "endpoint.log"
+    endpoint_log.write_text("\n".join(endpoint_lines) + "\n")
+
+    with pytest.raises(ValueError, match="endpoint-bearing result is forbidden"):
+        protocol.load_screen_prefix(endpoint_log, candidates, 11, 8, 3, 0.01)
 
 
 def test_final_runs_paired_locked_recipes_with_endpoint_enabled(monkeypatch):
