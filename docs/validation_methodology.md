@@ -56,12 +56,11 @@ endpoint evaluation time is excluded from training time and recorded
 separately when material. Runs use the same hardware without a competing
 compute workload.
 
-On an active-display machine, ordinary graphics contexts are recorded as host
-conditions but are not classified as competing compute unless they consume
-measurable accelerator execution during a timed run. A second CUDA or mixed
-compute/graphics process with nonzero accelerator utilization is competing
-compute. The affected in-progress run is excluded in full; timing samples are
-never trimmed after the fact.
+On an active-display machine, ordinary graphics-only contexts and compositor
+activity are allowed and recorded as host conditions. Any additional CUDA
+compute or mixed compute/graphics process with nonzero accelerator utilization
+is competing compute. The affected in-progress run is excluded in full;
+timing samples are never trimmed after the fact.
 
 ## 4. Data isolation and selection
 
