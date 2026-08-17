@@ -2,9 +2,12 @@
 
 ## Status
 
-Preregistered; validation-only tuning recovery pending. This protocol follows
-[the repository validation methodology](../../validation_methodology.md) and
-replaces the invalidated 2026-08-14 recipe-transfer study.
+Completed on 2026-08-17 with a valid negative result under this protocol. See
+[the Runpod execution report](2026-08-17-independent-optimization-runpod.md)
+and its [raw evidence bundle](2026-08-16-runpod-evidence/README.md). This
+protocol follows [the repository validation
+methodology](../../validation_methodology.md) and replaces the invalidated
+2026-08-14 recipe-transfer study.
 
 ## Question
 
@@ -148,10 +151,11 @@ influence a recipe or target, the final command differs from the printed lock,
 or non-finite values occur. Failure to find a stable recipe is a valid negative
 result and blocks endpoint evaluation rather than changing the protocol.
 
-## Execution recovery amendment — 2026-08-15
+## Local execution recovery amendment — 2026-08-15
 
 This amendment was recorded before resuming tuning and before any endpoint
-loader was constructed.
+loader was constructed. It is retained as part of the audit trail, but it was
+not exercised by the reported Runpod execution.
 
 - The first tuning process was stopped after an unrelated CUDA training job
   began using the accelerator. The entire process log is excluded, including
@@ -179,6 +183,29 @@ Resume command:
   --resume-log /tmp/fabricpc-epc-independent-20260815-Qa88Va/tune-clean-prefix.log
 ```
 
+## Runpod execution note — 2026-08-16
+
+The reported execution moved to a dedicated Runpod RTX 4090. Because measured
+training time participates in shortlist tie-breaking and in the performance
+claim, the 19-candidate local prefix was not mixed with timing from different
+hardware. Tuning restarted from candidate 1 without `--resume-log` at source
+commit `403aeaa89d4095c444820e652f37d808e10e79f2`.
+
+The fresh tuning log contains the full candidate order and no endpoint values.
+After tuning printed both locked recipes and the target, final mode was invoked
+once with that exact lock on the same Pod and environment. The held-out split
+was first constructed during that invocation and is now consumed by this valid
+protocol.
+
 ## Results
 
-Pending execution of the committed protocol and runner.
+The combined gate failed. Mean endpoint accuracy was `0.30066667` for ePC and
+`0.39853333` for sPC, a paired ePC-minus-sPC difference of `-0.09786667`
+against the preregistered `0.01` noninferiority margin. ePC reached the locked
+`0.3904` validation target in 0/3 final runs, while sPC reached it in 2/3.
+
+These results establish failure within the declared eight-epoch horizon and
+candidate spaces. They do not establish that ePC cannot converge under a
+longer or broader independently tuned protocol. Full per-seed results,
+integrity checks, interpretation, commands, and evidence links are in [the
+execution report](2026-08-17-independent-optimization-runpod.md).

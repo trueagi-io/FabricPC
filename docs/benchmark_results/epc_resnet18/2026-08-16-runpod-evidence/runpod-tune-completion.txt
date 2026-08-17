@@ -1,0 +1,6 @@
+parent_run_id=rp_i86i6rvo58eyq9_tune_20260816
+status=completed
+finished_at_utc=2026-08-17T01:23:00Z
+results_summary=Completed 24 screen and 4 confirmation runs; locked ePC s10 lr0.0003 decay5, sPC s120 lr0.003 decay3, target 0.3904; all endpoint-free
+lessons_learned=Independent tuning selected materially different solver dynamics; sPC reached the locked target on both tuning seeds while ePC did not reach it within the eight-epoch observation horizon
+log_sha256=38884e84f15dd4b0539622b589a77cd09aaddfc59b22efcc1ad5a6b9c227381e

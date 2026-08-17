@@ -1,0 +1,20 @@
+{
+  "containerDiskInGb": 20,
+  "costPerHr": 0.74,
+  "createdAt": "2026-08-16 19:29:53.174 +0000 UTC",
+  "desiredStatus": "RUNNING",
+  "gpuCount": 1,
+  "id": "i86i6rvo58eyq9",
+  "imageName": "runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404",
+  "lastStatusChange": "Rented by User: Sun Aug 16 2026 19:29:53 GMT+0000 (Coordinated Universal Time)",
+  "memoryInGb": 61,
+  "name": "fabricpc-epc-validation-20260816",
+  "ports": [
+    "22/tcp"
+  ],
+  "runtimeStatus": "running",
+  "uptimeSeconds": 27896,
+  "vcpuCount": 16,
+  "volumeInGb": 0,
+  "volumeMountPath": "/workspace"
+}

@@ -1,0 +1,71 @@
+PHASE final
+LOCKED epc_steps=10 epc_lr=0.0003 epc_decay_epochs=5 spc_steps=120 spc_lr=0.003 spc_decay_epochs=3 target_accuracy=0.39040000
+SPLITS train=train[:80%] validation=train[80%:90%] holdout=train[90%:]
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1786929786.981004  132440 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+WARNING: All log messages before absl::InitializeLog() is called are written to STDERR
+I0000 00:00:1786929787.793292  132440 port.cc:153] oneDNN custom operations are on. You may see slightly different numerical results due to floating-point round-off errors from different computation orders. To turn them off, set the environment variable `TF_ENABLE_ONEDNN_OPTS=0`.
+CURVE name=ePC-s10-lr0.0003-d5 seed=0 epoch=1 train_seconds=54.169191 validation_accuracy=0.25240000 best_accuracy=0.25240000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=0 epoch=2 train_seconds=76.088938 validation_accuracy=0.29800000 best_accuracy=0.29800000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=0 epoch=3 train_seconds=98.139893 validation_accuracy=0.31440000 best_accuracy=0.31440000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=0 epoch=4 train_seconds=120.198025 validation_accuracy=0.31760000 best_accuracy=0.31760000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=0 epoch=5 train_seconds=142.262829 validation_accuracy=0.31680000 best_accuracy=0.31760000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=0 epoch=6 train_seconds=164.278055 validation_accuracy=0.31920000 best_accuracy=0.31920000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=0 epoch=7 train_seconds=186.308894 validation_accuracy=0.31880000 best_accuracy=0.31920000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=0 epoch=8 train_seconds=208.357217 validation_accuracy=0.31700000 best_accuracy=0.31920000 validation_energy=0
+RUN_RESULT name=ePC-s10-lr0.0003-d5 seed=0 epochs=8 total_train_seconds=208.429957 best_epoch=6 time_to_best=164.278055 best_validation_accuracy=0.31920000 final_validation_accuracy=0.31700000 stable=True endpoint_accuracy=0.3142 endpoint_seconds=8.969294998794794
+FINAL_RESULT solver=ePC name=ePC-s10-lr0.0003-d5 seed=0 best_epoch=6 time_to_best=164.278055 best_validation_accuracy=0.31920000 time_to_target=None endpoint_accuracy=0.3142
+CURVE name=sPC-s120-lr0.003-d3 seed=0 epoch=1 train_seconds=229.395210 validation_accuracy=0.28400000 best_accuracy=0.28400000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=0 epoch=2 train_seconds=428.385784 validation_accuracy=0.36380000 best_accuracy=0.36380000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=0 epoch=3 train_seconds=627.300499 validation_accuracy=0.41040000 best_accuracy=0.41040000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=0 epoch=4 train_seconds=826.281533 validation_accuracy=0.40880000 best_accuracy=0.41040000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=0 epoch=5 train_seconds=1025.242648 validation_accuracy=0.40700000 best_accuracy=0.41040000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=0 epoch=6 train_seconds=1224.257691 validation_accuracy=0.40780000 best_accuracy=0.41040000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=0 epoch=7 train_seconds=1423.104774 validation_accuracy=0.40800000 best_accuracy=0.41040000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=0 epoch=8 train_seconds=1622.220449 validation_accuracy=0.41040000 best_accuracy=0.41040000 validation_energy=0
+RUN_RESULT name=sPC-s120-lr0.003-d3 seed=0 epochs=8 total_train_seconds=1622.320944 best_epoch=3 time_to_best=627.300499 best_validation_accuracy=0.41040000 final_validation_accuracy=0.41040000 stable=True endpoint_accuracy=0.4168 endpoint_seconds=27.470792178064585
+FINAL_RESULT solver=sPC name=sPC-s120-lr0.003-d3 seed=0 best_epoch=3 time_to_best=627.300499 best_validation_accuracy=0.41040000 time_to_target=627.3004986867309 endpoint_accuracy=0.4168
+CURVE name=ePC-s10-lr0.0003-d5 seed=1000 epoch=1 train_seconds=53.386329 validation_accuracy=0.24020000 best_accuracy=0.24020000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=1000 epoch=2 train_seconds=75.559695 validation_accuracy=0.27600000 best_accuracy=0.27600000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=1000 epoch=3 train_seconds=97.741323 validation_accuracy=0.29760000 best_accuracy=0.29760000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=1000 epoch=4 train_seconds=119.942938 validation_accuracy=0.30580000 best_accuracy=0.30580000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=1000 epoch=5 train_seconds=142.170034 validation_accuracy=0.30600000 best_accuracy=0.30600000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=1000 epoch=6 train_seconds=164.403800 validation_accuracy=0.30660000 best_accuracy=0.30660000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=1000 epoch=7 train_seconds=186.609730 validation_accuracy=0.30800000 best_accuracy=0.30800000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=1000 epoch=8 train_seconds=208.824717 validation_accuracy=0.30700000 best_accuracy=0.30800000 validation_energy=0
+RUN_RESULT name=ePC-s10-lr0.0003-d5 seed=1000 epochs=8 total_train_seconds=208.926530 best_epoch=7 time_to_best=186.609730 best_validation_accuracy=0.30800000 final_validation_accuracy=0.30700000 stable=True endpoint_accuracy=0.3038 endpoint_seconds=9.29905603080988
+FINAL_RESULT solver=ePC name=ePC-s10-lr0.0003-d5 seed=1000 best_epoch=7 time_to_best=186.609730 best_validation_accuracy=0.30800000 time_to_target=None endpoint_accuracy=0.3038
+CURVE name=sPC-s120-lr0.003-d3 seed=1000 epoch=1 train_seconds=229.373428 validation_accuracy=0.32300000 best_accuracy=0.32300000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=1000 epoch=2 train_seconds=428.484185 validation_accuracy=0.35980000 best_accuracy=0.35980000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=1000 epoch=3 train_seconds=627.555915 validation_accuracy=0.40100000 best_accuracy=0.40100000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=1000 epoch=4 train_seconds=826.690377 validation_accuracy=0.40200000 best_accuracy=0.40200000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=1000 epoch=5 train_seconds=1025.760186 validation_accuracy=0.39940000 best_accuracy=0.40200000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=1000 epoch=6 train_seconds=1224.930722 validation_accuracy=0.39900000 best_accuracy=0.40200000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=1000 epoch=7 train_seconds=1424.069765 validation_accuracy=0.40220000 best_accuracy=0.40220000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=1000 epoch=8 train_seconds=1623.177923 validation_accuracy=0.40320000 best_accuracy=0.40320000 validation_energy=0
+RUN_RESULT name=sPC-s120-lr0.003-d3 seed=1000 epochs=8 total_train_seconds=1623.275548 best_epoch=8 time_to_best=1623.177923 best_validation_accuracy=0.40320000 final_validation_accuracy=0.40320000 stable=True endpoint_accuracy=0.4006 endpoint_seconds=27.226441588252783
+FINAL_RESULT solver=sPC name=sPC-s120-lr0.003-d3 seed=1000 best_epoch=8 time_to_best=1623.177923 best_validation_accuracy=0.40320000 time_to_target=627.5559149682522 endpoint_accuracy=0.4006
+CURVE name=ePC-s10-lr0.0003-d5 seed=2000 epoch=1 train_seconds=53.155681 validation_accuracy=0.21200000 best_accuracy=0.21200000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=2000 epoch=2 train_seconds=75.329150 validation_accuracy=0.25940000 best_accuracy=0.25940000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=2000 epoch=3 train_seconds=97.537129 validation_accuracy=0.28140000 best_accuracy=0.28140000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=2000 epoch=4 train_seconds=119.730812 validation_accuracy=0.28400000 best_accuracy=0.28400000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=2000 epoch=5 train_seconds=141.937682 validation_accuracy=0.28640000 best_accuracy=0.28640000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=2000 epoch=6 train_seconds=164.138183 validation_accuracy=0.28760000 best_accuracy=0.28760000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=2000 epoch=7 train_seconds=186.332370 validation_accuracy=0.28980000 best_accuracy=0.28980000 validation_energy=0
+CURVE name=ePC-s10-lr0.0003-d5 seed=2000 epoch=8 train_seconds=208.528076 validation_accuracy=0.28680000 best_accuracy=0.28980000 validation_energy=0
+RUN_RESULT name=ePC-s10-lr0.0003-d5 seed=2000 epochs=8 total_train_seconds=208.624766 best_epoch=7 time_to_best=186.332370 best_validation_accuracy=0.28980000 final_validation_accuracy=0.28680000 stable=True endpoint_accuracy=0.284 endpoint_seconds=9.410713441669941
+FINAL_RESULT solver=ePC name=ePC-s10-lr0.0003-d5 seed=2000 best_epoch=7 time_to_best=186.332370 best_validation_accuracy=0.28980000 time_to_target=None endpoint_accuracy=0.284
+CURVE name=sPC-s120-lr0.003-d3 seed=2000 epoch=1 train_seconds=229.689517 validation_accuracy=0.32260000 best_accuracy=0.32260000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=2000 epoch=2 train_seconds=428.708449 validation_accuracy=0.32440000 best_accuracy=0.32440000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=2000 epoch=3 train_seconds=627.750530 validation_accuracy=0.38560000 best_accuracy=0.38560000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=2000 epoch=4 train_seconds=826.921604 validation_accuracy=0.37940000 best_accuracy=0.38560000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=2000 epoch=5 train_seconds=1025.896682 validation_accuracy=0.37580000 best_accuracy=0.38560000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=2000 epoch=6 train_seconds=1224.849993 validation_accuracy=0.38100000 best_accuracy=0.38560000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=2000 epoch=7 train_seconds=1424.058179 validation_accuracy=0.37920000 best_accuracy=0.38560000 validation_energy=0
+CURVE name=sPC-s120-lr0.003-d3 seed=2000 epoch=8 train_seconds=1622.888942 validation_accuracy=0.37880000 best_accuracy=0.38560000 validation_energy=0
+RUN_RESULT name=sPC-s120-lr0.003-d3 seed=2000 epochs=8 total_train_seconds=1622.991810 best_epoch=3 time_to_best=627.750530 best_validation_accuracy=0.38560000 final_validation_accuracy=0.37880000 stable=True endpoint_accuracy=0.3782 endpoint_seconds=27.36894181370735
+FINAL_RESULT solver=sPC name=sPC-s120-lr0.003-d3 seed=2000 best_epoch=3 time_to_best=627.750530 best_validation_accuracy=0.38560000 time_to_target=None endpoint_accuracy=0.3782
+FINAL_SUMMARY solver=ePC n=3 mean_best_validation_accuracy=0.30566667 se_best_validation_accuracy=0.00856686 mean_endpoint_accuracy=0.30066667 se_endpoint_accuracy=0.00885764 mean_time_to_best=179.073385 se_time_to_best=7.398098
+FINAL_SUMMARY solver=sPC n=3 mean_best_validation_accuracy=0.39973333 se_best_validation_accuracy=0.00736599 mean_endpoint_accuracy=0.39853333 se_endpoint_accuracy=0.01119067 mean_time_to_best=959.409651 se_time_to_best=331.884162
+PAIRED_ENDPOINT mean_difference=-0.09786667 t=-39.41738643 p=0.00064299 cohens_d=-22.75763867 margin=0.01000000 noninferior=False
+PERFORMANCE_GATE target=0.39040000 all_reached=False faster=False time_ratio=None noninferior=False overall_pass=False

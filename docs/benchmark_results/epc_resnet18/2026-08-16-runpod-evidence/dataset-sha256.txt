@@ -1,0 +1,3 @@
+f9579f83bdb1ac99c72a6c7147cccf1d609a1b72cb436be0c2be04824f0107f1  /root/tfds-ready/cifar10/3.0.2/dataset_info.json
+58dc480f850dd5f3638b55dcd6901eaa3d53a4279231c3d884c8815d4365aee1  /root/tfds-ready/cifar10/3.0.2/cifar10-train.tfrecord-00000-of-00001
+dd8d67a3311637ca9c5855cdca10651546e52539e3507c29bb9271f382b1fe0f  /root/tfds-ready/cifar10/3.0.2/cifar10-test.tfrecord-00000-of-00001

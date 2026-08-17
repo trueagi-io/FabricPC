@@ -1,0 +1,12 @@
+run_id=rp_i86i6rvo58eyq9_tune_20260816
+runpod_resource_type=pod
+runpod_resource_id=i86i6rvo58eyq9
+repository=FabricPC
+commit=403aeaa89d4095c444820e652f37d808e10e79f2
+expense_category=research_and_development
+experiment_description=Independent solver-specific ePC and sPC tuning on CIFAR-10 without holdout access
+command=/opt/fabricpc-venv/bin/python examples/epc_resnet18_optimized.py --mode tune
+status=running
+results_summary=pending
+lessons_learned=pending
+started_at_utc=2026-08-16T19:59:51Z

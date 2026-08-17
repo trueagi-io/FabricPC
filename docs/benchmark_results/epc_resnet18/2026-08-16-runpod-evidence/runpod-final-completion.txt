@@ -1,0 +1,9 @@
+run_id=rp_i86i6rvo58eyq9_final_20260817
+status=completed
+finished_at_utc=2026-08-17T03:13:04Z
+result_count=6
+endpoint_evaluation_count=6
+results_summary=ePC mean endpoint accuracy 0.30066667; sPC 0.39853333; paired difference -0.09786667; noninferior false; target all_reached false; overall pass false
+lessons_learned=Independent eight-epoch tuning did not close the capability gap; ePC never reached the sPC-derived target and was 9.79 percentage points lower on the valid held-out endpoint; lower ePC training time is not a speed advantage at comparable quality; any extension requires a newly preregistered protocol and an untouched endpoint
+log_sha256=018764160c7da56a39e9dd16835b286be7eeba9f07d9fb0e80b57281a1545089
+endpoint_status=consumed_by_valid_protocol

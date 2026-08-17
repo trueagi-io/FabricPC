@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "pod": {
+    "id": "i86i6rvo58eyq9",
+    "deleted": true
+  },
+  "network_volume": {
+    "id": "w5mfqaowy0",
+    "deleted": true
+  },
+  "verification": {
+    "pod_list": [],
+    "network_volume_list": [],
+    "verified_at_utc": "2026-08-17T03:17:08Z"
+  }
+}

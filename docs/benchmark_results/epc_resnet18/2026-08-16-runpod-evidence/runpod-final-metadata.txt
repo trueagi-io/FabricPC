@@ -1,0 +1,13 @@
+run_id=rp_i86i6rvo58eyq9_final_20260817
+parent_run_id=rp_i86i6rvo58eyq9_tune_20260816
+runpod_resource_type=pod
+runpod_resource_id=i86i6rvo58eyq9
+repository=FabricPC
+commit=403aeaa89d4095c444820e652f37d808e10e79f2
+expense_category=research_and_development
+experiment_description=One-shot held-out evaluation of locked independently tuned ePC and sPC recipes
+command=/opt/fabricpc-venv/bin/python examples/epc_resnet18_optimized.py --mode final --epc_steps 10 --epc_lr 0.0003 --epc_decay_epochs 5 --spc_steps 120 --spc_lr 0.003 --spc_decay_epochs 3 --target_accuracy 0.39040000
+status=running
+results_summary=pending
+lessons_learned=pending
+started_at_utc=2026-08-17T01:23:00Z
