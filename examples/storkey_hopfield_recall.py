@@ -39,7 +39,7 @@ from fabricpc.graph_initialization.state_initializer import initialize_graph_sta
 from fabricpc.core.inference import InferenceSGD, run_inference
 from fabricpc.core.initializers import NormalInitializer
 from fabricpc.training import train_pcn
-from fabricpc.jax_config import setup_jax
+from fabricpc import setup_jax
 
 setup_jax(platform="cpu")
 jax.config.update("jax_default_prng_impl", "threefry2x32")

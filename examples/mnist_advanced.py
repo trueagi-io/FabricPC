@@ -35,7 +35,7 @@ from fabricpc.training.natural_gradients import (
     scale_by_natural_gradient_layerwise,
 )
 from fabricpc.utils.data.dataloader import MnistLoader
-from fabricpc.jax_config import setup_jax
+from fabricpc import setup_jax
 
 setup_jax()
 jax.config.update("jax_default_prng_impl", "threefry2x32")

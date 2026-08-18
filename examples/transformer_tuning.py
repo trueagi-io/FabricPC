@@ -19,7 +19,7 @@ from fabricpc.models import create_deep_transformer
 from fabricpc.tuning.bayesian_tuner import BayesianTuner
 from fabricpc.utils.data import CharDataLoader, BpeDataLoader
 from optuna.storages import JournalStorage, JournalFileStorage
-from fabricpc.jax_config import setup_jax
+from fabricpc import setup_jax
 
 setup_jax()
 

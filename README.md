@@ -54,7 +54,7 @@ from fabricpc.core.topology import Edge
 from fabricpc.graph_assembly import TaskMap, graph
 from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.inference import InferenceSGD
-from fabricpc.jax_config import setup_jax
+from fabricpc import setup_jax
 
 setup_jax()
 

@@ -64,6 +64,32 @@ If XLA compilation fails with Triton-related errors:
 export FABRICPC_DISABLE_TRITON_GEMM=1
 ```
 
+**`Unknown flag in XLA_FLAGS`**
+
+The process dies at the first JAX computation with no Python traceback:
+```
+F0000 00:00:00.000000 parse_flags_from_env.cc:234] Unknown flag in XLA_FLAGS: --xla_gpu_...
+```
+XLA aborts rather than raising when it does not recognize a flag. `setup_jax` writes
+`--xla_gpu_deterministic_ops` and `--xla_gpu_enable_triton_gemm`, which jaxlib accepts
+but does not list in its stable flag set (`XLA_FLAGS=--help`), so a jaxlib release that
+drops either name produces this abort. Pin jax to the last version that accepts the
+flag, or preset a value yourself — `setup_jax` leaves any flag already named in
+`XLA_FLAGS` untouched, so exporting the flag with your own value stops it from writing
+one, and dropping the flag entirely is not possible without a jax that recognizes it:
+
+```bash
+pip install "jax==<last working version>"
+```
+
+**`setup_jax()` had no effect**
+
+`setup_jax` must run before the first JAX computation or device query; afterwards the
+backend exists and every setting is discarded. It raises a `RuntimeWarning` in that
+case ("setup_jax() ran after the JAX backend was initialized"). Move the call above the
+first `jax.devices()`, `jnp` operation, or `initialize_params` in your script. Import
+order does not matter — only computation order.
+
 **Python version**
 
 FabricPC supports Python 3.11–3.13. Only the optional Aim experiment tracker (in `[viz]`/`[all]`) is limited to Python ≤3.12; on Python 3.13 it is skipped automatically and the rest installs normally.
@@ -101,7 +127,7 @@ This is expected — JAX JIT-compiles the training step on first invocation. Sub
 
 Set before the first JAX computation (import order does not matter):
 ```python
-from fabricpc.jax_config import setup_jax
+from fabricpc import setup_jax
 setup_jax()
 ```
 

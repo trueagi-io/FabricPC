@@ -10,7 +10,7 @@ FabricPC is installable today only by cloning the repo. Publishing to pypi.org m
 2. **First published version:** 0.4.0, cut from `main` after the pending muPC output-scaling branch merges.
 3. **`jax_setup.py`:** Option A (§2) — move to `fabricpc/jax_config.py`, keep the eager `__init__`, rename to `setup_jax`, and re-contract the helper to "call before the first JAX computation" using JAX's post-import configuration API.
 4. **Metadata (§3):** `authors = [{name = "SingularityNET Foundation", email = "info@singularitynet.io"}]`; the `maintainers` metadata field stays empty; the PyPI accounts `MatthewBehrend` and `SingularityNET` get collaborator roles on the project, set on pypi.org after the first upload.
-5. **Dependencies:** `flax`, `chex`, `jaxtyping`, and `orbax-checkpoint` stay in core `dependencies`. `jaxlib` is removed, `optuna` moves to the `[experiments]` extra, `jax` gets floor `>=0.10`, and `[all]` no longer pulls in `[dev]`.
+5. **Dependencies:** `flax`, `chex`, `jaxtyping`, and `orbax-checkpoint` stay in core `dependencies`. `jaxlib` is removed, `optuna` moves to the `[experiments]` extra, `jax` gets floor `>=0.7.0`, and `[all]` no longer pulls in `[dev]`.
 6. **CI:** add a minimal pytest workflow alongside the publish workflow.
 
 ---
@@ -34,7 +34,7 @@ FabricPC is installable today only by cloning the repo. Publishing to pypi.org m
 | 3 | No `[project.urls]` | PyPI page would have no links to source, docs, or changelog. | Add Homepage/Repository (`https://github.com/trueagi-io/FabricPC`), Documentation (`.../blob/main/docs/user_guides/00_index.md`), Changelog (`.../blob/main/CHANGELOG.md`), Issues. |
 | 4 | `dependencies` includes `jaxlib` | Redundant — `jax` pins its own matched `jaxlib`. A bare unpinned `jaxlib` can also fight the coupled wheel set that `jax[cuda12]`/`jax[cuda13]` manage. | Remove `jaxlib`. |
 | 5 | `optuna` in core `dependencies` | Imported only by `fabricpc/tuning/bayesian_tuner.py`; `fabricpc/__init__.py` does not import `tuning`. Core users pay optuna's install cost for a subpackage they never touch. | Move to `[experiments]` (the tuning guide already lives in `15_api_experiments.md`). Document that `fabricpc.tuning` requires the extra. |
-| 6 | `jax` has no version floor | A pip resolver could select an ancient jax. Tested version is 0.10.2. | `jax>=0.10`. |
+| 6 | `jax` has no version floor | Nothing stops a resolver from selecting a years-old jax, and `requires-python` does not stand in for a floor — it bounds jax only from above. jax 0.4.2 (2023-01) declares `>=3.8`, so it installs on Python 3.11 unopposed; the first jax to declare `>=3.11` is 0.7.0. | `jax>=0.7.0`, the oldest release whose own Python floor matches this project's, tested by a `test.yml` leg (§4). |
 | 7 | `[tool.setuptools] py-modules = ["jax_setup"]` | Ships a generically named top-level module into every user's site-packages (§2). | Delete the table; the module moves inside the package and `packages.find` picks it up. |
 | 8 | `all = ["fabricpc[dev,tfds,experiments,viz]"]` | `pip install "fabricpc[all]"` would give end users black, mypy, ruff, and pre-commit. | `all = ["fabricpc[tfds,experiments,viz]"]`; contributor install becomes `pip install -e ".[all,dev]"`. README and `01_installation.md` updated accordingly. |
 | 9 | `authors = [{name = "FabricPC Authors"}]`, no email | Generic, inconsistent with LICENSE (Matthew Behrend) and README (SingularityNET). | Per §3. |
@@ -53,7 +53,7 @@ FabricPC is installable today only by cloning the repo. Publishing to pypi.org m
 - `setup_jax`'s parameter is named `platform`, not `jax_platforms`; the three callsites passing it by keyword are migrated with the rest.
 - The module is `fabricpc/jax_config.py`, not `fabricpc/jax_setup.py`: `setup_jax` is the verb, the module is the noun, and "setup" no longer names a temporal constraint that the re-contracted helper does not have. Test file follows: `tests/test_jax_config.py`.
 - `import jax` sits at module scope, not inside `setup_jax`. A function-local import defers nothing here: `from fabricpc.jax_config import setup_jax` executes `fabricpc/__init__`, whose eager submodule imports pull in jax before the helper can run. Measured with `python -X importtime`: importing the helper costs 477 ms, of which jax is 380 ms, and `jax` is in `sys.modules` on return. The deferred import only hid a hard core dependency from the module header.
-- `setup_jax` guards each XLA flag by name (`"--xla_gpu_autotune_level" not in _xla_flags`), not by `name=value`: a value already present in `XLA_FLAGS` — from the caller's shell or a previous `setup_jax` call — wins, and repeated calls leave the string unchanged. The inherited assembly appended the autotune flag unconditionally, so every call grew `XLA_FLAGS` and the appended `=1` overrode a user-set level; the `name=value` guards on the other two flags missed user-set opposite values the same way. `tests/test_jax_config.py` pins both behaviors.
+- `setup_jax` guards each XLA flag by name, not by `name=value`: a value already present in `XLA_FLAGS` — from the caller's shell or a previous `setup_jax` call — wins, and repeated calls leave the string unchanged. The inherited assembly appended the autotune flag unconditionally, so every call grew `XLA_FLAGS` and the appended `=1` overrode a user-set level; the `name=value` guards on the other two flags missed user-set opposite values the same way. The comparison is against whole names — `XLA_FLAGS` is split on whitespace and each token truncated at `=` — so a longer flag sharing a prefix (`--xla_gpu_foo_bar` for `--xla_gpu_foo`) does not read as the shorter one being present. `tests/test_jax_config.py` pins all three behaviors.
 - `TF_CPP_MIN_LOG_LEVEL` is a second exception to the consumed-at-backend-initialization rule, documented in the module docstring: the native runtime caches the level at its first emitted log message, so the post-import helper suppresses messages from backend initialization onward but not any emitted during `import jax`.
 - `publish-testpypi` sets `skip-existing: true`: TestPyPI enforces the same (name, version, filename) reservation as PyPI, so a second rehearsal at an already-uploaded version would otherwise fail at the upload step. With the flag, the rerun verifies `build` + `smoke` and uploads nothing. The production `publish` job never sets it.
 - `test.yml` runs pushes only on `main` — PR commits otherwise run twice, once per event — and cancels superseded runs through a per-ref `concurrency` group.
@@ -75,7 +75,11 @@ The concern was that `jax_setup.py` "only works properly at the project level fo
 | B | `import jax`, then `jax.config.update("jax_platforms", "cpu")`, then `jax.devices()` | Platform applied. This is JAX's documented post-import platform API. |
 | C | `import jax`, then set `XLA_FLAGS=--xla_force_host_platform_device_count=4`, then `jax.devices()` | 4 CPU devices — `XLA_FLAGS` is consumed at backend initialization, not at import. `XLA_PYTHON_CLIENT_PREALLOCATE` is read in the same phase (GPU client creation). |
 
-So only the `JAX_PLATFORMS` *environment-variable* path requires pre-import ordering, and JAX provides `jax.config.update("jax_platforms", ...)` precisely so platform selection works post-import. Everything else the helper sets is read at backend initialization, which JAX defers until the first computation or device query. (Caveat: this machine's GPU driver is currently unloadable, so Test B could not demonstrate CPU-vs-GPU selection; Tests A and C are the discriminating results, and the config API is the documented mechanism.)
+So only the `JAX_PLATFORMS` *environment-variable* path requires pre-import ordering, and JAX provides `jax.config.update("jax_platforms", ...)` precisely so platform selection works post-import. Everything else the helper sets is read at backend initialization, which JAX defers until the first computation or device query.
+
+Test B has since been re-run on a host with a working CUDA driver: `setup_jax("cpu")` after `import jax` yields CPU devices where the default would be `CudaDevice(id=0)`, so the post-import platform API does select between real backends, not only between a backend and itself. `tests/test_jax_config.py::test_platform_selection_works_after_jax_is_imported` holds this.
+
+Backend initialization is the deadline, and JAX enforces it silently — running a computation first and then calling `setup_jax("cpu")` leaves the CUDA device in place and reports nothing. The old name, `set_jax_flags_before_importing_jax`, carried its precondition; `setup_jax` does not, so the helper checks `jax._src.xla_bridge.backends_are_initialized()` and raises a `RuntimeWarning` naming what was discarded. That symbol is private, so it is imported inside `try`/`except ImportError`: if a future jax moves it, the warning is lost and `setup_jax` keeps working.
 
 ### How peer libraries structure their package import
 
@@ -103,9 +107,11 @@ The helper's "before importing jax" contract was always stricter than JAX requir
 def setup_jax(platform: str | None = None) -> None:
     """Configure JAX for FabricPC. Call before the first JAX computation
     (backend initialization). Import order no longer matters."""
-    import jax  # the settings below are consumed at backend init, not at import
+    if backends_are_initialized():
+        warnings.warn("setup_jax() ran after the JAX backend was initialized ...",
+                      RuntimeWarning, stacklevel=2)
 
-    if platform is not None and not os.environ.get("JAX_PLATFORMS"):
+    if platform is not None and "JAX_PLATFORMS" not in os.environ:
         os.environ["JAX_PLATFORMS"] = platform          # visible to worker subprocesses
         jax.config.update("jax_platforms", platform)    # effective in this process (Test B)
     os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
@@ -113,11 +119,13 @@ def setup_jax(platform: str | None = None) -> None:
     # ... XLA_FLAGS assembly guarded by flag name (Test C: consumed at backend init) ...
 ```
 
-The `not os.environ.get("JAX_PLATFORMS")` guard preserves the current setdefault semantics: a platform set in the user's shell wins over the function argument, exactly as today. The env write plus `config.update` pair is one deterministic path — the env var covers spawned worker processes, the config call covers the already-imported current process.
+The `"JAX_PLATFORMS" not in os.environ` guard preserves the current setdefault semantics: a platform set in the user's shell wins over the function argument, exactly as today. The env write plus `config.update` pair is one deterministic path — the env var covers spawned worker processes, the config call covers the already-imported current process.
 
 - **Rename:** `set_jax_flags_before_importing_jax` → `setup_jax`. The old name states a constraint that no longer exists. All callers are migrated in the same change; no alias is kept.
+- **Public import path:** `setup_jax` is re-exported from `fabricpc/__init__.py`, so docs, examples, and users write `from fabricpc import setup_jax`. `fabricpc.jax_config` stays as the implementation module and keeps working; the eager `__init__` means the short path costs nothing extra.
+- **The relaxed contract needs a guard.** The old name carried its precondition; `setup_jax` does not, and JAX enforces the deadline silently — see §2's re-run of Test B. The helper checks `jax._src.xla_bridge.backends_are_initialized()` behind `try`/`except ImportError` and warns.
 - **Why:** matches the eager-`__init__` convention of every JAX-ecosystem peer; no top-level namespace pollution in site-packages; the contract is enforceable by a real test (call after `import jax`, assert the platform took effect); small diff — one function rewrite plus mechanical caller migration.
-- **Residual risk:** relies on `jax.config.update("jax_platforms", ...)` (public, documented) and on XLA flags being read at client creation (verified empirically; stable XLA behavior). Callers should still invoke it early — after any JAX computation it is too late, same as today.
+- **Residual risk:** relies on `jax.config.update("jax_platforms", ...)` (public, documented) and on XLA flags being read at client creation (verified empirically; stable XLA behavior).
 - **Clone workflow: unchanged.** `git clone` + `pip install -e ".[all]"` works as before; only the import line changes.
 - **Migration scope (all callers, one mechanical line each, no compatibility shim):** 15 files in `examples/`, 2 in `scripts/`, `README.md`, `docs/user_guides/02_quickstart.md`, `docs/user_guides/16_troubleshooting.md`, and `tests/test_doc_snippets.py` (also delete its `sys.path.insert(REPO_ROOT)` workaround at lines 51–52, which exists only to reach the root-level module). Breaking change documented in CHANGELOG with the one-line migration.
 
@@ -196,7 +204,7 @@ license = "MIT"                      # classifiers: remove "Private :: Do Not Up
 authors = [{name = "SingularityNET Foundation", email = "info@singularitynet.io"}]
 
 dependencies = [
-    "jax>=0.10",
+    "jax>=0.7.0",
     "optax>=0.1.7",
     "orbax-checkpoint>=0.4.0",
     "flax>=0.7.5",
@@ -222,30 +230,45 @@ all = ["fabricpc[tfds,experiments,viz]"]
 
 The `[tool.ruff.lint.per-file-ignores]` E402 ignore for `examples/` and `scripts/` is removed. With the post-import contract, those scripts place all imports first and call `setup_jax()` after the import block, so no import sits below a statement and E402 passes without exceptions.
 
+### Choosing the `jax` floor
+
+A floor asserts that every API the library calls exists and behaves as specified at that version and above; its value is turning a runtime `AttributeError` in a training loop into a resolver error at install time. Three candidate methods, and why the third wins:
+
+- **Oldest version whose API surface suffices.** The library's jax usage is deliberately conservative — `jax.Array`, `jax.random.PRNGKey/split/normal`, `jax.tree_util.tree_map`, `jax.value_and_grad`, `jax.jit`, `jax.vmap`, `jax.pmap`, `jax.lax.scan/fori_loop/top_k/pmean`, `jax.nn.one_hot/softmax/softplus`. Not `jax.tree.map` (0.4.25), not typed keys (0.4.16), not `shard_map`. This method yields a floor around 0.4.x, which is not a floor anyone should ship. It works for a leaf dependency used narrowly; it fails for a foundation dependency, where the risk is changed semantics rather than a missing symbol.
+- **SPEC 0's 24-month window.** Puts the floor at jax 0.4.32 (2024-09). Calibrated for numpy/scipy cadence, far too wide for a library that removes APIs most minors.
+- **Chosen — align with jax's own Python floor.** `jax>=0.7.0` (2025-07-22) is the oldest release declaring `requires-python >=3.11`, the same floor this project declares. Self-consistent, no invented number, about 13 months of supported releases.
+
+`requires-python` is not a substitute. It bounds jax only from above — jax 0.11.0 requires `>=3.12`, so a Python 3.11 user is automatically capped at 0.10.2 — while going backwards it excludes nothing: jax 0.4.2 declares `>=3.8` and resolves on Python 3.11.
+
+Verified, not asserted: with `jax==0.7.0` and `jaxlib==0.7.0` resolved alongside the current optax, flax, chex, and orbax (no backtracking needed), the suite runs 345 passed / 4 skipped — the same result as jax 0.10.1 in the same no-`[tfds]`/no-`[viz]` environment. `jax._src.xla_bridge.backends_are_initialized` exists at 0.7.0, so the deadline warning works there, and jaxlib 0.7.0's XLA accepts all three flags `setup_jax` writes. A `test.yml` leg pins this (§4).
+
 ### Step 2 — `jax_setup` relocation and re-contract (§2)
 
 - `git mv jax_setup.py fabricpc/jax_config.py`; rewrite the function as sketched in §2 (rename to `setup_jax`, platform via env-write + `jax.config.update`, remaining env vars unchanged).
-- Migrate the 21 caller files listed in §2 (`from jax_setup import set_jax_flags_before_importing_jax` → `from fabricpc.jax_config import setup_jax`); delete the `sys.path` workaround in `tests/test_doc_snippets.py:51-52`.
-- New test `tests/test_jax_config.py`, run in a subprocess: `import jax` first, then `setup_jax("cpu")`, then assert every device in `jax.devices()` has `platform == "cpu"` and that `XLA_FLAGS` contains the deterministic-ops and Triton-GEMM entries. This pins the post-import contract that Option A depends on. Two further cases pin the flag guards: values preset in `XLA_FLAGS` survive unchanged, and a second `setup_jax()` call leaves `XLA_FLAGS` identical.
+- Re-export `setup_jax` from `fabricpc/__init__.py` and add it to `__all__`.
+- Migrate the 21 caller files listed in §2 (`from jax_setup import set_jax_flags_before_importing_jax` → `from fabricpc import setup_jax`); delete the `sys.path` workaround in `tests/test_doc_snippets.py:51-52`.
+- New test `tests/test_jax_config.py`, run in a subprocess: `import jax` first, then `setup_jax("cpu")`, then assert every device in `jax.devices()` has `platform == "cpu"` and that `XLA_FLAGS` contains the deterministic-ops and Triton-GEMM entries. This pins the post-import contract that Option A depends on. Further cases pin the flag guards — values preset in `XLA_FLAGS` survive unchanged, a second `setup_jax()` call leaves `XLA_FLAGS` identical, and a longer flag sharing a prefix does not suppress the shorter one — and the deadline guard: a call placed after a computation warns and leaves `jax.devices()` unchanged, while the same call placed correctly is silent.
 
 ### Step 3 — README and installation docs
 
-- README: new user-facing install block (`pip install fabricpc`, `pip install "fabricpc[all]"`, `pip install "fabricpc[all,cuda12]"` / `cuda13`); contributor block keeps clone + `pip install -e ".[all,dev]"`; all relative links converted to absolute `https://github.com/trueagi-io/FabricPC/blob/main/...` URLs; code snippet updated to `from fabricpc.jax_config import setup_jax`. The README currently has no images; if any are added, they need absolute `raw.githubusercontent.com` URLs — PyPI does not render GitHub blob pages as images.
+- README: new user-facing install block (`pip install fabricpc`, `pip install "fabricpc[all]"`, `pip install "fabricpc[all,cuda12]"` / `cuda13`); contributor block keeps clone + `pip install -e ".[all,dev]"`; all relative links converted to absolute `https://github.com/trueagi-io/FabricPC/blob/main/...` URLs; code snippet updated to `from fabricpc import setup_jax`. The README currently has no images; if any are added, they need absolute `raw.githubusercontent.com` URLs — PyPI does not render GitHub blob pages as images.
 - Same updates in `docs/user_guides/01_installation.md`, `02_quickstart.md`, `16_troubleshooting.md`.
 
 ### Step 4 — CI
 
 - `.github/workflows/publish.yml`:
-  - `on: release: types: [published]` plus `workflow_dispatch` for the TestPyPI rehearsal.
+  - `on: release: types: [published]` plus `workflow_dispatch` for the TestPyPI rehearsal. Workflow-level `permissions: contents: read` (the publish jobs widen to `id-token: write`), a `concurrency` group with `cancel-in-progress: false` so two dispatches cannot race an upload and no upload is interrupted mid-flight, and `timeout-minutes` on every job.
   - Job `build`: `python -m build`, `twine check dist/*`, upload `dist/` as artifact. On release triggers, a tag–version guard: fail unless the release tag equals `v` + the `Version:` in the built wheel's metadata. `importlib.metadata` keeps `__version__` consistent with `pyproject.toml`, but nothing ties the git tag to either; without the guard a `v0.4.1` release can publish a wheel that reports 0.4.0.
   - Job `smoke`: matrix over Python {3.11, 3.13} × backend extra {none, cpu, cuda12, cuda13}: install the built wheel with that extra into a clean environment, `pip check`, `python -c "import fabricpc; print(fabricpc.__version__)"`; the cpu leg additionally asserts every `jax.devices()` platform is `cpu`. The cuda legs download the multi-GB nvidia wheel set (acceptable at release cadence) and verify install + import only — GitHub-hosted runners have no GPU; the device-level GPU check lives in §5's backend install matrix.
+  - Job `sdist`: `pip install dist/*.tar.gz` on one Python version, then import. `twine check` validates metadata and README rendering, not that the source distribution builds; the sdist is pure Python, so one leg covers it.
   - Job `publish-testpypi` (`workflow_dispatch` only): environment `testpypi`, `permissions: id-token: write`, `pypa/gh-action-pypi-publish@release/v1` with `repository-url: https://test.pypi.org/legacy/` and `skip-existing: true` (a re-rehearsal at an already-uploaded version verifies `build` + `smoke` and uploads nothing).
+  - Both publish jobs reference `pypa/gh-action-pypi-publish@release/v1`, a branch in the pypa repository advanced to each 1.x release, kept as a moving ref by choice. Considered and rejected: pinning to a commit SHA. A SHA is immune to the branch being retargeted (`tj-actions/changed-files`, CVE-2025-30066, where every version tag was repointed at a secret-dumping commit across ~23,000 repositories), but only while someone bumps it; the action ships about 4 releases a year, and without Dependabot the pin goes stale and stops receiving the action's own fixes. A rotting pin is worse than a maintained moving ref. The deciding argument is scope: the `build` job installs `pip`, `build`, and `twine` unpinned from PyPI and produces the artifacts the publish job uploads verbatim, so pinning the action hardens the last mile and leaves the one before it open. Both are pypa code either way. If this is revisited, revisit it together with the build tooling, and add `.github/dependabot.yml` in the same change.
   - Job `publish` (release only): environment `pypi`, `permissions: id-token: write`, `pypa/gh-action-pypi-publish@release/v1`. No `skip-existing` — a duplicate production upload must fail loudly.
-- `.github/workflows/test.yml`: pytest on ubuntu, CPU JAX, Python 3.11 and 3.13, on pull requests and pushes to `main`, with a per-ref `concurrency` group cancelling superseded runs.
+- `.github/workflows/test.yml`: pytest on ubuntu, CPU JAX, Python 3.11 and 3.13, on pull requests and pushes to `main`, with a per-ref `concurrency` group cancelling superseded runs. A third leg installs `jax==0.7.0` on Python 3.11 in the same pip invocation as the project, so one resolve settles jax against optax, flax, chex, and orbax together; this is what makes the declared floor a tested fact rather than an assertion.
 
 ### Step 5 — CHANGELOG
 
-`## [0.4.0]` entry: first PyPI release; breaking change — `from jax_setup import set_jax_flags_before_importing_jax` becomes `from fabricpc.jax_config import setup_jax`, callable any time before the first JAX computation; dependency changes (removed `jaxlib`; `optuna` moved to `[experiments]`); `[all]` no longer includes `[dev]`.
+`## [0.4.0]` entry: first PyPI release; breaking change — `from jax_setup import set_jax_flags_before_importing_jax` becomes `from fabricpc import setup_jax`, callable any time before the first JAX computation; dependency changes (removed `jaxlib`; `optuna` moved to `[experiments]`); `[all]` no longer includes `[dev]`.
 
 ### One-time manual setup (repo admin, outside the codebase)
 
@@ -335,7 +358,7 @@ pip check
 python -c "import fabricpc; print(fabricpc.__version__)"   # 0.4.0
 python - <<'PY'
 import jax
-from fabricpc.jax_config import setup_jax
+from fabricpc import setup_jax
 setup_jax("cpu")
 assert all(d.platform == "cpu" for d in jax.devices())
 PY

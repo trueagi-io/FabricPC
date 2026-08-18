@@ -43,7 +43,7 @@ from fabricpc.utils.dashboarding import (
     unstack_inference_history,
     summarize_inference_convergence,
 )
-from fabricpc.jax_config import setup_jax
+from fabricpc import setup_jax
 
 setup_jax()
 

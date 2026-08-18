@@ -27,8 +27,11 @@ classifiers = [
 
 # `jaxlib` is not listed: `jax` pins the matching `jaxlib`, and an unpinned
 # `jaxlib` here can fight the coupled wheel set that jax[cuda12]/jax[cuda13] install.
+#
+# The `jax` floor is 0.7.0, the oldest release whose own Python floor is >=3.11 —
+# the same floor this project declares.
 dependencies = [
-    "jax>=0.10",
+    "jax>=0.7.0",
     "optax>=0.1.7",
     "orbax-checkpoint>=0.4.0",
     "flax>=0.7.5",

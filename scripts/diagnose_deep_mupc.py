@@ -21,7 +21,7 @@ from fabricpc.core.activations import IdentityActivation, TanhActivation
 from fabricpc.core.inference import InferenceSGD, run_inference
 from fabricpc.core.initializers import MuPCInitializer
 from fabricpc.core.mupc import MuPCConfig
-from fabricpc.jax_config import setup_jax
+from fabricpc import setup_jax
 
 setup_jax(platform="cpu")
 

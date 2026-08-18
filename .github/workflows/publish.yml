@@ -9,9 +9,23 @@ on:
     types: [published]
   workflow_dispatch:
 
+# Default token for every job. The two publish jobs widen this to
+# `id-token: write` for the OIDC exchange; nothing here needs write access to
+# the repository.
+permissions:
+  contents: read
+
+# Serialize runs on a ref so two dispatches cannot race the same upload.
+# `cancel-in-progress` stays false: an upload interrupted mid-flight can leave
+# a partial release on the index.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -50,6 +64,7 @@ jobs:
   smoke:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -84,7 +99,7 @@ jobs:
         run: |
           python - <<'PY'
           import jax
-          from fabricpc.jax_config import setup_jax
+          from fabricpc import setup_jax
 
           setup_jax("cpu")
           devices = jax.devices()
@@ -92,10 +107,33 @@ jobs:
           print(devices)
           PY
 
+  sdist:
+    # `twine check` validates metadata and README rendering, not that the source
+    # distribution builds. One leg is enough: the sdist is pure Python and
+    # platform-independent, so a build failure here is a build failure anywhere.
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: Build and install from the source distribution
+        run: |
+          python -m pip install -U pip
+          pip install dist/*.tar.gz
+      - name: Import and report version
+        run: python -c "import fabricpc; print(fabricpc.__version__)"
+
   publish-testpypi:
-    needs: [build, smoke]
+    needs: [build, smoke, sdist]
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: testpypi
     permissions:
       id-token: write        # OIDC token for Trusted Publishing
@@ -104,6 +142,8 @@ jobs:
         with:
           name: dist
           path: dist
+      # `release/v1` is a branch in the pypa repository, not a tag, advanced to
+      # each new 1.x release of the action; a v2 would live on `release/v2`.
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
@@ -114,9 +154,10 @@ jobs:
           skip-existing: true
 
   publish:
-    needs: [build, smoke]
+    needs: [build, smoke, sdist]
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: pypi
     permissions:
       id-token: write        # OIDC token for Trusted Publishing

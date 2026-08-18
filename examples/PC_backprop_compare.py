@@ -44,7 +44,7 @@ from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.training.train_backprop import train_backprop, evaluate_backprop
 from fabricpc.experiments import ExperimentArm, ABExperiment
 from fabricpc.utils.data.dataloader import MnistLoader
-from fabricpc.jax_config import setup_jax
+from fabricpc import setup_jax
 
 setup_jax()  # "cpu", "cuda" or "tpu"
 

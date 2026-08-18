@@ -31,7 +31,7 @@ import optax
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
 import time
-from fabricpc.jax_config import setup_jax
+from fabricpc import setup_jax
 
 setup_jax()  # options: "cpu", "cuda", "tpu"
 jax.config.update("jax_default_prng_impl", "threefry2x32")

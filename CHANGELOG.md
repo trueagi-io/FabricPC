@@ -4,8 +4,8 @@
 First release published to PyPI: `pip install fabricpc`. Also a muPC scaling correctness release — deep residual and pooling graphs previously trained with an attenuated signal; activations, losses, and tuned learning rates will shift. See `docs/user_guides/05_initialization_and_scaling.md`.
 
 ### Breaking changes
-- `from jax_setup import set_jax_flags_before_importing_jax` becomes `from fabricpc.jax_config import setup_jax`, and the `jax_platforms=` argument is renamed to `platform=`. The helper no longer has to run before `import jax` — call it any time before the first JAX computation.
-- Python floor raised to 3.11 (was 3.10).
+- `from jax_setup import set_jax_flags_before_importing_jax` becomes `from fabricpc import setup_jax`, and the `jax_platforms=` argument is renamed to `platform=`. The helper no longer has to run before `import jax` — call it any time before the first JAX computation. Calling it after the backend has initialized raises a `RuntimeWarning` and changes nothing; previously the equivalent mistake was silent.
+- Python floor raised to 3.11 (was 3.10 which is reaching end of life)
 - `optuna` moved from the core dependencies to the `[experiments]` extra, used by `fabricpc.tuning`.
 - `[all]` no longer includes `[dev]`, so `pip install "fabricpc[all]"` stops installing black, ruff, mypy, and pre-commit into user environments. Contributors install `pip install -e ".[all,dev]"`.
 - `SkipConnection` gained a `"skip"` slot: route the residual stream there, branch contributions to `"in"`. Construction raises when `"skip"` is unconnected (new `SlotSpec.require_connected`).
@@ -14,8 +14,10 @@ First release published to PyPI: `pip install fabricpc`. Also a muPC scaling cor
 ### Packaging
 - Published from GitHub Actions via PyPI Trusted Publishing (`.github/workflows/publish.yml`), triggered by a published GitHub release.
 - `.github/workflows/test.yml` runs pytest on Python 3.11 and 3.13 for every push and pull request.
-- `jaxlib` dropped from the dependencies — `jax` pins its own matched `jaxlib`. `jax` gains the floor `>=0.10`.
+- `jaxlib` dropped from the dependencies — `jax` pins its own matched `jaxlib`. `jax` gains the floor `>=0.7.0`, the oldest release whose own Python floor is 3.11.
+- `.github/workflows/test.yml` gains a leg that runs the suite against `jax==0.7.0` on Python 3.11, so the declared floor is tested rather than asserted.
 - `[dev]` gains `build` and `twine` for local distribution checks.
+- `.github/workflows/publish.yml` restricts the default `GITHUB_TOKEN` to `contents: read`, with the two publish jobs widening to `id-token: write` for the OIDC exchange.
 
 ### muPC scaling corrections
 - Depth damping `1/sqrt(L)` now applies only to branch edges entering merge nodes. Previously every scalable edge carried it, so stream variance vanished as `e/L` with depth.
@@ -29,8 +31,8 @@ First release published to PyPI: `pip install fabricpc`. Also a muPC scaling cor
 - `InitializerBase.element_variance(shape, config)` returns the per-element variance an initializer draws, in closed form; implemented for all built-ins. `StorkeyHopfield` derives its factor from it. `StorkeyHopfield` uses it to derive `r` rather than assuming Xavier.
 
 ### Fixed
-- `[tfds]` installs `tensorflow-cpu` on x86_64 Linux instead of `tensorflow` to avoid a system cuda library conflict with jax.
-- Upgrade note: Existing environments must run `pip uninstall -y tensorflow` before reinstalling the extra.
+- `[tfds]` installs `tensorflow-cpu` on x86_64 Linux instead of `tensorflow`. The default Linux wheel is a CUDA build that dlopens CUDA libraries by SONAME at import. On machines whose loader search path carries a system CUDA 13 toolkit older than JAX's pip CUDA wheels, importing TF made the system `libcublas.so.13` resident first; glibc deduplicates by SONAME, so JAX's CUDA plugin bound that older copy instead of its own pip copy, failed its version check ("Outdated cuBLAS installation"), and fell back to CPU at the first TFDS data load. `tensorflow-cpu` does no CUDA probing at import, so it cannot preload the stale library. tensorflow-cpu publishes no aarch64 wheels, so aarch64 Linux keeps `tensorflow`.
+- Upgrade note: `tensorflow` and `tensorflow-cpu` install the same `tensorflow` package directory, so pip will not cleanly replace one with the other. Existing environments must run `pip uninstall -y tensorflow` before reinstalling the extra.
 
 ## [0.3.2] - 2026-07-17
 ### New features

@@ -28,7 +28,7 @@ from fabricpc.core.inference import InferenceSGD
 import optax
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
-from fabricpc.jax_config import setup_jax
+from fabricpc import setup_jax
 
 setup_jax()
 
