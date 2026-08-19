@@ -29,7 +29,7 @@ from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
 from fabricpc import setup_jax
 
-setup_jax(platform="cuda")
+setup_jax()  # auto-detects the backend; pass platform="cuda" to require GPU
 jax.config.update("jax_default_prng_impl", "threefry2x32")
 
 # --- Step 1: Define Nodes ---

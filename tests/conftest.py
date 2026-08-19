@@ -2,16 +2,17 @@
 
 import os
 
-os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
+# Settings outside setup_jax's scope; everything it covers is set through it below.
 os.environ.setdefault("XLA_PYTHON_CLIENT_MEM_FRACTION", "0.9")
 os.environ.setdefault("JAX_TRACEBACK_FILTERING", "off")
 
 import pytest
 import jax
 
+from fabricpc import setup_jax
 from fabricpc.core.inference import InferenceSGD
 
-jax.config.update("jax_platform_name", "cpu")
+setup_jax("cpu")
 
 
 @pytest.fixture

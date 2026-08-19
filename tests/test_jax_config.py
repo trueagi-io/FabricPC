@@ -13,7 +13,12 @@ import sys
 
 # Stripped from the child environment so the parent's conftest settings and the
 # developer's shell cannot decide the outcome.
-_STRIPPED = ("JAX_PLATFORMS", "XLA_FLAGS", "FABRICPC_DISABLE_TRITON_GEMM")
+_STRIPPED = (
+    "JAX_PLATFORMS",
+    "XLA_FLAGS",
+    "FABRICPC_DISABLE_TRITON_GEMM",
+    "FABRICPC_SKIP_XLA_FLAGS",
+)
 
 _PROBE = """\
 import json, os
@@ -33,11 +38,11 @@ print(json.dumps(payload))
 
 _QUERY_DEVICES = 'payload["platforms"] = sorted({d.platform for d in jax.devices()})'
 
-# The deadline case: the backend is already up, so every setting is discarded.
-# Devices are compared before and after rather than against a literal, so the
-# case reads the same on a GPU host and on a CPU-only runner.
+# The deadline case: the backend is already up, so the call returns without
+# writing anything. Devices are compared before and after rather than against a
+# literal, so the case reads the same on a GPU host and on a CPU-only runner.
 _LATE_PROBE = """\
-import json, warnings
+import json, os, warnings
 import jax
 from fabricpc.jax_config import setup_jax
 
@@ -52,24 +57,26 @@ print(json.dumps({
     "warnings": [str(w.message) for w in caught if w.category is RuntimeWarning],
     "before": before,
     "after": sorted({d.platform for d in jax.devices()}),
+    "jax_platforms": os.environ.get("JAX_PLATFORMS"),
+    "xla_flags": os.environ.get("XLA_FLAGS"),
 }))
 """
 
-# The same call placed correctly, to pin that the warning is specific to the
-# deadline and not emitted on every call.
-_EARLY_PROBE = """\
+# A call before the deadline, warnings captured: pins that the deadline warning
+# is specific to the deadline and the divergence warning to a real divergence.
+_WARNINGS_PROBE = """\
 import json, warnings
 import jax
 from fabricpc.jax_config import setup_jax
 
 with warnings.catch_warnings(record=True) as caught:
     warnings.simplefilter("always")
-    setup_jax("cpu")
+    setup_jax({call_arg})
 
-print(json.dumps({
+print(json.dumps({{
     "warnings": [str(w.message) for w in caught if w.category is RuntimeWarning],
-    "platforms": sorted({d.platform for d in jax.devices()}),
-}))
+    "platforms": sorted({{d.platform for d in jax.devices()}}),
+}}))
 """
 
 
@@ -157,14 +164,38 @@ def test_flag_guard_matches_whole_names_not_prefixes():
     assert "--xla_gpu_deterministic_ops_extra=1" in out["xla_flags"]
 
 
+def test_skip_xla_flags_leaves_xla_flags_untouched():
+    """FABRICPC_SKIP_XLA_FLAGS=1: no flags written, platform selection intact."""
+    out = _run('"cpu"', query_devices=True, FABRICPC_SKIP_XLA_FLAGS="1")
+    assert out["xla_flags"] == ""
+    assert out["jax_platforms"] == "cpu"
+    assert out["platforms"] == ["cpu"]
+
+
 def test_call_after_backend_initialization_warns_and_changes_nothing():
     out = _run_source(_LATE_PROBE)
     assert len(out["warnings"]) == 1, out["warnings"]
     assert "after the JAX backend was initialized" in out["warnings"][0]
     assert out["after"] == out["before"]
+    # The early return leaves the environment untouched as well.
+    assert out["jax_platforms"] is None
+    assert out["xla_flags"] is None
 
 
 def test_call_before_backend_initialization_is_silent():
-    out = _run_source(_EARLY_PROBE)
+    out = _run_source(_WARNINGS_PROBE.format(call_arg='"cpu"'))
+    assert out["warnings"] == []
+    assert out["platforms"] == ["cpu"]
+
+
+def test_diverging_platform_argument_warns_and_env_wins():
+    out = _run_source(_WARNINGS_PROBE.format(call_arg='"tpu"'), JAX_PLATFORMS="cpu")
+    assert len(out["warnings"]) == 1, out["warnings"]
+    assert "JAX_PLATFORMS='cpu'" in out["warnings"][0]
+    assert out["platforms"] == ["cpu"]
+
+
+def test_matching_platform_argument_is_silent():
+    out = _run_source(_WARNINGS_PROBE.format(call_arg='"cpu"'), JAX_PLATFORMS="cpu")
     assert out["warnings"] == []
     assert out["platforms"] == ["cpu"]

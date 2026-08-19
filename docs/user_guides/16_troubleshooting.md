@@ -73,20 +73,23 @@ F0000 00:00:00.000000 parse_flags_from_env.cc:234] Unknown flag in XLA_FLAGS: --
 XLA aborts rather than raising when it does not recognize a flag. `setup_jax` writes
 `--xla_gpu_deterministic_ops` and `--xla_gpu_enable_triton_gemm`, which jaxlib accepts
 but does not list in its stable flag set (`XLA_FLAGS=--help`), so a jaxlib release that
-drops either name produces this abort. Pin jax to the last version that accepts the
-flag, or preset a value yourself — `setup_jax` leaves any flag already named in
-`XLA_FLAGS` untouched, so exporting the flag with your own value stops it from writing
-one, and dropping the flag entirely is not possible without a jax that recognizes it:
+drops either name produces this abort. The parser rejects the flag's *name*, so
+presetting your own value in `XLA_FLAGS` aborts identically. Two remedies: stop
+`setup_jax` from writing any XLA flag, or pin jax to the last version that accepts the
+flag:
 
 ```bash
+export FABRICPC_SKIP_XLA_FLAGS=1   # setup_jax leaves XLA_FLAGS untouched
+# or
 pip install "jax==<last working version>"
 ```
 
 **`setup_jax()` had no effect**
 
 `setup_jax` must run before the first JAX computation or device query; afterwards the
-backend exists and every setting is discarded. It raises a `RuntimeWarning` in that
-case ("setup_jax() ran after the JAX backend was initialized"). Move the call above the
+backend exists and the call returns without changing anything. It emits a
+`RuntimeWarning` in that case ("setup_jax() ran after the JAX backend was
+initialized"). Move the call above the
 first `jax.devices()`, `jnp` operation, or `initialize_params` in your script. Import
 order does not matter — only computation order.
 

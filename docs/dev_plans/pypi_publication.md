@@ -68,7 +68,7 @@ The concern was that `jax_setup.py` "only works properly at the project level fo
 
 So only the `JAX_PLATFORMS` *environment-variable* path requires pre-import ordering, and JAX provides `jax.config.update("jax_platforms", ...)` precisely so platform selection works post-import. Everything else the helper sets is read at backend initialization, which JAX defers until the first computation or device query.
 
-Backend initialization is the deadline, and JAX enforces it silently — running a computation first and then calling `setup_jax("cpu")` leaves the CUDA device in place and reports nothing. The old name carried its precondition; `setup_jax` does not, so the helper checks `jax._src.xla_bridge.backends_are_initialized()` and raises a `RuntimeWarning` naming what was discarded. That symbol is private, so it is imported inside `try`/`except ImportError`: if a future jax moves it, the warning is lost and `setup_jax` keeps working.
+Backend initialization is the deadline, and JAX enforces it silently — running a computation first and then calling `setup_jax("cpu")` leaves the CUDA device in place and reports nothing. The old name carried its precondition; `setup_jax` does not, so the helper checks `jax._src.xla_bridge.backends_are_initialized()`, warns (`RuntimeWarning`) naming what was discarded, and returns without writing anything. That symbol is private, so it is imported inside `try`/`except ImportError`: if a future jax moves it, the warning is lost and `setup_jax` keeps working.
 
 ### How peer libraries structure their package import
 
@@ -99,17 +99,20 @@ def setup_jax(platform: str | None = None) -> None:
     if backends_are_initialized():          # private symbol, behind try/except ImportError
         warnings.warn("setup_jax() ran after the JAX backend was initialized ...",
                       RuntimeWarning, stacklevel=2)
+        return                              # past the deadline: change nothing
 
     if platform is not None and "JAX_PLATFORMS" not in os.environ:
         os.environ["JAX_PLATFORMS"] = platform          # inherited by worker subprocesses
         jax.config.update("jax_platforms", platform)    # effective in this process (Test B)
+    # a JAX_PLATFORMS differing from the argument warns; the environment wins
     os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
     os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
-    # XLA_FLAGS assembly, each flag guarded by whole name (Test C); the Triton GEMM
-    # disable is opt-out via FABRICPC_DISABLE_TRITON_GEMM
+    # XLA_FLAGS assembly, each flag guarded by whole name (Test C), skipped
+    # entirely under FABRICPC_SKIP_XLA_FLAGS=1; the Triton GEMM disable is
+    # opt-out via FABRICPC_DISABLE_TRITON_GEMM
 ```
 
-The `"JAX_PLATFORMS" not in os.environ` guard preserves setdefault semantics: a platform set in the user's shell wins over the function argument. The env write plus `config.update` pair is one deterministic path — the env var covers spawned worker processes, the config call covers the already-imported current process.
+The `"JAX_PLATFORMS" not in os.environ` guard preserves setdefault semantics: a platform already in the environment — from the user's shell or a previous `setup_jax` call — wins over the function argument, and a losing argument warns rather than being silently discarded. The env write plus `config.update` pair is one deterministic path — the env var covers spawned worker processes, the config call covers the already-imported current process. `FABRICPC_SKIP_XLA_FLAGS=1` stops the helper from writing any XLA flag: the escape hatch for a jaxlib that rejects one of the flag names (§ "Unknown flag" in `16_troubleshooting.md`).
 
 - **Naming:** the module is `jax_config.py`, not `jax_setup.py` — `setup_jax` is the verb, the module is the noun, and "setup" no longer names a temporal constraint the re-contracted helper does not have. The parameter is `platform`, not `jax_platforms`. Test file follows: `tests/test_jax_config.py`. All callers migrate in the same change; no alias is kept.
 - **Public import path:** `setup_jax` is re-exported from `fabricpc/__init__.py` and listed in `__all__`, so docs, examples, and users write `from fabricpc import setup_jax`. `fabricpc.jax_config` stays as the implementation module; the eager `__init__` means the short path costs nothing extra.
@@ -245,7 +248,7 @@ Verified, not asserted: with `jax==0.7.0` and `jaxlib==0.7.0` resolved alongside
 
 - README: user-facing install block (`pip install fabricpc`, `pip install -U "fabricpc[all]"`, `"fabricpc[all,cuda12]"` / `cuda13`); contributor block keeps clone + `pip install -e ".[all,dev]"`; all relative links converted to absolute `https://github.com/trueagi-io/FabricPC/blob/main/...` URLs; code snippet updated to `from fabricpc import setup_jax`. The README currently has no images; if any are added, they need absolute `raw.githubusercontent.com` URLs — PyPI does not render GitHub blob pages as images.
 - Same updates in `docs/user_guides/01_installation.md`, `02_quickstart.md`, `16_troubleshooting.md`.
-- `16_troubleshooting.md` gains two entries: `Unknown flag in XLA_FLAGS` (XLA aborts rather than raising on an unrecognized flag; pin jax or preset the flag) and `setup_jax() had no effect` (the backend-initialization deadline and the `RuntimeWarning` that names it).
+- `16_troubleshooting.md` gains two entries: `Unknown flag in XLA_FLAGS` (XLA aborts rather than raising on an unrecognized flag name; set `FABRICPC_SKIP_XLA_FLAGS=1` or pin jax) and `setup_jax() had no effect` (the backend-initialization deadline and the `RuntimeWarning` that names it).
 
 ### Step 4 — CI
 
@@ -361,7 +364,7 @@ Then run the README model-building snippet end-to-end, and the PyPI row of §5's
 
 ### 6.4 Publish the release to pypi.org
 
-1. Confirm §6.1–6.3 passed, `pyproject.toml` on `main` reads `0.4.0`, and `CHANGELOG.md` carries the `[0.4.0]` entry.
+1. Confirm §6.1–6.3 passed, `pyproject.toml` on `main` reads `0.4.0`, and `CHANGELOG.md` carries the `[0.4.0]` entry with the actual release date (correct it in the same commit if it drifted while the PR was open).
 2. Write the release notes (the CHANGELOG entry) to a temporary file in the project root, then create the GitHub release. The tag must be exactly `v0.4.0`: the `build` job fails the run on any mismatch with the built wheel's `Version`.
    - CLI: `gh release create v0.4.0 --target main --title "v0.4.0" --notes-file release_notes_v0.4.0.md`
    - UI: Releases → Draft a new release → tag `v0.4.0` on `main` → Publish release.

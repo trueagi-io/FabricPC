@@ -48,28 +48,49 @@ def setup_jax(platform: str | None = None) -> None:
 
     Call before the first JAX computation. Import order does not matter.
     Calling after the backend has initialized warns and changes nothing.
+    Setting ``FABRICPC_SKIP_XLA_FLAGS=1`` leaves ``XLA_FLAGS`` untouched — the
+    escape hatch for a jax release that rejects one of the flags written here.
 
     Args:
         platform: Platform to use ("cpu", "cuda", or "tpu").
-            If None, JAX auto-detects available hardware.
+            If None, JAX auto-detects available hardware. A `JAX_PLATFORMS`
+            value already in the environment wins over the argument; a
+            conflicting argument warns.
     """
     if backends_are_initialized():
         warnings.warn(
-            "setup_jax() ran after the JAX backend was initialized, so the "
-            "platform selection, XLA flags, and memory settings it writes have "
-            "no effect on this process. Call it before the first JAX "
-            "computation or device query.",
+            "setup_jax() ran after the JAX backend was initialized, so it "
+            "changed nothing: platform selection, XLA flags, and memory "
+            "settings all bind at backend initialization. Call it before the "
+            "first JAX computation or device query.",
             RuntimeWarning,
             stacklevel=2,
         )
+        return
 
-    if platform is not None and "JAX_PLATFORMS" not in os.environ:
-        # A platform set in the caller's shell wins over the argument, matching
-        # the setdefault semantics the rest of this function uses.
-        os.environ["JAX_PLATFORMS"] = platform  # inherited by subprocesses
-        jax.config.update("jax_platforms", platform)  # applies to this process
+    if platform is not None:
+        # A platform already in the environment wins over the argument, matching
+        # the setdefault semantics the rest of this function uses. The guard
+        # cannot distinguish the caller's shell from a previous setup_jax call,
+        # so both win the same way — and a losing argument warns rather than
+        # being silently discarded.
+        _env_platform = os.environ.get("JAX_PLATFORMS")
+        if _env_platform is None:
+            os.environ["JAX_PLATFORMS"] = platform  # inherited by subprocesses
+            jax.config.update("jax_platforms", platform)  # applies to this process
+        elif _env_platform != platform:
+            warnings.warn(
+                f"setup_jax(platform={platform!r}) is superseded by "
+                f"JAX_PLATFORMS={_env_platform!r} already present in the "
+                "environment; the environment value wins.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
     os.environ.setdefault("XLA_PYTHON_CLIENT_PREALLOCATE", "false")
     os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")  # Suppress XLA warnings
+
+    if os.environ.get("FABRICPC_SKIP_XLA_FLAGS") == "1":
+        return
 
     # Each flag is guarded by name, not name=value: a value already present in
     # XLA_FLAGS — from the caller's shell or a previous setup_jax call — wins.
@@ -81,8 +102,9 @@ def setup_jax(platform: str | None = None) -> None:
     # (`XLA_FLAGS=--help`), unlike `--xla_gpu_autotune_level` below. XLA aborts
     # the process at backend initialization on an unrecognized flag
     # ("Unknown flag in XLA_FLAGS"), with no Python traceback, so a jaxlib that
-    # drops either name turns every setup_jax() call into a hard abort. Pin jax
-    # if that happens; see docs/user_guides/16_troubleshooting.md.
+    # drops either name turns every setup_jax() call into a hard abort. Set
+    # FABRICPC_SKIP_XLA_FLAGS=1 or pin jax if that happens; see
+    # docs/user_guides/16_troubleshooting.md.
     if "--xla_gpu_deterministic_ops" not in _present:
         _xla_flags = (_xla_flags + " --xla_gpu_deterministic_ops=true").strip()
     # Triton GEMM is disabled by default because it can trigger CUDA runtime
