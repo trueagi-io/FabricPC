@@ -254,7 +254,7 @@ Verified, not asserted: with `jax==0.7.0` and `jaxlib==0.7.0` resolved alongside
 
 - `.github/workflows/publish.yml`:
   - `on: release: types: [published]` (→ pypi.org) plus `workflow_dispatch` (→ test.pypi.org rehearsal). Workflow-level `permissions: contents: read` — the two publish jobs widen to `id-token: write` for the OIDC exchange. A `concurrency` group with `cancel-in-progress: false`, so two dispatches cannot race an upload and no upload is interrupted mid-flight. `timeout-minutes` on every job.
-  - Job `build`: `python -m build`, `twine check dist/*`, upload `dist/` as artifact. On release triggers, a tag–version guard: fail unless the release tag equals `v` + the `Version:` in the built wheel's metadata. `importlib.metadata` keeps `__version__` consistent with `pyproject.toml`, but nothing ties the git tag to either; without the guard a `v0.4.1` release can publish a wheel that reports 0.4.0.
+  - Job `build`: `python -m build`, `twine check dist/*`, upload `dist/` as artifact. On release triggers, a tag–version guard: fail unless the release tag equals `v` + the `Version:` in the built wheel's metadata. The build version is directly derived from `pyproject.toml`: `python -m build` invokes setuptools, which copies `[project] version` verbatim into the wheel's `METADATA` — no other input. `importlib.metadata` then reads that same metadata back as `__version__`. The git tag is the only version-like string with a different source — typed by a human at release time — and is what the guard checks; without it a `v0.4.1` release can publish a wheel that reports 0.4.0.
   - Job `smoke`: matrix over Python {3.11, 3.13} × backend extra {none, cpu, cuda12, cuda13}: install the built wheel with that extra into a clean environment, `pip check`, `python -c "import fabricpc; print(fabricpc.__version__)"`; the cpu leg additionally asserts every `jax.devices()` platform is `cpu`. The cuda legs download the multi-GB nvidia wheel set (acceptable at release cadence) and verify install + import only — GitHub-hosted runners have no GPU; the device-level GPU check lives in §5's backend install matrix.
   - Job `sdist`: `pip install dist/*.tar.gz` on one Python version, then import. `twine check` validates metadata and README rendering, not that the source distribution builds; the sdist is pure Python, so one leg covers it.
   - Job `publish-testpypi` (`workflow_dispatch` only, needs `build` + `smoke` + `sdist`): environment `testpypi`, `permissions: id-token: write`, `pypa/gh-action-pypi-publish@release/v1` with `repository-url: https://test.pypi.org/legacy/` and `skip-existing: true` — TestPyPI enforces the same (name, version, filename) reservation as PyPI, so without the flag a second rehearsal at an already-uploaded version fails at upload; with it, the rerun verifies the gate jobs and uploads nothing.
@@ -269,8 +269,44 @@ Verified, not asserted: with `jax==0.7.0` and `jaxlib==0.7.0` resolved alongside
 
 ### One-time manual setup (repo admin, outside the codebase)
 
-1. On pypi.org, signed in as `MatthewBehrend` or `SingularityNET`: account → Publishing → add a **pending publisher** for project name `fabricpc`: owner `trueagi-io`, repository `FabricPC`, workflow `publish.yml`, environment `pypi`. Pending publishers work for names that do not exist yet; the first trusted-publish claims the name, and the account that created the pending publisher becomes the project's sole initial Owner. Same on test.pypi.org with environment `testpypi`.
-2. On GitHub `trueagi-io/FabricPC`: create environments `pypi` and `testpypi` (optionally with required reviewers as a release gate).
+Trusted Publishing replaces API tokens with OIDC. At upload time the publish job requests a short-lived identity token from GitHub whose claims name the repository, the workflow file, and the GitHub environment; `pypa/gh-action-pypi-publish` exchanges that token with the index, and the index accepts the upload only when the claims match a trusted publisher configured for the project. No credential is stored on either side, so the setup below creates matching configuration — accounts, publisher entries, environments — and no secrets.
+
+#### Accounts
+
+pypi.org and test.pypi.org are independent registries: an account on one does not exist on the other, even with the same username and email. For each registry:
+
+1. Create the account and verify its email address.
+2. Enable two-factor authentication (Account settings → Two-factor authentication; TOTP app or security key) and store the recovery codes in the org's shared secret storage, not on one person's device. PyPI requires 2FA before the Publishing settings page accepts a new publisher, so step 3 is blocked without it.
+3. Create no API token — nothing in this plan uses one.
+
+One account performs the publisher setup below. The account that creates a pending publisher becomes the project's sole initial Owner when the first upload claims the name; decision 4 (§3) wants both `MatthewBehrend` and `SingularityNET` as Owners, so the second account is added after the first upload (§6.6).
+
+#### Pending publishers (one per registry)
+
+A pending publisher is a trusted-publisher entry for a project name that does not exist yet; the first successful upload through it creates the project and attaches the entry to it. Before creating them, re-check the name is still unclaimed — https://pypi.org/project/fabricpc/ and https://test.pypi.org/project/fabricpc/ must both return 404 (last verified 2026-07-30; a name claimed in the meantime means renaming the project or filing a PEP 541 transfer request).
+
+On **pypi.org**, signed in as the setup account: Your account → **Publishing** → "Add a new pending publisher" → GitHub tab:
+
+| Field | Value |
+|---|---|
+| PyPI project name | `fabricpc` |
+| Owner | `trueagi-io` |
+| Repository name | `FabricPC` |
+| Workflow name | `publish.yml` |
+| Environment name | `pypi` |
+
+On **test.pypi.org**: the same form and values, except environment name `testpypi`.
+
+Every field must match the workflow exactly. The OIDC token's claims carry the repository slug, the workflow *filename* (not its `name:` key), and the environment string; the index rejects the exchange on any mismatch, including case.
+
+#### GitHub environments
+
+On `github.com/trueagi-io/FabricPC` → Settings → **Environments** (repository admin required), create two environments matching the `environment:` keys in `publish.yml`:
+
+- `testpypi` — no configuration.
+- `pypi` — optionally add **required reviewers**: the release run then suspends at the `publish` job until a listed reviewer approves the deployment, putting a human gate in front of an irreversible upload.
+
+Neither environment holds a secret or variable. Their only roles are to appear in the OIDC token's claims and, optionally, to gate the publish jobs behind reviewers.
 
 ---
 
@@ -312,13 +348,25 @@ When each row runs:
 
 ## 6. Deployment
 
-The release runbook. Prerequisites, all from §4: the packaging PR is merged to `main` (the `workflow_dispatch` trigger is only listed once `publish.yml` exists on the default branch), the Tests workflow is green on the release commit, and the one-time manual setup is done — pending publishers for `fabricpc` on test.pypi.org (environment `testpypi`) and pypi.org (environment `pypi`), and both GitHub environments created on `trueagi-io/FabricPC`.
+**Triggering.** One workflow, `publish.yml`, two triggers, two destinations:
+
+- **pypi.org** — publishing a GitHub release (`release: types: [published]`). Only this event reaches the `publish` job.
+- **test.pypi.org** — manual `workflow_dispatch` (Actions → Publish → Run workflow, or `gh workflow run publish.yml --ref main`). Only this event reaches the `publish-testpypi` job; a dispatch can never upload to pypi.org.
+
+There is no `push` trigger: merging a PR to `main` runs only `test.yml` and `lint.yml` and publishes nothing. Any number of PRs can therefore accumulate on `main` between releases — the release is the batching boundary, and the upload contains every merge up to the commit the tag points to.
+
+The release runbook. Prerequisites, all from §4: the packaging PR is merged to `main` (the `workflow_dispatch` trigger is only listed once `publish.yml` exists on the default branch, §6.1), the Tests workflow is green on the release commit, and the one-time manual setup (§4) is done — accounts with 2FA, pending publishers for `fabricpc` on test.pypi.org (environment `testpypi`) and pypi.org (environment `pypi`), and both GitHub environments created on `trueagi-io/FabricPC`.
 
 The rehearsal (§6.1–6.3) is mandatory before the first production release: PyPI permanently reserves every (name, version, filename) tuple — even a deleted release cannot be re-uploaded — so a botched production upload burns 0.4.0 forever, while a TestPyPI mistake costs only a rehearsal version.
 
 ### 6.1 Test the publication on TestPyPI
 
 The `workflow_dispatch` trigger runs the same `build`, `smoke`, and `sdist` jobs as a release, then uploads to test.pypi.org instead of pypi.org. The tag–version guard is skipped on dispatch (there is no tag).
+
+Two properties of `workflow_dispatch` to know before reaching for it:
+
+- **The trigger is invisible until the workflow is on the default branch.** GitHub lists the "Run workflow" button (and accepts `gh workflow run`) only for workflow files present on `main`. This is why merging the packaging PR is a prerequisite, and why the button is absent while `publish.yml` exists only on the feature branch.
+- **`--ref` selects both the code and the workflow definition.** `gh workflow run publish.yml --ref main` checks out `main` in the `build` job *and* executes `main`'s copy of `publish.yml`. Dispatching requires write permission on the repository.
 
 1. Confirm `version = "0.4.0"` in `pyproject.toml` on `main`.
 2. Trigger the workflow:
@@ -365,10 +413,10 @@ Then run the README model-building snippet end-to-end, and the PyPI row of §5's
 ### 6.4 Publish the release to pypi.org
 
 1. Confirm §6.1–6.3 passed, `pyproject.toml` on `main` reads `0.4.0`, and `CHANGELOG.md` carries the `[0.4.0]` entry with the actual release date (correct it in the same commit if it drifted while the PR was open).
-2. Write the release notes (the CHANGELOG entry) to a temporary file in the project root, then create the GitHub release. The tag must be exactly `v0.4.0`: the `build` job fails the run on any mismatch with the built wheel's `Version`.
+2. Write the release notes (the CHANGELOG entry) to a temporary file in the project root, then create the GitHub release. A GitHub release is a git tag plus a notes page: creating the release against a tag that does not exist yet also creates the tag, pointed at the commit named by `--target` — no separate `git tag` / `git push --tags` step. The tag must be exactly `v0.4.0`: the `build` job compares the tag name (`GITHUB_REF_NAME`) against `v` + the built wheel's `Version` and fails the run on any mismatch.
    - CLI: `gh release create v0.4.0 --target main --title "v0.4.0" --notes-file release_notes_v0.4.0.md`
    - UI: Releases → Draft a new release → tag `v0.4.0` on `main` → Publish release.
-3. Publishing the release fires `publish.yml` on the release trigger: `build` (now with the tag–version guard), `smoke`, `sdist`, then `publish` (environment `pypi`, OIDC). Approve the environment deployment if reviewers are configured.
+3. Publishing the release fires `publish.yml` on the release trigger — `types: [published]`, so saving a draft fires nothing and editing an already-published release does not fire it again: `build` (now with the tag–version guard), `smoke`, `sdist`, then `publish` (environment `pypi`, OIDC). Approve the environment deployment if reviewers are configured.
 4. A failure before upload burns nothing: `publish` needs all three gate jobs, so a red run leaves pypi.org untouched. Fix, delete the release and tag (`gh release delete v0.4.0 --cleanup-tag`), and re-create the release with the same version.
 5. As on TestPyPI, the first upload converts the pending publisher into the `fabricpc` project with the creating account as sole Owner.
 
@@ -379,7 +427,7 @@ Then run the README model-building snippet end-to-end, and the PyPI row of §5's
 
 ### 6.6 Post-publish hygiene
 
-- Immediately after the first upload, add the second account as Owner (§3): a single-owner project is one lost account from unmaintainable, and PyPI requires a second owner before some project-scoped settings can be changed. PyPI mandates 2FA — store the recovery codes in the org's shared secret storage, not on one person's device.
+- Immediately after the first upload, on each registry (project → Settings → Collaborators), add the second account as Owner (§3): a single-owner project is one lost account from unmaintainable, and PyPI requires a second owner before some project-scoped settings can be changed. 2FA and recovery-code handling are covered in §4's account setup.
 - Bad release: **yank, never delete**. Yanking removes the version from default resolution while keeping it installable for anyone who already pinned it; deletion breaks those installs and still does not free the version for re-upload. Follow a yank with a fixed 0.4.1 release.
 
 ---
