@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.4.0] - 2026-08-14
+## [0.4.0] - 2026-08-19
 First release published to PyPI: `pip install fabricpc`. Also a muPC scaling correctness release — deep residual and pooling graphs previously trained with an attenuated signal; activations, losses, and tuned learning rates will shift. See `docs/user_guides/05_initialization_and_scaling.md`.
 
 ### Breaking changes
