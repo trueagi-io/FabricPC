@@ -14,9 +14,11 @@ Internally, everything is organized around three abstractions: nodes (state and 
 
 ## Installation
 
-Python 3.11–3.13. One command installs FabricPC, its optional dependencies, and a version-matched JAX backend — pick the line for your hardware:
+Python 3.11–3.13. Install into a virtual environment, not the system Python. Create and activate the environment, then one command installs FabricPC, its optional dependencies, and a version-matched JAX backend — pick the line for your hardware:
 
 ```bash
+python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+
 pip install -U "fabricpc[all,cuda13]"   # GPU, CUDA 13 (NVIDIA driver ≥580)
 pip install -U "fabricpc[all,cuda12]"   # GPU, CUDA 12
 pip install -U "fabricpc[all]"          # CPU only
@@ -34,6 +36,7 @@ See the [installation guide](https://github.com/trueagi-io/FabricPC/blob/main/do
 ```bash
 git clone https://github.com/trueagi-io/FabricPC.git
 cd FabricPC
+python3 -m venv .venv && source .venv/bin/activate
 pip install -U -e ".[all,dev]"    # add a backend extra for GPU: ".[all,dev,cuda12]"
 
 # Install pre-commit hooks for code quality

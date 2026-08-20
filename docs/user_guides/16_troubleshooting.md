@@ -57,6 +57,22 @@ for GPU on Windows (JAX marks WSL2 GPU support experimental).
 pip install -U -e ".[all]"   # CPU-only; works on Windows and macOS
 ```
 
+**Editable install fails: `missing the 'build_editable' hook`**
+
+`pip install -e .` with the system Python fails before building:
+```
+Project ... has a 'pyproject.toml' and its build backend is missing the
+'build_editable' hook. Since it does not have a 'setup.py' nor a 'setup.cfg', it
+cannot be installed in editable mode. Consider using a build backend that supports PEP 660.
+```
+Editable installs with the system Python can fail with a `build_editable` error on
+distros that package an old setuptools. Install into a virtual environment — its
+module path omits the distro's stale `dist-packages`:
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -U -e ".[all,dev,cuda12]"
+```
+
 **Triton GEMM XLA errors**
 
 If XLA compilation fails with Triton-related errors:
