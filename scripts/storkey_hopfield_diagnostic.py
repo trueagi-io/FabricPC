@@ -23,10 +23,6 @@ Usage:
     python examples/storkey_hopfield_diagnostic.py --phase all
 """
 
-from jax_setup import set_jax_flags_before_importing_jax
-
-set_jax_flags_before_importing_jax()
-
 import argparse
 import numpy as np
 import jax
@@ -52,7 +48,9 @@ from fabricpc.utils.data.dataloader import (
 )
 from fabricpc.experiments import ExperimentArm, ABExperiment
 from fabricpc.experiments.statistics import paired_ttest, cohens_d
+from fabricpc import setup_jax
 
+setup_jax()
 jax.config.update("jax_default_prng_impl", "threefry2x32")
 
 # ============================================================================

@@ -57,6 +57,22 @@ for GPU on Windows (JAX marks WSL2 GPU support experimental).
 pip install -U -e ".[all]"   # CPU-only; works on Windows and macOS
 ```
 
+**Editable install fails: `missing the 'build_editable' hook`**
+
+`pip install -e .` with the system Python fails before building:
+```
+Project ... has a 'pyproject.toml' and its build backend is missing the
+'build_editable' hook. Since it does not have a 'setup.py' nor a 'setup.cfg', it
+cannot be installed in editable mode. Consider using a build backend that supports PEP 660.
+```
+Editable installs with the system Python can fail with a `build_editable` error on
+distros that package an old setuptools. Install into a virtual environment — its
+module path omits the distro's stale `dist-packages`:
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -U -e ".[all,dev,cuda12]"
+```
+
 **Triton GEMM XLA errors**
 
 If XLA compilation fails with Triton-related errors:
@@ -64,9 +80,38 @@ If XLA compilation fails with Triton-related errors:
 export FABRICPC_DISABLE_TRITON_GEMM=1
 ```
 
+**`Unknown flag in XLA_FLAGS`**
+
+The process dies at the first JAX computation with no Python traceback:
+```
+F0000 00:00:00.000000 parse_flags_from_env.cc:234] Unknown flag in XLA_FLAGS: --xla_gpu_...
+```
+XLA aborts rather than raising when it does not recognize a flag. `setup_jax` writes
+`--xla_gpu_deterministic_ops` and `--xla_gpu_enable_triton_gemm`, which jaxlib accepts
+but does not list in its stable flag set (`XLA_FLAGS=--help`), so a jaxlib release that
+drops either name produces this abort. The parser rejects the flag's *name*, so
+presetting your own value in `XLA_FLAGS` aborts identically. Two remedies: stop
+`setup_jax` from writing any XLA flag, or pin jax to the last version that accepts the
+flag:
+
+```bash
+export FABRICPC_SKIP_XLA_FLAGS=1   # setup_jax leaves XLA_FLAGS untouched
+# or
+pip install "jax==<last working version>"
+```
+
+**`setup_jax()` had no effect**
+
+`setup_jax` must run before the first JAX computation or device query; afterwards the
+backend exists and the call returns without changing anything. It emits a
+`RuntimeWarning` in that case ("setup_jax() ran after the JAX backend was
+initialized"). Move the call above the
+first `jax.devices()`, `jnp` operation, or `initialize_params` in your script. Import
+order does not matter — only computation order.
+
 **Python version**
 
-FabricPC supports Python 3.10–3.13. Only the optional Aim experiment tracker (in `[viz]`/`[all]`) is limited to Python ≤3.12; on Python 3.13 it is skipped automatically and the rest installs normally.
+FabricPC supports Python 3.11–3.13. Only the optional Aim experiment tracker (in `[viz]`/`[all]`) is limited to Python ≤3.12; on Python 3.13 it is skipped automatically and the rest installs normally.
 
 ---
 
@@ -99,10 +144,10 @@ This is expected — JAX JIT-compiles the training step on first invocation. Sub
 
 **JAX memory flags**
 
-Set before importing JAX:
+Set before the first JAX computation (import order does not matter):
 ```python
-from jax_setup import set_jax_flags_before_importing_jax
-set_jax_flags_before_importing_jax()
+from fabricpc import setup_jax
+setup_jax()
 ```
 
 Or manually:

@@ -1,0 +1,51 @@
+name: Tests
+
+# push is limited to main so PR commits run once (as pull_request), not twice.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Floor and ceiling of the supported range; conftest.py pins the CPU backend.
+        python-version: ["3.11", "3.13"]
+        jax-version: [""]        # "" resolves the newest jax
+        include:
+          # The declared `jax>=0.7.0` floor from pyproject.toml, exercised on the
+          # declared Python floor. Without this leg the floor is an assertion: a
+          # new call site can raise the real minimum with nothing to catch it,
+          # and the first report comes from a user's failed install.
+          - python-version: "3.11"
+            jax-version: "0.7.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install
+        # [experiments] carries optuna, which tests/test_bayesian_tuner.py imports.
+        # [tfds] and [viz] are omitted: the tests that need them call
+        # pytest.importorskip, and their wheels dominate install time.
+        # The pin goes in the same pip invocation as the project so one resolve
+        # settles jax against optax, flax, chex, and orbax together.
+        run: |
+          python -m pip install -U pip
+          if [ -n "${{ matrix.jax-version }}" ]; then
+            pip install -e ".[dev,experiments]" "jax==${{ matrix.jax-version }}"
+          else
+            pip install -e ".[dev,experiments]"
+          fi
+      - name: Report the resolved jax
+        run: python -c "import jax, jaxlib; print(jax.__version__, jaxlib.__version__)"
+      - name: Run tests
+        run: pytest -q

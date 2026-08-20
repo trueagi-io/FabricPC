@@ -137,6 +137,8 @@ n_req = estimate_required_n(effect.d) # trials for p<0.05 at 80% power; 999999 w
 
 `fabricpc.tuning.BayesianTuner`
 
+Optuna ships in the `[experiments]` extra, not the core install: `pip install "fabricpc[experiments]"`. Without it, `import fabricpc.tuning` raises `ModuleNotFoundError: optuna`.
+
 Two-phase Optuna search for language-model hyperparameters, both phases minimizing validation perplexity. Phase 1 searches architecture and training parameters together, with Hyperband pruning that allocates training epochs as the trial resource: unpromising trials are stopped after few epochs while strong ones train longer. Phase 2 fixes the Phase 1 winning architecture and refines the continuous training parameters (`lr`, `eta_infer`, `infer_steps`) with a multivariate TPE sampler that models correlations between them. Training energy serves only as a divergence guard: a trial is pruned when its energy becomes non-finite or rises above its best epoch by more than `divergence_rel_tol`.
 
 ```python

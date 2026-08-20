@@ -14,27 +14,31 @@ Internally, everything is organized around three abstractions: nodes (state and 
 
 ## Installation
 
-Clone this repo and `cd` into the project directory.
+Python 3.11–3.13. Install into a virtual environment, not the system Python. Create and activate the environment, then one command installs FabricPC, its optional dependencies, and a version-matched JAX backend — pick the line for your hardware:
 
-Create a virtual environment with Python 3.10–3.13. (The optional Aim experiment tracker in `[viz]`/`[all]` is Linux/macOS only and supports Python ≤3.12; on Windows or Python 3.13 it is skipped automatically and everything else installs normally.)
-
-**Platform:** GPU acceleration requires **Linux** (x86_64 or aarch64) — JAX publishes CUDA wheels for Linux only. On native Windows or macOS, install CPU-only; for GPU on Windows use WSL2 (JAX marks WSL2 GPU support experimental).
 ```bash
-# Verify your CUDA version
-nvidia-smi
+python3 -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
+
+pip install -U "fabricpc[all,cuda13]"   # GPU, CUDA 13 (NVIDIA driver ≥580)
+pip install -U "fabricpc[all,cuda12]"   # GPU, CUDA 12
+pip install -U "fabricpc[all]"          # CPU only
+pip install fabricpc                    # core library only, CPU
 ```
 
-One command installs FabricPC, all optional deps, and a version-matched JAX backend. Pick the line that matches your platform:
+`nvidia-smi` reports the CUDA version your driver supports.
+
+**Platform:** GPU acceleration requires **Linux** (x86_64 or aarch64) — JAX publishes CUDA wheels for Linux only. On native Windows or macOS, install CPU-only; for GPU on Windows use WSL2 (JAX marks WSL2 GPU support experimental). The optional Aim experiment tracker in `[viz]`/`[all]` is Linux/macOS only and supports Python ≤3.12; on Windows or Python 3.13 it is skipped automatically and everything else installs normally.
+
+See the [installation guide](https://github.com/trueagi-io/FabricPC/blob/main/docs/user_guides/01_installation.md) for details.
+
+### From source (contributors)
 
 ```bash
-pip install -U -e ".[all,cuda13]"   # GPU, CUDA 13
-pip install -U -e ".[all,cuda12]"   # GPU, CUDA 12
-pip install -U -e ".[all]"          # CPU only
-```
+git clone https://github.com/trueagi-io/FabricPC.git
+cd FabricPC
+python3 -m venv .venv && source .venv/bin/activate
+pip install -U -e ".[all,dev]"    # add a backend extra for GPU: ".[all,dev,cuda12]"
 
-See [`docs/user_guides/01_installation.md`](docs/user_guides/01_installation.md) for details. Then set up hooks and run an example:
-
-```bash
 # Install pre-commit hooks for code quality
 pre-commit install
 
@@ -47,15 +51,15 @@ python examples/mnist_demo.py
 Define the graph. Initialize the parameters. Start experimenting.
 
 ```python
-from jax_setup import set_jax_flags_before_importing_jax
-set_jax_flags_before_importing_jax()
-
 import jax
 from fabricpc.nodes import Linear
 from fabricpc.core.topology import Edge
 from fabricpc.graph_assembly import TaskMap, graph
 from fabricpc.graph_initialization import initialize_params
 from fabricpc.core.inference import InferenceSGD
+from fabricpc import setup_jax
+
+setup_jax()
 
 layer1 = Linear(shape=(784,), name="input")
 layer2 = Linear(shape=(256,), name="hidden")
@@ -75,16 +79,16 @@ params = initialize_params(structure, rng_key)
 
 ## Demos
 
-The [`examples`](examples/) folder includes working demonstrations across image classification, sequence modeling, depth scaling (`examples/scaling/`), associative memory, and architectural probes. Start with [`mnist_demo.py`](examples/mnist_demo.py) (over 98% accuracy on MNIST) and explore from there:
+The [`examples`](https://github.com/trueagi-io/FabricPC/tree/main/examples) folder includes working demonstrations across image classification, sequence modeling, depth scaling (`examples/scaling/`), associative memory, and architectural probes. Start with [`mnist_demo.py`](https://github.com/trueagi-io/FabricPC/blob/main/examples/mnist_demo.py) (over 98% accuracy on MNIST) and explore from there:
 
-- [`mnist_conv_demo.py`](examples/mnist_conv_demo.py) — convolutional MNIST classifier with `ConvNode` and `MaxPool`
-- [`resnet18_cifar10_demo.py`](examples/resnet18_cifar10_demo.py) — ResNet-18 as a PC graph, with global average pooling
-- [`transformer_v2_demo.py`](examples/transformer_v2_demo.py) — character- or BPE-level language modeling with text generation
-- [`transformer_tuning.py`](examples/transformer_tuning.py) — two-phase hyperparameter search minimizing validation perplexity
+- [`mnist_conv_demo.py`](https://github.com/trueagi-io/FabricPC/blob/main/examples/mnist_conv_demo.py) — convolutional MNIST classifier with `ConvNode` and `MaxPool`
+- [`resnet18_cifar10_demo.py`](https://github.com/trueagi-io/FabricPC/blob/main/examples/resnet18_cifar10_demo.py) — ResNet-18 as a PC graph, with global average pooling
+- [`transformer_v2_demo.py`](https://github.com/trueagi-io/FabricPC/blob/main/examples/transformer_v2_demo.py) — character- or BPE-level language modeling with text generation
+- [`transformer_tuning.py`](https://github.com/trueagi-io/FabricPC/blob/main/examples/transformer_tuning.py) — two-phase hyperparameter search minimizing validation perplexity
 
 ## Documentation
 
-User guides, API reference, and tutorials live in [`docs/user_guides`](docs/user_guides/00_index.md). Development plans and technical design documents are in [`docs/dev_plans`](docs/dev_plans/).
+User guides, API reference, and tutorials live in [`docs/user_guides`](https://github.com/trueagi-io/FabricPC/blob/main/docs/user_guides/00_index.md). Development plans and technical design documents are in [`docs/dev_plans`](https://github.com/trueagi-io/FabricPC/tree/main/docs/dev_plans).
 
 ## Extending FabricPC
 
@@ -92,7 +96,7 @@ User guides, API reference, and tutorials live in [`docs/user_guides`](docs/user
 
 Create custom node types by subclassing `NodeBase`. Implement the `get_slots()`, `initialize_params()`, and `forward()` methods. Nodes have a single output. Slots define incoming connections and are referenced in edges when building the graph.
 
-See [`docs/user_guides/06_custom_nodes.md`](docs/user_guides/06_custom_nodes.md) for the node contract and a Conv2D teaching example (the production node is `fabricpc.nodes.ConvNode`).
+See [`docs/user_guides/06_custom_nodes.md`](https://github.com/trueagi-io/FabricPC/blob/main/docs/user_guides/06_custom_nodes.md) for the node contract and a Conv2D teaching example (the production node is `fabricpc.nodes.ConvNode`).
 
 ## Contributing
 
@@ -114,4 +118,4 @@ FabricPC is actively maintained by SingularityNET as part of the Artificial Supe
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [MIT License](https://github.com/trueagi-io/FabricPC/blob/main/LICENSE).

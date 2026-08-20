@@ -39,10 +39,6 @@ Test Perplexity: 9.12
 ROMEO: whou sarone the bro beariers thas tray sucas a st my lo the to ate.
 """
 
-from jax_setup import set_jax_flags_before_importing_jax
-
-set_jax_flags_before_importing_jax()
-
 import argparse
 import jax
 import jax.numpy as jnp
@@ -59,6 +55,9 @@ from fabricpc.models import create_deep_transformer
 from fabricpc.utils.data import CharDataLoader, BpeDataLoader
 import optax
 import time
+from fabricpc import setup_jax
+
+setup_jax()
 
 # Tuned on Tiny Shakespeare, BPE tokenizer (50k-sequence subset, val PPL ~1133).
 # NOTE: severe overfitting on this small corpus (train PPL ~85 vs test ~721),

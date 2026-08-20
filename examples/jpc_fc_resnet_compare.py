@@ -88,10 +88,6 @@ factor (gain/sqrt(N*K)), bounding variance growth to (1+1/L)^L ~ e.
 
 """
 
-from jax_setup import set_jax_flags_before_importing_jax
-
-set_jax_flags_before_importing_jax()
-
 import argparse
 import math
 import time
@@ -114,7 +110,9 @@ from fabricpc.core.initializers import NormalInitializer, initialize
 from fabricpc.core.types import NodeParams
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
+from fabricpc import setup_jax
 
+setup_jax()
 jax.config.update("jax_default_prng_impl", "threefry2x32")
 
 

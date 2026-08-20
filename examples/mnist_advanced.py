@@ -14,10 +14,6 @@ Usage:
     FABRICPC_OPTIMIZER=ngd_diag PYTHONPATH=. python examples/mnist_advanced.py
 """
 
-from jax_setup import set_jax_flags_before_importing_jax
-
-set_jax_flags_before_importing_jax()
-
 import os
 import argparse
 import jax
@@ -39,7 +35,9 @@ from fabricpc.training.natural_gradients import (
     scale_by_natural_gradient_layerwise,
 )
 from fabricpc.utils.data.dataloader import MnistLoader
+from fabricpc import setup_jax
 
+setup_jax()
 jax.config.update("jax_default_prng_impl", "threefry2x32")
 
 # --- Network ---

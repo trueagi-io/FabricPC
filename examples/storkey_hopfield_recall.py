@@ -25,10 +25,6 @@ Usage:
     python examples/storkey_hopfield_recall.py --experiment mnist
 """
 
-from jax_setup import set_jax_flags_before_importing_jax
-
-set_jax_flags_before_importing_jax(jax_platforms="cpu")
-
 import argparse
 import numpy as np
 import jax
@@ -43,7 +39,9 @@ from fabricpc.graph_initialization.state_initializer import initialize_graph_sta
 from fabricpc.core.inference import InferenceSGD, run_inference
 from fabricpc.core.initializers import NormalInitializer
 from fabricpc.training import train_pcn
+from fabricpc import setup_jax
 
+setup_jax(platform="cpu")
 jax.config.update("jax_default_prng_impl", "threefry2x32")
 
 NOISE_LEVELS = [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]

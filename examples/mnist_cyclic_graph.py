@@ -25,10 +25,6 @@ Usage:
     python examples/mnist_cyclic_graph.py --verbose       # show per-epoch output
 """
 
-from jax_setup import set_jax_flags_before_importing_jax
-
-set_jax_flags_before_importing_jax()
-
 import jax
 import argparse
 
@@ -46,7 +42,9 @@ import optax
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.experiments import ExperimentArm, ABExperiment
 from fabricpc.utils.data.dataloader import MnistLoader
+from fabricpc import setup_jax
 
+setup_jax()
 jax.config.update("jax_default_prng_impl", "threefry2x32")
 
 # Training hyperparameters (shared by both arms)

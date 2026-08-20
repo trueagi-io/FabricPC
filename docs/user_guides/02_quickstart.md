@@ -15,10 +15,6 @@ Every FabricPC workflow follows this pattern:
 ## Complete MNIST Example
 
 ```python
-from jax_setup import set_jax_flags_before_importing_jax
-
-set_jax_flags_before_importing_jax(jax_platforms="cuda")
-
 import jax
 from fabricpc.nodes import Linear, IdentityNode
 from fabricpc.core.topology import Edge
@@ -31,7 +27,9 @@ from fabricpc.core.initializers import XavierInitializer
 import optax
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
+from fabricpc import setup_jax
 
+setup_jax()  # auto-detects the backend; pass platform="cuda" to require GPU
 jax.config.update("jax_default_prng_impl", "threefry2x32")
 
 # --- Step 1: Define Nodes ---

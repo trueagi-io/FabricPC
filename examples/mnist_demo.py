@@ -18,10 +18,6 @@ Test Accuracy: 98.14%
 4 nodes, 3 edges, 218,058 parameters
 """
 
-from jax_setup import set_jax_flags_before_importing_jax
-
-set_jax_flags_before_importing_jax()  # options: "cpu", "cuda", "tpu"
-
 import jax
 from fabricpc.nodes import Linear, IdentityNode
 from fabricpc.core.topology import Edge
@@ -35,7 +31,9 @@ import optax
 from fabricpc.training import train_pcn, evaluate_pcn
 from fabricpc.utils.data.dataloader import MnistLoader
 import time
+from fabricpc import setup_jax
 
+setup_jax()  # options: "cpu", "cuda", "tpu"
 jax.config.update("jax_default_prng_impl", "threefry2x32")
 
 # --- Network ---

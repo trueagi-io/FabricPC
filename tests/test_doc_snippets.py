@@ -21,7 +21,6 @@ non-blank line above its opening fence.
 
 import ast
 import inspect
-import sys
 from pathlib import Path
 
 import pytest
@@ -39,6 +38,7 @@ SKIP_MARKER = "<!-- doc-snippet: skip -->"
 TOLERATED_MISSING = {
     "aim",
     "kaleido",
+    "optuna",
     "pandas",
     "plotly",
     "scipy",
@@ -46,10 +46,6 @@ TOLERATED_MISSING = {
     "tensorflow_datasets",
     "tokenizers",
 }
-
-# Ensure repo-root modules used in snippets (e.g. jax_setup) are importable.
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
 
 
 def _skip_marker_precedes(lines, fence_idx):
