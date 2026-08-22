@@ -244,6 +244,14 @@ Decisions from review feedback (2026-08-21):
   plan's deliberate numerical changes (section B).
 - The callback context and checkpoint both carry `opt_state` and the step counter (finding 7,
   section A).
+- Eval metrics are pluggable (user decision, 2026-08-21): `evaluate(..., metrics=)` takes named
+  `EvalMetric` functions — per-sample `(value, weight)` computed in the jitted step, framework-owned
+  aggregation, a `finalize` transform for post-aggregation math like perplexity. Finding 4's
+  conditional key table survives as the graph-derived default (`default_metrics(structure,
+  algorithm)`), not the contract; its intent — no meaningless `cross_entropy` on non-CE outputs —
+  is unchanged. One adjustment to finding 4's letter: default `accuracy` stays unconditional,
+  because `mnist_conv_demo`/`jpc_fc_resnet_compare` score one-hot targets under `GaussianEnergy`
+  outputs.
 
 ### A. Checkpointing makes findings 1, 6, and 7 prerequisites
 
