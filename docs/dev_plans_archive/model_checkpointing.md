@@ -17,7 +17,7 @@ is design input only — its own `mnist_demo` comment documents that real resume
 against the old trainer ("cannot thread real optimizer momentum across the save/load boundary");
 its choices are harvested per the table below, not rebased.
 
-## Confirmed decisions
+## Decisions
 
 | Decision | Choice |
 |---|---|
@@ -77,9 +77,10 @@ def create_checkpoint_callback(directory, *,
                                ) -> Callable[[EpochContext], None]
     # An epoch_callback saving {params, opt_state, rng_key, epoch, step, metrics}
     # from the EpochContext through an ocp.CheckpointManager. Returns None (never
-    # replaces stored history). keep_best has no default metric_key: energy is not
-    # a performance metric (the tuner rationale), so the caller must name one —
-    # e.g. ("target_energy", "min"), or a val metric their own callback merged in.
+    # replaces stored history). keep_best has no default metric_key: energy is the
+    # optimization objective, not a performance metric, so the caller must name
+    # one — e.g. ("target_energy", "min"), or a val metric their own callback
+    # merged in.
 ```
 
 Exports: `save_checkpoint, load_checkpoint, Checkpoint` from `fabricpc`;
@@ -116,7 +117,7 @@ which is bitwise-equal to the uninterrupted run (fold_in stream + restored optim
 ## Alternatives considered
 
 - **Pickle-based checkpointing.** Trivial to write, no schema work. Rejected: silently
-  version-fragile across refactors and JAX versions; the abandoned branch already banned it.
+  version-fragile across refactors and JAX versions.
 - **The branch's flax-msgpack directory format (implemented, 21 tests).** Rejected: Orbax owns
   atomicity, integrity, async save, and sharded restore; keeping msgpack means hand-rolling a
   device gather for sharded params and leaves the declared `orbax-checkpoint` dependency unused.

@@ -1,9 +1,5 @@
 # Unified Trainer API — energy-framed PC/backprop trainer (fabricpc 0.5.0)
 
-Final revision. Incorporates the design review at `docs/dev_plans/unified_trainer_api_review.md`
-(findings 1–9, roadmap interactions A–D, amendments 1–13). The review is the record of rejected
-alternatives and their evidence; this file is the executable plan.
-
 ## Context
 
 The repo carries four training harnesses with duplicated code and divergent contracts:
@@ -15,10 +11,7 @@ the energy sum open-coded 8×, four structurally identical epoch loops, plus a f
 Signatures diverge in argument order, step-return arity (3/4/5-tuples), callback kwargs, config
 keys, and eval result keys.
 
-This plan replaces all four with one API. The work-in-progress branches
-(`feature/unified-trainer`, `feature/model-checkpointing`, `feature/total-graph-energy`) predate
-this planning cycle, were not executed against a reviewed plan, and are abandoned after this PR
-ships; they are design input only. Core semantic positions:
+This plan replaces all four with one API. Core semantic positions:
 
 1. **Backprop is framed in energy, not loss.** Both algorithms clamp identically during training
    (input and target). The backprop objective is the energy of the clamped nodes — the negative log
@@ -29,16 +22,19 @@ ships; they are design input only. Core semantic positions:
 2. **The clamping mechanism is shared and graph-derived.** One `build_clamps` builds the same clamp
    dict for both algorithms; one-hot conversion is derived from the target dtype and the causal
    mask from the `TaskMap`, so no caller mode flag exists. There is no `autoregressive` parameter
-   anywhere: the plan's own derivation logic left it with zero behavioral effect, and it is deleted.
-3. **Training is resumable at the top level.** `train` accepts and returns optimizer state and a
+   anywhere: with the mask graph-derived and the one-hot dtype-derived, the flag has zero
+   behavioral effect, so the in-progress `unified_trainer.py`'s parameter is not carried over.
+3. **Training is resumable at the top level.** Every legacy harness creates optimizer state
+   internally and discards it, so a second `train` call on the returned params silently resets
+   Adam moments and any optax schedule's count. `train` accepts and returns optimizer state and a
    step counter; the epoch callback receives them. This is the prerequisite for the Q3
-   checkpointing follow-up (`docs/dev_plans/model_checkpointing.md`).
+   checkpointing follow-up (`docs/dev_plans_archive/model_checkpointing.md`).
 4. **Multi-device runs on jit + `NamedSharding`, not pmap.** FabricPC's stated scope is training
    large transformer models with data and model sharding; pmap is JAX's legacy single-axis API and
    cannot express model parallelism. Mesh axis names are fixed now: `"data"` (used) and `"model"`
    (reserved).
 
-## Confirmed decisions
+## Decisions
 
 | Decision | Choice |
 |---|---|
@@ -49,11 +45,11 @@ ships; they are design input only. Core semantic positions:
 | Device parallelism | jit + `NamedSharding` over an optional `mesh` (axis `"data"`; `"model"` reserved). Absent mesh = single device, same jitted step. `pmap`, `pmap_single_device`, and the four `device_utils` helpers are deleted, not ported. |
 | RNG stream | `fold_in(base_key, epoch_idx)` → `fold_in(epoch_key, batch_idx)`. The key is consumed only by latent initialization; inference is deterministic. Bitwise spot-check against the legacy split-chain stream runs **before** the switch (implementation step 3). |
 | Callback contract | `epoch_callback(ctx: EpochContext)` with `EpochContext(epoch_idx, step, params, opt_state, structure, config, rng_key, metrics)`; `iter_callback(epoch_idx, batch_idx, metrics)`. Callback exceptions propagate (guaranteed and tested — tuner pruning depends on it). A non-None return replaces the stored history entry. |
-| Eval metrics | Pluggable: `evaluate(..., metrics=None)` takes a dict of named metric functions (per-sample `(value, weight)` contract with a `finalize` transform — design below); `None` selects graph-derived defaults from `default_metrics(structure, algorithm)`: `target_energy` and `accuracy` always, `cross_entropy`/`perplexity` when the target functional is `CrossEntropyEnergy`, `energy` for PC. `argmax` on `axis=-1`. No-target graphs raise under the defaults. |
+| Eval metrics | Pluggable: `evaluate(..., metrics=None)` takes a dict of named metric functions (per-sample `(value, weight)` contract with a `finalize` transform — design below); `None` selects graph-derived defaults from `default_metrics(structure, algorithm)`: `target_energy` and `accuracy` always, `cross_entropy`/`perplexity` when the target functional is `CrossEntropyEnergy`, `energy` for PC. `argmax` on `axis=-1` (the legacy hard-coded `axis=1`, `train.py:532-533`, mis-reduces rank>2 outputs). No-target graphs raise under the defaults. |
 | Metrics materialization | Device scalars inside the loop; converted to floats at epoch boundaries. A supplied `iter_callback` (or tqdm postfix under `verbose`) forces the per-batch sync and is documented as doing so. |
 | Tuner pruning signal | Train perplexity `exp(metrics["target_energy"])` — free, since the clamped target node's energy under `CrossEntropyEnergy` is the teacher-forced cross-entropy. Energy is not a performance metric. |
 | Dependencies | `flax` dropped from `pyproject.toml` (nothing imports it; the checkpointing follow-up uses Orbax). |
-| Parity gate | Bitwise for `mnist_demo` PC (before the RNG-stream switch), then permanent in-test 1e-12 references. Transformer demos are smoke-only; reproduction of pre-unification transformer results is disregarded (the plan deliberately changes those numbers). |
+| Parity gate | Bitwise for `mnist_demo` PC (before the RNG-stream switch), then permanent in-test 1e-12 references. Transformer demos are smoke-only; reproduction of pre-unification transformer results is disregarded (this plan deliberately changes those numbers). |
 
 ## Design
 
@@ -346,11 +342,10 @@ carries no such requirement.
 | `perplexity` | target functional is `CrossEntropyEnergy` | `exp(cross_entropy)`. |
 | `energy` | `algorithm="pc"` | per-sample `graph_energy` over internal (`in_degree>0`) nodes — the same definition as the training objective. The legacy all-node eval sum differed only by `E(z,z)` terms on terminal nodes (zero under `GaussianEnergy`); CHANGELOG flag. |
 
-`accuracy` stays unconditional (deviation from the review's strict rule, recorded there as finding
-4): `mnist_conv_demo.py` and `jpc_fc_resnet_compare.py` legitimately score one-hot class targets
-under `GaussianEnergy` outputs, so keying `accuracy` on the functional would break them. The
-review's intent — no meaningless `cross_entropy` on non-CE outputs — is preserved by the
-conditional CE/perplexity keys. The functional check is `isinstance(node_info.energy,
+`accuracy` stays unconditional: `mnist_conv_demo.py` and `jpc_fc_resnet_compare.py` legitimately
+score one-hot class targets under `GaussianEnergy` outputs, so keying `accuracy` on the functional
+would break them. `cross_entropy` and `perplexity` stay conditional so no meaningless
+cross-entropy is reported on non-CE outputs. The functional check is `isinstance(node_info.energy,
 CrossEntropyEnergy)`, free at trace time (`GraphStructure` is static aux; the idiom is already
 tested at `test_energy.py:177-178`).
 
@@ -381,16 +376,13 @@ dropped.
 - `utils/dashboarding/callbacks.py`: the four factories take the new contracts
   (`create_epoch_callback`'s eval-and-return behavior is exactly the return-replaces-history rule);
   `create_detailed_iter_callback` remains custom-loop-only on `make_train_step`'s `final_state`.
-- `utils/dashboarding/extractors.py`: energy extraction points at `graph_energy` (call site the
-  earlier draft omitted; found via `feature/total-graph-energy`).
+- `utils/dashboarding/extractors.py`: energy extraction points at `graph_energy`.
 - `utils/dashboarding/inference_tracking.py:train_step_with_history`: same signature, body rebuilt
   on `build_clamps` → `initialize_graph_state` → `run_inference_with_history` → `graph_energy` →
   `compute_local_weight_gradients` → optax. Its energy becomes internal-only and per-sample
   (was all-node, unnormalized) — CHANGELOG flag. Deletes the fifth duplicate step and the TODO.
 
 ## Alternatives considered
-
-Carried from the original plan (rejections stand):
 
 - **Trainer class vs module functions.** A `Trainer(structure, optimizer, ...)` object would cache
   jitted steps across calls. Rejected: the codebase is uniformly functional-JAX, the
@@ -413,40 +405,49 @@ Carried from the original plan (rejections stand):
 - **Tuner pruning on validation perplexity** — objective-aligned but costs one eval pass per epoch;
   train perplexity is free from `metrics["target_energy"]`.
 
-Added by the review (see `unified_trainer_api_review.md` for evidence):
-
-- **3-tuple return, opt_state internal (status quo).** Rejected: non-resumable training; the
-  checkpointing branch's own demo documents the wall ("cannot thread real optimizer momentum
-  across the save/load boundary"); the clean break is the cheapest moment to fix the arity drift.
-- **`jax.pmap` (status quo) or keep-pmap-private.** Rejected: legacy single-axis API; cannot
-  express the stated model-sharding scope; carries `pmap_single_device`, four device utilities,
-  replicated-params callback ambiguity, and three ragged-batch policies.
-- **`autoregressive` parameter (in-progress branch).** Rejected: zero training-side effect once
-  mask and one-hot are graph-/dtype-derived; survives only as an eval reporting switch replaced by
-  the functional check. The keep-as-assertion variant was rejected too — the plan deletes exactly
-  such an assertion (`_require_causal_mask_node`) as a defect.
-- **Unconditional `cross_entropy` in evaluate (legacy/original plan).** Rejected: finite-but-
-  meaningless numbers on `GaussianEnergy` outputs (`clip(μ,1e-7,1)` on a linear `z_mu`).
-- **`accuracy` keyed on the CE functional (review's strict rule).** Rejected in favor of
-  unconditional default accuracy: `mnist_conv_demo`/`jpc_fc_resnet_compare` score one-hot targets
-  under `GaussianEnergy` outputs.
-- **Fixed eval key set (previous revision of this plan).** Rejected per user feedback:
-  classification needs accuracy, transformers perplexity, and users report cross-entropy or their
-  own quantities — a closed set forces forking `evaluate`. The conditional key table survives as
-  the graph-derived *default*, not the contract.
-- **Single `metric_fn`/`metric_name` (in-progress branch's extensibility).** Rejected: one metric
-  at a time, per-batch-mean aggregation that mis-weights ragged batches and per-token metrics, and
-  no post-aggregation transform (a mean of per-batch `exp`s is not perplexity). The
-  `EvalMetric` `(value, weight)` + `finalize` contract replaces it.
-- **Per-batch float materialization (legacy/original plan).** Rejected: each `float()` blocks the
+- **3-tuple return, opt_state internal (the legacy contract).** Rejected: non-resumable training —
+  every legacy loop creates and discards optimizer state (`train.py:344`, `unified_trainer.py:579`),
+  and the abandoned `feature/model-checkpointing` branch's `mnist_demo` comment documents the wall
+  ("cannot thread real optimizer momentum across the save/load boundary"). The clean break is the
+  cheapest moment to fix the 3/4/5-tuple arity drift.
+- **`jax.pmap`, public or kept private.** Rejected: since JAX 0.4 the recommended data-parallel
+  mechanism is jit over a `Mesh` with `NamedSharding` (the repo floor is jax>=0.7,
+  `pyproject.toml:34`); pmap is single-axis and cannot express the stated model-sharding scope; it
+  carries `pmap_single_device`, four `device_utils` helpers, per-device replicated params that the
+  legacy loop de-replicates before `epoch_callback` (`train.py:455`), and three divergent
+  ragged-batch policies (skip-with-warning in training `train.py:412-421`, zero-pad in
+  `evaluate_pcn` `:611-621`, silent drop in `evaluate_transformer` `:761-762`).
+- **`autoregressive` parameter (the in-progress `unified_trainer.py` signature).** Rejected: zero
+  training-side effect once mask and one-hot are graph-/dtype-derived — the only `causal_mask`
+  task keys in the repo are `transformer_demo.py:216` and `test_state_initializer.py:253`, both
+  v1 AR; it survives only as an eval reporting switch, replaced by the functional check. Keeping
+  it as a graph-shape assertion was rejected too — this plan deletes exactly such an assertion
+  (`_require_causal_mask_node`, `unified_trainer.py:89-99`) as a defect.
+- **Unconditional `cross_entropy` in evaluate (legacy behavior).** Rejected: finite-but-
+  meaningless numbers on `GaussianEnergy` outputs — `-Σ y·log(clip(μ,1e-7,1))` on a linear `z_mu`
+  clips negative activations to 1e-7 and activations ≥1 to 1 (the `jpc_fc_resnet_compare.py`
+  graphs).
+- **`accuracy` keyed on the CE functional** (the strict mirror of the conditional CE/perplexity
+  rule). Rejected in favor of unconditional default accuracy: `mnist_conv_demo`/
+  `jpc_fc_resnet_compare` score one-hot targets under `GaussianEnergy` outputs.
+- **Fixed eval key set.** Rejected: classification needs accuracy, transformers perplexity, and
+  users report cross-entropy or their own quantities — a closed set forces forking `evaluate`.
+  The conditional key table survives as the graph-derived *default*, not the contract.
+- **Single `metric_fn`/`metric_name` (the in-progress `unified_trainer.py` extensibility).**
+  Rejected: one metric at a time, per-batch-mean aggregation that mis-weights ragged batches and
+  per-token metrics, and no post-aggregation transform (a mean of per-batch `exp`s is not
+  perplexity). The `EvalMetric` `(value, weight)` + `finalize` contract replaces it.
+- **Per-batch float materialization (legacy behavior).** Rejected: each `float()` blocks the
   device stream and forfeits async dispatch; `train_autoregressive.py:337-344` already demonstrated
   the deferred pattern.
-- **Legacy `split(epoch_key, max_batches)` stream.** Rejected after the bitwise spot-check:
-  couples keys to loader length and makes resume-at-epoch-k require replaying k splits; `fold_in`
-  makes the stream a pure function of `(base_key, epoch_idx, batch_idx)`.
-- **Six-positional epoch callback (original plan).** Rejected: cannot grow without breaking every
-  implementor, and the checkpointing hook needs `opt_state` + `step`, which the positional list
-  lacked.
+- **Legacy `split(epoch_key, max_batches)` stream** (`train.py:401`). Rejected: couples keys to
+  loader length, and resume at epoch k requires replaying k splits; `fold_in` makes the stream a
+  pure function of `(base_key, epoch_idx, batch_idx)`. The legacy stream is retained only through
+  the one-off bitwise spot-check (implementation step 3).
+- **Six-positional epoch callback** (`epoch_callback(epoch_idx, params, structure, config,
+  rng_key, metrics)`). Rejected: a positional contract cannot grow without breaking every
+  implementor — the tuner, the main consumer, uses one of the six (`bayesian_tuner.py:114-121`) —
+  and the checkpointing hook needs `opt_state` + `step`, which the positional list lacks.
 
 ## Open / deferred
 
@@ -457,7 +458,7 @@ Added by the review (see `unified_trainer_api_review.md` for evidence):
 - An `IterContext` for `iter_callback` — deferred until a consumer needs more than
   `(epoch_idx, batch_idx, metrics)`.
 - keep-best-K metric selection — belongs to the checkpointing PR
-  (`docs/dev_plans/model_checkpointing.md`).
+  (`docs/dev_plans_archive/model_checkpointing.md`).
 
 ## File changes
 
@@ -622,7 +623,7 @@ XLA_FLAGS=--xla_force_host_platform_device_count=2 JAX_PLATFORMS=cpu \
   test is the gate.
 - AR-backprop learning rates need retuning (×seq_len objective scale) — CHANGELOG.
 - Transformer eval numbers shift (double-softmax and external-SSE fixes) — correct, but flag;
-  reproduction of pre-unification transformer results is explicitly out of scope (review decision).
+  reproduction of pre-unification transformer results is explicitly out of scope.
 - `evaluate` now clamps all non-target task keys (legacy clamped only `x`); no current caller has
   multi-input eval batches — CHANGELOG line.
 - `TrainResult` breaks every `p, _, _ = train(...)` unpack loudly (5 fields) — intended; the
