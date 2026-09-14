@@ -97,8 +97,7 @@ the starting gradient. A one-eigenvalue fit of the cells gives lambda_eff = 12
 (scripts/epc_analysis.py --resnet18). The fit lands near lambda_max because
 the accuracy follows the top modes' relaxation (f_max), while most of the
 gradient weight sits near the precision floor (f_bar = 0.01 at the defaults):
-the excited band is not compact
-(docs/reports/epc_regime_and_stability_report.md, Section 5.8).
+the excited band is not compact.
 The eta = 0.1 arms that collapsed at T <= 3 sit at eta*lambda_max = 1.6: at
 T = 1 the output residual after the step is (1 - eta*(lambda_max - 1))*r along
 the top mode, so the output layer's weight gradient had reversed sign there

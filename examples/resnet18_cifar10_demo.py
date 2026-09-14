@@ -153,8 +153,7 @@ lambda_max), not weight-norm control.
 In both collapses the reversal flag fired one probe before the stability
 crossing, and f_bar had crossed 0.1 two to three epochs before the reversal
 while accuracy was still improving, so f_bar is the early warning to read off
-the CSV. Per-epoch tables and the mechanism:
-docs/reports/epc_regime_and_stability_report.md, Sections 5.8 and 5.9.
+the CSV.
 
 Smoke Test (2 epochs; eta_infer 3e-4, infer_steps 5)
 python examples/resnet18_cifar10_demo.py --inference epc

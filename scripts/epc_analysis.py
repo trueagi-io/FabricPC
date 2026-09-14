@@ -12,8 +12,7 @@ quantities where an exact answer exists (linear networks, through
 ``examples/resnet18_cifar10_demo.py`` (through Hessian-vector products of
 ``EPCInference.error_energy`` and the Lanczos estimator
 ``fabricpc.core.epsilon_spectrum``), and it renders the training-time regime
-probe. The measurements and their interpretation are collected in
-``docs/reports/epc_regime_and_stability_report.md``.
+probe.
 
 Usage
 -----
@@ -120,10 +119,10 @@ Recorded data
 -------------
 
 ``SWEEP_ACC`` and ``HUNDRED_EPOCH`` below are hard-coded results of earlier
-ResNet-18 runs: the 2-epoch accuracy sweep over (eta, T) (mean of five trials;
-full tables in the report's Appendix A) and the six 100-epoch runs
-(``sweep_eta*_steps*.log`` in the project root, not committed). Both predate
-release 0.5.1's per-prediction gradient normalization.
+ResNet-18 runs: the 2-epoch accuracy sweep over (eta, T) (mean of five
+trials) and the six 100-epoch runs (``sweep_eta*_steps*.log`` in the project
+root, not committed). Both predate release 0.5.1's per-prediction gradient
+normalization.
 """
 
 from __future__ import annotations
