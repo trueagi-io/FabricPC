@@ -6,7 +6,9 @@ Revision 2026-09-08 (a). The branch was rebased onto release 0.5.1, which shippe
 
 Revision 2026-09-08 (b), after the second review round recorded in `docs/dev_plans_archive/epc_inference_solver.md` (Sections 3.4 and 4, and its Record). The power-iteration estimator is replaced by the Lanczos estimator `fabricpc.core.epsilon_spectrum` (both excited extremes, the gradient weight per Ritz mode, Ritz residuals); `regime_label` by `EPCInference.regime(spectrum) -> Regime` (band on the gradient-weighted relaxed fraction f̄, output-gradient reversal flag, indefiniteness by weight and growth); the analysis script's tracking loop by `fabricpc.training.RegimeProbe` inside `train`. Sections 2.4, 2.5, 5.2, 5.7, and 5.8 are amended in place; Sections 5.9 to 5.11 are new. Numbers from the replaced estimator are marked as such where they remain.
 
-Revision 2026-09-14. Section 2.3 (the Hessian in error coordinates) is new and written for H_ε and H_z in the report's symbols; the former Sections 2.3 and 2.4 are now 2.4 and 2.5 and their cross-references are updated; Section 2.4 gains the T-step error formula and the κ·ln(1/tol) step count, which corrects the depth-20 step count in Section 6.1; the Symbols table gains rows for the chain symbols, the equilibrium values, M and B, δ and u_k, κ, and d_y, and separates the Lanczos and oracle meanings of λ_min.
+Revision 2026-09-14 (a). Section 2.3 (the Hessian in error coordinates) is new and written for H_ε and H_z in the report's symbols; the former Sections 2.3 and 2.4 are now 2.4 and 2.5 and their cross-references are updated; Section 2.4 gains the T-step error formula and the κ·ln(1/tol) step count, which corrects the depth-20 step count in Section 6.1; the Symbols table gains rows for the chain symbols, the equilibrium values, M and B, δ and u_k, κ, and d_y, and separates the Lanczos and oracle meanings of λ_min.
+
+Revision 2026-09-14 (b), after a review of Section 2.3. The identity H_ε = MᵀH_zM is restricted to linear graphs and stationary points and the general chain-rule form with its correction term is given; the unclamped-source floor claim gains its two conditions and a counterexample; the growth on a negative mode is attributed to the displacement from the saddle, not to the error; the per-node decomposition is verified on the nonlinear fixture of Section 5.3, which gains a table and a test; the Symbols rows for H_ε and M and the Section 5.1 floor row are amended.
 
 ## 1. Summary
 
@@ -42,7 +44,7 @@ A FabricPC graph has nodes t with latent activity z_t (one row per sample) and a
 
     E = Σ_t ½ · p_t · ‖z_t − μ_t‖²,     ε_t = z_t − μ_t,
 
-with p_t the node's Gaussian precision (1.0 unless set). Training clamps the input node to the data and the output node to the target, minimizes E over the remaining latents (inference), then updates each weight from its own node's error and inputs. The two solvers minimize the same E in two coordinate systems. sPC moves z_t down ∂E/∂z_t, and because each node's gradient involves only its neighbors, information travels one edge per step. ePC treats the errors ε_t as the variables: the latents are derived along the topological order as z_t = μ_t + ε_t, so a change in one ε moves every downstream latent, and one reverse pass gives ∂E/∂ε for all nodes at once. The two parameterizations are related by a triangular bijection with unit determinant, so they share minima (Goemaere et al. 2026, Appendix C).
+with p_t the node's Gaussian precision (1.0 unless set). Training clamps the input node to the data and the output node to the target, minimizes E over the remaining latents (inference), then updates each weight from its own node's error and inputs. The two solvers minimize the same E in two coordinate systems. sPC moves z_t down ∂E/∂z_t, and because each node's gradient involves only its neighbors, information travels one edge per step. ePC treats the errors ε_t as the variables: the latents are derived along the topological order as z_t = μ_t + ε_t, so a change in one ε moves every downstream latent, and one reverse pass gives ∂E/∂ε for all nodes at once. The two parameterizations are related by a triangular bijection with unit determinant (Goemaere et al. 2026, Appendix C): the bijection makes stationary points and their types correspond, and the unit determinant makes exp(−E) the density in either coordinate system (Section 2.3).
 
 ### 2.2 Why a linear network gives an exact answer
 
@@ -62,11 +64,23 @@ S is the identity plus the summed leverage of the hidden layers over the output.
 
 ### 2.3 The Hessian in error coordinates: modes, gradient weights, and sign
 
-**The quadratic model at the feedforward point.** ePC's free variables are the errors ε_t of every unclamped node, stacked into one vector ε; a clamped node's error is derived from its prediction, ε_t = clamp − μ_t(ε). The latents follow from the errors along the topological order, z_free = M ε + const, where B is the strictly lower-triangular map that carries each free latent into the predictions downstream of it and M = (I − B)⁻¹; every edge runs forward in the node order, so B is strictly lower-triangular, det M = 1, and the two coordinate systems share their minima (Section 2.1). The Hessian of E in error coordinates and the second-order expansion of E around the feedforward point ε = 0 are, per sample,
+**The quadratic model at the feedforward point.** ePC's free variables are the errors ε_t of every unclamped node, stacked into one vector ε; a clamped node's error is derived from its prediction, ε_t = clamp − μ_t(ε). The latents follow from the errors along the topological order, z_t = μ_t(z_upstream) + ε_t, so the map ε → z_free is a bijection whose Jacobian M = ∂z_free/∂ε is unit lower-triangular: every edge runs forward in the node order and ∂z_t/∂ε_t = I. Hence det M = 1 at every ε, on nonlinear graphs included (Goemaere et al. 2026, Appendix C). On a linear graph the map is affine, z_free = M ε + const with M = (I − B)⁻¹ and B the strictly lower-triangular map that carries each free latent into the predictions downstream of it. The second-order expansion of E around the feedforward point ε = 0 is, per sample,
 
-    H_ε = ∇²_ε E = Mᵀ H_z M,     E(ε) = E(0) + g0ᵀ ε + ½ εᵀ H_ε ε,
+    E(ε) = E(0) + g0ᵀ ε + ½ εᵀ H_ε ε,     g0 = ∇_ε E at ε = 0,     H_ε = ∇²_ε E,
 
-with H_z = AᵀA the Hessian in latent coordinates, the curvature sPC descends, and g0 = ∇_ε E at ε = 0. On a linear graph E is a quadratic and the expansion is exact. On a nonlinear graph it is the local quadratic model at the feedforward point on one batch, and every `Regime` flag is a statement about that model. Up to a constant, exp(−E) is the joint density of the latents given the weights under the node energies (Gaussian at each node with in-degree > 0 that uses the Gaussian energy, categorical at a cross-entropy output, flat on an unclamped source), so H_ε is the model's curvature as well as the solver's.
+exact on a linear graph, where E is a quadratic, and on a nonlinear graph the local quadratic model at the feedforward point on one batch; every `Regime` flag is a statement about that model. Definitions used below: a symmetric matrix is positive semidefinite when δᵀ H δ ≥ 0 for every δ, equivalently when no eigenvalue is negative; positive definite when the inequalities are strict, which makes it invertible; indefinite when eigenvalues of both signs occur.
+
+The Hessians of the two solvers are related by the chain rule for the composition E(z(ε)):
+
+    H_ε = Mᵀ H_z M + Σ_i (∂E/∂z_i) ∇²_ε z_i,
+
+with H_z = ∇²_z E the Hessian in latent coordinates, the curvature sPC descends, and i running over the components of z_free. The second term vanishes in two cases: on a linear graph, where z is affine in ε so ∇²_ε z_i = 0 and H_ε = Mᵀ AᵀA M; and at any stationary point, where ∇_z E = 0. At the feedforward point on a nonlinear graph it is nonzero, because ∇_z E there is the inference gradient. Three consequences follow.
+
+- At a stationary point H_ε = Mᵀ H_z M, and Sylvester's law of inertia says two matrices related by an invertible congruence have the same numbers of positive, zero, and negative eigenvalues. A minimum in one coordinate system is a minimum in the other and a saddle a saddle. This is the content of "stationary points correspond" in Section 2.1, and it needs only that M is invertible.
+- At ε = 0 the two Hessians are not congruent, so their signatures can differ. On the tanh MLP of Section 5.3 at weight std 3.0, H_z has λ_min = +0.76 while H_ε has λ_min = −136 (the decomposition table in Section 5.3). The indefiniteness of Section 5.8 is a property of the error parameterization at a non-stationary point, not of the energy landscape around its minimum.
+- H_z is benign at ε = 0 because node t's prediction depends only on its parents' latents, so in latent coordinates the second-derivative term of node t's energy is weighted by t's own error ε_t, which is zero for every free node at the feedforward point. Only the clamped output's residual r weights a second derivative, and for an identity-activation Gaussian output ∇²_z μ_y = 0, so H_z at ε = 0 is the Gauss–Newton form exactly. In error coordinates μ_y(ε) composes every upstream nonlinearity, and r weights the second derivative of the whole chain.
+
+Up to a constant, exp(−E) is the joint density of the latents given the weights under the node energies (Gaussian at each node with in-degree > 0 that uses the Gaussian energy, categorical at a cross-entropy output, flat on an unclamped source). The density of ε is the density of z times |det ∂z/∂ε| = 1, so −log p(ε) = E(ε) with no Jacobian term, and H_ε is the model's curvature in error coordinates as well as the solver's. A reparameterization with a non-constant Jacobian determinant would add ∇²_ε log|det ∂z/∂ε| to the Hessian of the negative log density; this is what det M = 1 buys.
 
 **Modes and contraction.** H_ε is symmetric, so it has real eigenvalues λ_k with an orthonormal eigenbasis q_k:
 
@@ -76,23 +90,45 @@ Where H_ε is invertible the quadratic model has one stationary point, ε* = −
 
     u_k ← (1 − η λ_k) u_k.
 
-At ε = 0 the displacement is δ = −ε* = H_ε⁻¹ g0, so u_k = q_kᵀ g0 / λ_k: a mode orthogonal to the starting gradient begins at its equilibrium and never moves. The fraction of ‖g0‖² on mode k, summed over the batch because H_ε is block-diagonal over samples,
+At ε = 0 the displacement is δ = −ε* = H_ε⁻¹ g0, so u_k = q_kᵀ g0 / λ_k: a mode orthogonal to the starting gradient begins at its equilibrium and never moves. The fraction of ‖g0‖² on mode k,
 
     w_k = (q_kᵀ g0)² / ‖g0‖²,     Σ_k w_k = 1,
 
-is the gradient weight of Section 2.5. It weights a mode by the gradient it carries, not by its distance to equilibrium, which is (q_kᵀ g0)² / λ_k². Every positive mode contracts when η < 2/λ_max; a negative mode grows at every η. Section 2.4 tabulates one step by η·λ and gives the error after T steps.
+is the gradient weight of Section 2.5. `error_energy` sums the per-sample energies, so the batch Hessian is block-diagonal over samples; on a linear graph the blocks are equal, each eigenvalue has multiplicity equal to the batch size, and w_k sums the squared overlaps over the samples (the oracle's `gradient_weights`). On a nonlinear graph the blocks differ per sample and mode k is a Ritz mode of the batch Hessian. The weight ranks a mode by the gradient it carries, not by its distance to equilibrium, which is (q_kᵀ g0)² / λ_k². Every positive mode contracts when η < 2/λ_max. A negative mode has |1 − ηλ_k| = 1 + η|λ_k| > 1 at every η: the error ε starts at zero, the displacement u_k = q_kᵀ g0 / λ_k does not, and |u_k| grows by that factor per step. In the quadratic model this growth is descent along a direction with no minimum, not the divergence of the η·λ_max > 2 case; the true energy is bounded below by zero, so the model stops describing the mode once it has moved by order one. (1 + η|λ_min|)^T over T steps is `Regime.growth_min`, a bound on how far the quadratic model can be trusted over the T steps, and Σ_{λ_k < 0} w_k is `Regime.negative_weight`. Section 2.4 tabulates one step by η·λ and gives the error after T steps.
 
-**Structure and sign.** Each free node with in-degree > 0 contributes p_t times the identity on its own block, because its error is a coordinate; an unclamped source owns no energy term and contributes no block. Each clamped node t with in-degree > 0 contributes the Hessian of its energy E_t through its prediction μ_t(ε):
+**Structure and sign.** The energy splits by node type:
 
-    ∇²_ε E_t = J_tᵀ (∇²_μ E_t) J_t + Σ_i (∂E_t/∂μ_{t,i}) ∇²_ε μ_{t,i},     J_t = ∂μ_t/∂ε,
+    E = Σ_{free t, in-degree > 0} ½ p_t ‖ε_t‖²  +  Σ_{clamped t, in-degree > 0} E_t(μ_t(ε)).
 
-a Gauss–Newton term, positive semidefinite because the node energy is convex in its prediction, plus the energy's gradient with respect to the prediction contracted with the prediction's second derivative over the components i of node t, the only term with no definite sign. For a Gaussian node ∂E_t/∂μ_{t,i} = −p_t ε_{t,i}, so the second term is −p_t Σ_i ε_{t,i} ∇²_ε μ_{t,i}; at ε = 0 the output's ε_y is the residual r of Section 2.2. On a linear graph the second derivative is zero and
+A free node's error is a coordinate, so its energy is quadratic in ε exactly, on every graph; an unclamped source owns no energy term. Every nonlinearity in the graph therefore enters H_ε through the clamped nodes' predictions μ_t(ε), and the decomposition
 
-    H_ε = diag(p) + Σ_{clamped t} p_t J_tᵀ J_t,
+    H_ε = diag(p) + Σ_{clamped t} [ J_tᵀ (∇²_μ E_t) J_t + Σ_i (∂E_t/∂μ_{t,i}) ∇²_ε μ_{t,i} ],     J_t = ∂μ_t/∂ε,
 
-with diag(p) the precisions of the free nodes that own an energy term and zero on unclamped sources. When every source is clamped, H_ε is positive definite and every eigenvalue is at least the smallest precision (Section 5.1): the equilibrium is the unique minimum and there are no flat directions. A direction confined to one free node s that no clamped prediction depends on is an eigenvector with eigenvalue exactly p_s; with uniform precision the whole common null space of the J_t sits at that value. These are the floor modes of Section 2.4, which g0 never excites on a chain. An unclamped source puts λ_min(H_ε) below the floor, and at zero when the source has directions no clamp sees. On a nonlinear graph the gradient-weighted second-derivative term can make H_ε indefinite at ε = 0: on the gelu + cross-entropy ResNet-18 at init, λ_min = −0.42 with 1.2% of the gradient weight on negative curvature (Section 5.8). A mode with λ_k < 0 grows by (1 + η|λ_k|) per step instead of contracting, starting from zero error; (1 + η|λ_min|)^T over T steps is `Regime.growth_min` and Σ_{λ_k < 0} w_k is `Regime.negative_weight`. A symmetric matrix is positive semidefinite when δᵀ H δ ≥ 0 for every δ, equivalently when no eigenvalue is negative; positive definite when the inequalities are strict, which makes it invertible; indefinite when eigenvalues of both signs occur.
+is exact on every DAG, with diag(p) the precisions of the free nodes that own an energy term and zero on unclamped sources, and i running over the components of node t. Inside the bracket the first term is Gauss–Newton and positive semidefinite because each node energy is convex in its prediction; the second contracts the energy's gradient in the prediction with the prediction's second derivative and is the only term with no definite sign. For a Gaussian node ∂E_t/∂μ_{t,i} = −p_t ε_{t,i} and ∇²_μ E_t = p_t I; at ε = 0 the output's ε_y is the residual r of Section 2.2. For FabricPC's cross-entropy node the prediction μ_y is the softmax probability vector and E_y = −Σ_i y_i log μ_{y,i}, so ∂E_y/∂μ_{y,i} = −y_i/μ_{y,i} and ∇²_μ E_y = diag(y_i/μ_{y,i}²). Section 5.3 verifies the decomposition to 1e-14 on the tanh MLP with both output types.
 
-**Statistical reading.** On a linear graph with every source clamped, exp(−E) is a Gaussian density in the free latents, so the free latents given the clamps have mean z* and covariance H_z⁻¹, and the errors, an invertible affine image of the latents, have mean ε* and covariance H_ε⁻¹. The eigenvalues are posterior precisions: along a floor mode the clamps add nothing and the precision is the node's own p_s. On a nonlinear graph exp(−E) is still the unnormalized posterior density but no longer Gaussian; the Gaussian with covariance H_ε⁻¹ at ε* is its Laplace approximation and needs H_ε positive definite there. The spectrum this report measures is at ε = 0, not at ε*, so it carries no covariance meaning on the ResNet-18.
+*Sign.* When every source is clamped, diag(p) ⪰ p_min I with p_min the smallest precision, and the Gauss–Newton sum is positive semidefinite, so by Weyl's inequality
+
+    λ_min(H_ε) ≥ p_min + λ_min(second-derivative term).
+
+Indefiniteness needs the residual-weighted second derivative to beat the precision floor. λ_min = −0.42 on the gelu + cross-entropy ResNet-18 at init, with 1.2% of the gradient weight on negative curvature (Section 5.8), means that term has an eigenvalue at or below −1.42. On the tanh MLP the term reaches −0.43 at weight std 1.5, so H_ε stays positive definite there with λ_min = 0.82, already under the floor, and −169 at std 3.0, where λ_min(H_ε) = −136 (Section 5.3). On a nonlinear graph p_min bounds nothing: H_ε can sit below it while positive definite.
+
+*Linear graphs.* The second derivative is zero and
+
+    H_ε = diag(p) + Σ_{clamped t} p_t J_tᵀ J_t = Mᵀ AᵀA M
+
+(Section 5.1 checks both forms). When every source is clamped, every eigenvalue is at least p_min: the equilibrium is the unique minimum and there are no flat directions.
+
+*Floor modes.* A direction e confined to one free node s that no clamped prediction depends on satisfies J_t e = 0 for every clamped t, so H_ε e = p_s e: an eigenvector with eigenvalue exactly p_s. With uniform precision the whole common null space of the J_t sits at that value. These are the floor modes of Section 2.4, and g0 never excites them on any DAG: g0 = Σ_{clamped t} J_tᵀ ∂E_t/∂μ_t lies in the row space of the stacked J_t; the per-node null directions span a subspace that diag(p) preserves and the Gauss–Newton sum annihilates, so that subspace is invariant under H_ε, its orthogonal complement is invariant too, and the trajectory from g0 stays in the complement.
+
+*Unclamped sources.* An unclamped source s has no diagonal block. When every child h of s is a free node with an energy term and the children share one precision p, λ_min(H_ε) < p. Proof: perturb the source by e_s and set each child's error to e_h = −(∂μ_h/∂z_s) e_s, so every child's latent is unchanged, nothing downstream moves, and J_t e = 0 for every clamped t; then eᵀ H_ε e = p Σ_h ‖e_h‖² against ‖e‖² = ‖e_s‖² + Σ_h ‖e_h‖², a Rayleigh quotient strictly below p. If e_s lies in the null space of every outgoing weight, e_h = 0 and the eigenvalue is exactly zero: the source has directions no clamp sees. Both conditions matter. When the source feeds a clamped node directly the cancellation is unavailable: for prior(3) → y(6) with y and a second input x clamped, the prior's block of H_ε is p_y W Wᵀ with W the prior's weight into y, its eigenvalues are the squared singular values of W, and λ_min = σ_min(W)² is 1.31 at weight std 0.8 and 18.4 at std 3.0, above the floor of 1 (`test_eigenvalue_floor`). With mixed precisions over the children the quotient is bounded by the largest child precision, not by p_min. The fixture of Section 5.1, prior → h → y with h free, meets both conditions and has λ_min = 0.27.
+
+*The chain.* At unit precision on a chain, H_ε = I + JᵀJ with J = J_y the map from the stacked errors to the output prediction. The nonzero eigenvalues of JᵀJ are those of JJᵀ = Σ_l P_lᵀ P_l = S − I, with P_l and S as in Section 2.2, so the excited eigenvalues of H_ε are exactly the eigenvalues of S, d_y of them, and λ_max(H_ε) = 1 + σ_max(J)² = λ_max(S). With g0 = −Jᵀ r and the push-through identity (I + JᵀJ)⁻¹ Jᵀ = Jᵀ (I + JJᵀ)⁻¹, the equilibrium is
+
+    ε* = Jᵀ S⁻¹ r,     ε_y* = r − J ε* = S⁻¹ r,     E* = ½ rᵀ S⁻¹ r,
+
+Theorem 1 of Section 2.2 in the mode picture (column convention here, row convention there). Section 2.2's S, this section's excited λ_k, Section 2.4's λ_max, and the S⁻¹ damping of Section 5.10 are one object.
+
+**Statistical reading.** On a linear graph with every source clamped, exp(−E) is a Gaussian density in the free latents, so the free latents given the clamps have mean z* and covariance H_z⁻¹, and the errors, an invertible affine image of the latents, have mean ε* and covariance H_ε⁻¹ = (Mᵀ H_z M)⁻¹. The eigenvalues are posterior precisions: along a floor mode the clamps add nothing and the precision is the node's own p_s. On a nonlinear graph exp(−E) is still the unnormalized posterior density but no longer Gaussian; the Gaussian with covariance H_ε⁻¹ at the energy minimizer is its Laplace approximation and needs H_ε positive definite there, which by the congruence at stationary points is the same condition as H_z positive definite. The spectrum this report measures is at ε = 0, not at the minimizer, so it carries no covariance meaning on the ResNet-18.
 
 ### 2.4 Gradient descent on a quadratic: the relaxed fraction and the 2/λ threshold
 
@@ -143,8 +179,8 @@ Section 5.8 shows that on the ResNet-18 the accuracy transition follows f_max, n
 | p_t | Gaussian precision of node t (default 1.0) |
 | E, E_t | total energy over nodes with in-degree > 0, and node t's term |
 | A, c | the quadratic form E = ½‖A z_free − c‖² over the stacked free latents |
-| H_z, H_ε | Hessians of E in latent coordinates (AᵀA) and error coordinates (MᵀAᵀAM), per sample; on a nonlinear graph, evaluated at ε = 0 on one batch |
-| M, B | z_free = M ε + const: B the strictly lower-triangular map from free latents to the predictions downstream of them, M = (I − B)⁻¹, det M = 1 |
+| H_z, H_ε | Hessians of E in latent and error coordinates, per sample; H_ε = MᵀH_zM + Σ_i (∂E/∂z_i) ∇²_ε z_i, the correction zero on a linear graph (then H_z = AᵀA and H_ε = MᵀAᵀAM) and at stationary points; on a nonlinear graph evaluated at ε = 0 on one batch, where the correction is nonzero |
+| M, B | M = ∂z_free/∂ε, unit lower-triangular with det M = 1 on every DAG; on a linear graph z_free = M ε + const with M = (I − B)⁻¹ and B the strictly lower-triangular map from free latents to the predictions downstream of them |
 | λ_k, q_k, λ_max, λ_min | the k-th eigenvalue and unit eigenvector of a Hessian; λ_max the largest eigenvalue, which sets the stability bound 2/λ_max; λ_min the smallest: from Lanczos, the smallest excited eigenvalue (negative when the excited spectrum is indefinite), from the oracle, the bottom of the full spectrum |
 | δ, u_k | displacement ε − ε* from the quadratic model's stationary point and its coordinate q_kᵀ δ along mode k; u in Section 2.4 is one such coordinate |
 | κ, κ_z, κ_ε | condition number, λ_max over the smallest relevant positive eigenvalue: every mode of H_z for sPC, the excited modes of H_ε for ePC; steps to contract below tol at η = 1/λ_max ≈ κ·ln(1/tol) |
@@ -188,7 +224,7 @@ Section 5.8 shows that on the ResNet-18 the accuracy transition follows f_max, n
 | Unclamped readout: E* = 0, z* = feedforward                                                                                                                      | 1 | atol 1e-12 | pass |
 | Normal equations Aᵀ(A z* − c) = 0                                                                                                                                | fork-merge, prior source, clamped internal node | 1e-10 relative | pass |
 | H_ε = diag(p) + Σ_clamped p_t J_tᵀJ_t, det M = 1, B strictly lower-triangular                                                                                    | 3 graphs | atol 1e-10 | pass |
-| Eigenvalue floor: λ_min(H_ε) ≥ min precision on chains; < 1 with an unclamped source                                                                             | 7 + 1 | 1e-10 | pass |
+| Eigenvalue floor: λ_min(H_ε) ≥ min precision on chains; < 1 with an unclamped source whose children are free nodes; equal to the squared singular values of the source's weight, and > 1, with an unclamped source feeding the clamped output directly (Section 2.3) | 7 + 1 + 1 | 1e-10 | pass |
 | Stability bound 2/λ_max: raises when the Hessian has no positive eigenvalue; reads the largest positive eigenvalue when negative ones are present                 | 3 hand-built matrices | exact; raises | pass |
 | Gradient weights w_k = squared overlap of g0 with eigenvector k, summed over the batch and normalized; f̄ averages f over the positive modes only, NaN with none | 1 hand-built Hessian and g0 | rtol 1e-7 (w_k), 1e-6 (f̄) | pass |
 | Relaxed fraction f(λ) = 1 − (1 − η·λ)^T; steps to contract every mode below a tolerance; raises when η exceeds 2/λ_max                                            | 1 hand-built spectrum | rtol 1e-7; exact; raises | pass |
@@ -225,6 +261,19 @@ Fixture: x(4) → h1(3, tanh) → h2(3, tanh) → y(2), biases drawn, Gaussian o
 | One step at η = 0.05 | ε_h = −0.05·g_h on both hidden nodes; z_h1 = a_h1 − 0.05·g_h1 | pass, both outputs |
 | One-step local weight gradients (batch 3 through `pc_weight_gradients`; batch 1 before the 2026-09-08 revision) | hidden edges: g_pc/η vs backprop; output edge: g_pc vs backprop; both divided by the prediction count N = 3 | see below |
 
+**The Hessian decomposition on this fixture.** Section 2.3 gives two forms of H_ε: the per-node decomposition diag(p) + J_yᵀ(∇²_μE_y)J_y + Σ_i (∂E_y/∂μ_{y,i}) ∇²_ε μ_{y,i}, exact on every DAG, and the congruence MᵀH_zM, exact only on a linear graph or at a stationary point. Both are built by `jax.hessian` at ε = 0 in float64 on one sample at the suite seed, with the weight std varied to move the residual-weighted second-derivative term against the unit precision floor:
+
+| output | weight std | max residual, per-node form | max residual, MᵀH_zM | λ_min(H_z) | λ_min(H_ε) | λ_max(H_ε) | λ_min of the second-derivative term |
+|---|---|---|---|---|---|---|---|
+| Gaussian | 0.3 | 2e-16 | 0.011 | +0.73 | +0.98 | 1.44 | −0.02 |
+| Gaussian | 1.5 | 4e-15 | 0.32 | +0.78 | +0.82 | 23.7 | −0.43 |
+| Gaussian | 3.0 | 1e-14 | 94 | +0.76 | −136 | 48.6 | −169 |
+| cross-entropy | 0.3 | 2e-16 | 0.006 | +0.67 | +0.99 | 1.06 | −0.01 |
+| cross-entropy | 1.5 | 9e-16 | 0.12 | +0.78 | +0.93 | 5.52 | −0.54 |
+| cross-entropy | 3.0 | 6e-15 | 14 | +0.53 | −23.2 | 1.34 | −77 |
+
+The per-node form holds to rounding in every row. The congruence misses by a term that grows with the weights, and at std 3.0 the two Hessians have different signatures at the same point: H_z positive definite, H_ε indefinite. λ_min(H_ε) stays above 1 + λ_min(second-derivative term) in every row (Weyl), and at std 1.5 it sits below the floor of 1 while still positive. `TestBackpropCorrespondence::test_epsilon_hessian_decomposition_nonlinear` asserts both identities at atol 1e-10, g0 = Mᵀ∇_zE, the unit lower-triangular M, the Weyl bound, λ_min(H_z) > 0, and the signature flip at std 3.0.
+
 Relative deviation of the one-step local weight gradient from η × backprop (hidden) and from backprop (output), tanh MLP x16 → 3 × h32 → y10 with softmax + cross-entropy, batch 8 (`--section backprop_regime`):
 
 | η | h1 (input is the clamp) | h2 | h3 | y |
@@ -238,7 +287,7 @@ Two mechanisms are visible. For h2, h3, and y the deviation is exactly linear in
 
 One Adam update from the ePC gradients has cosine similarity 1.0000 with one Adam update from backprop's on every layer at η = 1e-3 (0.9922 on h3 at η = 1e-2): Adam normalizes the η scaling away, so 1-step ePC trained with Adam is backprop trained with Adam. Two caveats. The normalization holds while η·|g| ≫ Adam's ε (1e-8); at η = 1e-4 hidden-layer gradients of order 1e-7 are damped by ε. Without Adam the hidden layers learn η times slower than the output layer, a 1,000× disparity at the default.
 
-Reproduce: `python -m pytest tests/test_inference_epc.py::TestBackpropCorrespondence -v` (8 tests: the ε-gradient identity and the one-step error identity, each for a Gaussian and a cross-entropy output; the first-order weight-gradient parity at weight std 0.3 and 1.5, each for both outputs; all passed on 2026-09-09). The deviation table and the Adam cosine similarities: `python scripts/epc_analysis.py --section backprop_regime`.
+Reproduce: `python -m pytest tests/test_inference_epc.py::TestBackpropCorrespondence -v` (14 tests: the ε-gradient identity and the one-step error identity, each for a Gaussian and a cross-entropy output; the first-order weight-gradient parity at weight std 0.3 and 1.5, each for both outputs; the Hessian decomposition at weight std 0.3, 1.5, and 3.0, each for both outputs; all passed on 2026-09-14). The deviation table and the Adam cosine similarities: `python scripts/epc_analysis.py --section backprop_regime`.
 
 ### 5.4 The relaxed-fraction formula against the solver
 

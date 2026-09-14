@@ -68,7 +68,7 @@ H_ε.
 | `test_theorem1_matches_least_squares` on `CHAINS`, `chain-h2-precision`, `mupc-chain-h3` | Theorem 1 E* = ½ p_y r S⁻¹ rᵀ equals the least-squares total energy (rtol 1e-10, atol 1e-12) | 8/8 pass |
 | `test_error_pullback_is_precision_weighted` on `CHAINS` and `chain-h2-precision` | p_l ε*_l = p_y ε*_y P_lᵀ on every hidden node (atol 1e-10) | 7/7 pass |
 | `test_epsilon_hessian_explicit_form` on `fork-merge`, `prior-source`, `clamped-internal` | H_ε = diag(p over free row nodes) + Σ_{clamped t} p_t J_tᵀJ_t (atol 1e-10); triu(B) = 0; det M = 1 | 3/3 pass |
-| `test_eigenvalue_floor` | λ_min(H_ε) ≥ min p_t on `CHAINS` and `chain-h2-precision`; λ_min(H_ε) < 1 on `prior-source` | 1/1 pass |
+| `test_eigenvalue_floor` | λ_min(H_ε) ≥ min p_t on `CHAINS` and `chain-h2-precision`; λ_min(H_ε) < 1 on `prior-source` (the prior's children are free nodes); on a prior feeding the clamped output directly its block is p_y W Wᵀ, eig = σ(W)², and λ_min > 1 at std 3 | 1/1 pass |
 | `test_normal_equations_hold` on `fork-merge`, `prior-source`, `clamped-internal` | ‖Aᵀ(A z* − c)‖ ≤ 1e-10 · max(1, ‖c‖) | 3/3 pass |
 | `test_readouts_agree_with_quadratic` on `fork-merge`, `prior-source`, `clamped-internal`, `chain-h2-bias`, `chain-h2-precision` | error_star[t] = (A z* − c)[row_t] / √p_t on every row node; total_energy = ½‖A z* − c‖² per sample (atol 1e-12) | 5/5 pass |
 | `test_unclamped_readout_has_zero_energy` on `unclamped-readout` | E* = 0 and z* = z_ff on every node (atol 1e-12) | 1/1 pass |
@@ -213,6 +213,27 @@ def _prior_source():
             Edge(source=x, target=h.slot("in")),
             Edge(source=prior, target=h.slot("in")),
             Edge(source=h, target=y.slot("in")),
+        ],
+        task_map=TaskMap(x=x, y=y),
+        inference=PLACEHOLDER,
+    )
+
+
+def _prior_direct(std=3.0):
+    """An unclamped prior feeding the clamped output directly, beside the
+    clamped input. No free node sits between the prior and a clamp, so the
+    cancellation that pushes λ_min(H_ε) under the precision floor (report
+    Section 2.3, unclamped-source qualifier) is unavailable: the prior's block
+    of H_ε is p_y W Wᵀ and λ_min = σ_min(W)², above the floor at std 3."""
+    w_init = NormalInitializer(std=std)
+    x = IdentityNode(shape=(5,), name="x")
+    prior = _linear(3, "prior", weight_init=w_init)
+    y = _linear(6, "y", weight_init=w_init)
+    return graph(
+        nodes=[x, prior, y],
+        edges=[
+            Edge(source=x, target=y.slot("in")),
+            Edge(source=prior, target=y.slot("in")),
         ],
         task_map=TaskMap(x=x, y=y),
         inference=PLACEHOLDER,
@@ -476,6 +497,13 @@ class TestOracleSelfChecks:
         np.testing.assert_allclose(np.linalg.det(quad.M), 1.0, rtol=1e-10)
 
     def test_eigenvalue_floor(self, rng_key):
+        """With every source clamped, H_ε ⪰ diag(p) so λ_min ≥ min p_t. An
+        unclamped source drops λ_min under the floor when every child of the
+        source is a free node: perturb the source and cancel the change at
+        each child's error, so no clamp sees it and the Rayleigh quotient is
+        p·Σ‖e_h‖²/(‖e_s‖² + Σ‖e_h‖²) < p (``prior-source``). When the source
+        feeds a clamp directly the cancellation is unavailable, its block is
+        p_y W Wᵀ, and λ_min = σ_min(W)² can sit above the floor."""
         for bunch in CHAINS + ["chain-h2-precision"]:
             structure, params, clamps = MODEL[bunch].make(rng_key)
             eq = oracle.linear_equilibrium(params, structure, clamps)
@@ -484,6 +512,17 @@ class TestOracleSelfChecks:
         structure, params, clamps = MODEL["prior-source"].make(rng_key)
         eq = oracle.linear_equilibrium(params, structure, clamps)
         assert np.linalg.eigvalsh(oracle.epsilon_hessian(eq.quad))[0] < 1.0
+
+        structure = _prior_direct(3.0)
+        params = initialize_params(structure, rng_key)
+        clamps = _clamps(structure, jax.random.fold_in(rng_key, 1))
+        eq = oracle.linear_equilibrium(params, structure, clamps)
+        assert eq.quad.free == ("prior",)
+        eigs = np.linalg.eigvalsh(oracle.epsilon_hessian(eq.quad))
+        W = np.asarray(params.nodes["y"].weights["prior->y:in"], dtype=np.float64)
+        singular = np.linalg.svd(W, compute_uv=False)
+        np.testing.assert_allclose(eigs, np.sort(singular**2), atol=1e-10)
+        assert eigs[0] > 1.0, eigs
 
     def test_validate_rejects_non_linear_gaussian(self):
         x = IdentityNode(shape=(3,), name="x")

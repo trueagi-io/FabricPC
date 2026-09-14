@@ -14,7 +14,10 @@ resync (ε := z_latent - z_mu at the carried latents, so ePC continues
 exactly from any incoming state), cyclic warm-start semantics, muPC input
 scaling (and the recorded divergence of sPC+muPC's preconditioned fixed
 point from the true energy minimum ePC reaches), insertion-order
-independence, and the z_latent = z_mu + ε invariant of the finalized state.
+independence, the z_latent = z_mu + ε invariant of the finalized state,
+and the two decompositions of the error-coordinate Hessian on a
+nonlinear graph (per-node, exact everywhere; congruence with the latent
+Hessian, exact only at stationary points).
 """
 
 import math
@@ -1102,6 +1105,125 @@ class TestBackpropCorrespondence:
             r1 = d[etas[1]][key] / d[etas[0]][key]
             r2 = d[etas[2]][key] / d[etas[1]][key]
             assert 3.0 <= r1 <= 30.0 and 3.0 <= r2 <= 30.0, (key, lam, r1, r2)
+
+    @staticmethod
+    def _hessian_parts(structure, params, clamps, state):
+        """The error-coordinate Hessian at ε = 0 and the parts of its two
+        decompositions, as float64 numpy arrays over the flattened relaxed
+        errors ε = (ε_h1, ε_h2).
+
+        ``H_eps`` = ∇²_ε E by ``jax.hessian`` of the ε-energy and ``g0`` its
+        gradient. Per-node decomposition: ``J`` = ∂μ_y/∂ε and ``d2mu`` =
+        ∇²_ε μ_y for the clamped output's prediction (the softmax
+        probabilities on the cross-entropy node), ``dEdmu`` and ``Hmu`` the
+        output energy's gradient and Hessian in μ. Congruence: ``M`` =
+        ∂z_free/∂ε, ``d2z`` = ∇²_ε z_free, and ``H_z``, ``dEdz`` the Hessian
+        and gradient of E over z_free at the feedforward latents, E(z) taken
+        through the ``begin_segment`` resync ε := z − μ(z).
+        """
+        synced = EPCInference.begin_segment(params, state, clamps, structure)
+        energy_of, errors = EPCInference.error_energy(params, synced, clamps, structure)
+        names = list(errors)
+        flat, unflat = jax.flatten_util.ravel_pytree(errors)
+        assert float(jnp.abs(flat).max()) == 0.0
+
+        energy = lambda v: energy_of(unflat(v))[0]  # noqa: E731
+        derived = lambda v: energy_of(unflat(v))[1]  # noqa: E731
+        mu_y = lambda v: derived(v).nodes["y"].z_mu.reshape(-1)  # noqa: E731
+        z_free = lambda v: jnp.concatenate(  # noqa: E731
+            [derived(v).nodes[n].z_latent.reshape(-1) for n in names]
+        )
+
+        def eps_of_z(zv):
+            st = synced
+            off = 0
+            for n in names:
+                node = st.nodes[n]
+                d = node.z_latent.size
+                st = st._replace(
+                    nodes={
+                        **st.nodes,
+                        n: node._replace(
+                            z_latent=zv[off : off + d].reshape(node.z_latent.shape)
+                        ),
+                    }
+                )
+                off += d
+            resynced = EPCInference.begin_segment(params, st, clamps, structure)
+            _, errs = EPCInference.error_energy(params, resynced, clamps, structure)
+            return jax.flatten_util.ravel_pytree(errs)[0]
+
+        energy_z = lambda zv: energy(eps_of_z(zv))  # noqa: E731
+        z0 = z_free(flat)
+        y = np.asarray(clamps["y"], dtype=np.float64).reshape(-1)
+        mu0 = np.asarray(mu_y(flat), dtype=np.float64)
+        if isinstance(structure.nodes["y"].node_info.energy, CrossEntropyEnergy):
+            dEdmu, Hmu = -y / mu0, np.diag(y / mu0**2)  # −Σ y_i log μ_i
+        else:
+            dEdmu, Hmu = mu0 - y, np.eye(mu0.size)  # ½‖y − μ‖², precision 1
+        f64 = lambda a: np.asarray(a, dtype=np.float64)  # noqa: E731
+        return {
+            "H_eps": f64(jax.hessian(energy)(flat)),
+            "g0": f64(jax.grad(energy)(flat)),
+            "J": f64(jax.jacobian(mu_y)(flat)),
+            "d2mu": f64(jax.hessian(mu_y)(flat)),
+            "dEdmu": dEdmu,
+            "Hmu": Hmu,
+            "M": f64(jax.jacobian(z_free)(flat)),
+            "d2z": f64(jax.hessian(z_free)(flat)),
+            "H_z": f64(jax.hessian(energy_z)(z0)),
+            "dEdz": f64(jax.grad(energy_z)(z0)),
+        }
+
+    @pytest.mark.parametrize("output", ["gaussian", "ce"])
+    @pytest.mark.parametrize("std", [0.3, 1.5, 3.0])
+    def test_epsilon_hessian_decomposition_nonlinear(self, rng_key, output, std):
+        """The Hessian identities of the ePC report's Section 2.3 on a
+        nonlinear graph. Exact on every DAG: H_ε = diag(p) + J_yᵀ(∇²_μE_y)J_y
+        + Σ_i (∂E_y/∂μ_{y,i}) ∇²_ε μ_{y,i}, the free nodes contributing p·I
+        because their energies are quadratic in their own coordinates.
+        Exact only on a linear graph or at a stationary point: H_ε = MᵀH_zM;
+        at ε = 0 the correction Σ_i (∂E/∂z_i) ∇²_ε z_i separates them, and
+        at large weights it flips the signature: H_z positive definite where
+        H_ε is indefinite. Also pins g0 = Mᵀ∇_zE, the unit lower-triangular
+        M, and Weyl's bound λ_min(H_ε) ≥ p_min + λ_min(second-derivative
+        term), so indefiniteness needs that term to beat the precision floor.
+        """
+        jax.config.update("jax_enable_x64", True)
+        try:
+            structure, params, clamps, _ = self._setup(
+                rng_key, output, std=std, batch=1
+            )
+            cast = lambda t: jax.tree_util.tree_map(  # noqa: E731
+                lambda x: jnp.asarray(x, jnp.float64), t
+            )
+            params, clamps = cast(params), cast(clamps)
+            state = initialize_graph_state(structure, 1, rng_key, clamps, params=params)
+            P = self._hessian_parts(structure, params, clamps, state)
+        finally:
+            jax.config.update("jax_enable_x64", False)
+
+        D = P["H_eps"].shape[0]
+        gauss_newton = np.eye(D) + P["J"].T @ P["Hmu"] @ P["J"]
+        second = np.einsum("i,ijk->jk", P["dEdmu"], P["d2mu"])
+        np.testing.assert_allclose(P["H_eps"], gauss_newton + second, atol=1e-10)
+
+        congruent = P["M"].T @ P["H_z"] @ P["M"]
+        correction = np.einsum("i,ijk->jk", P["dEdz"], P["d2z"])
+        np.testing.assert_allclose(P["H_eps"], congruent + correction, atol=1e-10)
+        assert np.abs(P["H_eps"] - congruent).max() > 1e-3, "no correction at ε = 0?"
+        np.testing.assert_allclose(P["g0"], P["M"].T @ P["dEdz"], atol=1e-10)
+
+        assert np.all(np.triu(P["M"], 1) == 0.0)
+        assert np.all(np.diag(P["M"]) == 1.0)
+
+        ev = np.linalg.eigvalsh
+        assert ev(gauss_newton)[0] >= 1.0 - 1e-10
+        assert ev(P["H_eps"])[0] >= 1.0 + ev(second)[0] - 1e-10
+        assert ev(P["H_z"])[0] > 0.0
+        if std == 3.0:
+            assert ev(P["H_eps"])[0] < 0.0, ev(P["H_eps"])
+            assert np.abs(P["H_eps"] - congruent).max() > 1.0
 
 
 class TestRegime:

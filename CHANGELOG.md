@@ -1,6 +1,6 @@
 # Changelog
 
-## [unreleased]
+## [0.6.0] - 2026-09-14
 ePC error-parameterized predictive coding (`EPCInference`) arrives as a drop-in solver alongside composable inference schedules and first-class cyclic graphs (`graph(..., unroll=U)`); see `docs/user_guides/12_api_inference.md`.
 
 ### Breaking changes
