@@ -4,7 +4,9 @@ Technical report, 2026-09-04. Code at commit `30aeb83` on branch `matthew_cedric
 
 Revision 2026-09-08 (a). The branch was rebased onto release 0.5.1, which shipped the per-prediction gradient normalization (`pc_weight_gradients`, `grad_denominator`); the commits cited here are now `45c18d6..e84f667`. The weight-gradient parity test of Section 5.3 was rewritten for that release: it runs at batch 3 instead of batch 1, compares `pc_weight_gradients` against a backprop reference divided by the same prediction count, measures the fixture's λ_max, and asserts the deviation bound d(η) ≤ 10·η·λ_max at two weight scales. The sweep (Section 5.8) and the 100-epoch runs were not repeated and predate the normalization; the Section 5.8 tracking and its growth phases are superseded by the normalized trainer's control runs (Section 5.9).
 
-Revision 2026-09-08 (b), after the second review round recorded in `docs/dev_plans_archive/epc_inference_solver.md` (Sections 3.4 and 4, and its Record). The power-iteration estimator is replaced by the Lanczos estimator `fabricpc.core.epsilon_spectrum` (both excited extremes, the gradient weight per Ritz mode, Ritz residuals); `regime_label` by `EPCInference.regime(spectrum) -> Regime` (band on the gradient-weighted relaxed fraction f̄, output-gradient reversal flag, indefiniteness by weight and growth); the analysis script's tracking loop by `fabricpc.training.RegimeProbe` inside `train`. Sections 2.3, 2.4, 5.2, 5.7, and 5.8 are amended in place; Sections 5.9 to 5.11 are new. Numbers from the replaced estimator are marked as such where they remain.
+Revision 2026-09-08 (b), after the second review round recorded in `docs/dev_plans_archive/epc_inference_solver.md` (Sections 3.4 and 4, and its Record). The power-iteration estimator is replaced by the Lanczos estimator `fabricpc.core.epsilon_spectrum` (both excited extremes, the gradient weight per Ritz mode, Ritz residuals); `regime_label` by `EPCInference.regime(spectrum) -> Regime` (band on the gradient-weighted relaxed fraction f̄, output-gradient reversal flag, indefiniteness by weight and growth); the analysis script's tracking loop by `fabricpc.training.RegimeProbe` inside `train`. Sections 2.4, 2.5, 5.2, 5.7, and 5.8 are amended in place; Sections 5.9 to 5.11 are new. Numbers from the replaced estimator are marked as such where they remain.
+
+Revision 2026-09-14. Section 2.3 (the Hessian in error coordinates) is new and written for H_ε and H_z in the report's symbols; the former Sections 2.3 and 2.4 are now 2.4 and 2.5 and their cross-references are updated; Section 2.4 gains the T-step error formula and the κ·ln(1/tol) step count, which corrects the depth-20 step count in Section 6.1; the Symbols table gains rows for the chain symbols, the equilibrium values, M and B, δ and u_k, κ, and d_y, and separates the Lanczos and oracle meanings of λ_min.
 
 ## 1. Summary
 
@@ -58,31 +60,69 @@ S is the identity plus the summed leverage of the hidden layers over the output.
 
 *Worked example.* Scalar chain x = 1, W_1 = 2, W_2 = 3, y = 1. The feedforward output is 6, so r = −5 and S = 1 + 3² = 10. Then E* = ½ · 25 / 10 = 1.25, ε_y* = −0.5, ε_h* = ε_y*·3 = −1.5, and z_h* = μ_h + ε_h* = 2 − 1.5 = 0.5. Direct minimization of E(z) = ½(z − 2)² + ½(1 − 3z)² gives the same z = 0.5 and E = 1.25. This example is `TestOracleSelfChecks::test_scalar_chain_hand_numbers`.
 
-### 2.3 Gradient descent on a quadratic: modes, the relaxed fraction, and the 2/λ threshold
+### 2.3 The Hessian in error coordinates: modes, gradient weights, and sign
 
-Both solvers are gradient descent on a quadratic, so one scalar picture explains their behaviour. For E = ½ λ x², a step x ← x − η·λ·x multiplies the distance to the minimum by (1 − ηλ):
+**The quadratic model at the feedforward point.** ePC's free variables are the errors ε_t of every unclamped node, stacked into one vector ε; a clamped node's error is derived from its prediction, ε_t = clamp − μ_t(ε). The latents follow from the errors along the topological order, z_free = M ε + const, where B is the strictly lower-triangular map that carries each free latent into the predictions downstream of it and M = (I − B)⁻¹; every edge runs forward in the node order, so B is strictly lower-triangular, det M = 1, and the two coordinate systems share their minima (Section 2.1). The Hessian of E in error coordinates and the second-order expansion of E around the feedforward point ε = 0 are, per sample,
 
-| η·λ | one step does | T steps leave |
-|---|---|---|
+    H_ε = ∇²_ε E = Mᵀ H_z M,     E(ε) = E(0) + g0ᵀ ε + ½ εᵀ H_ε ε,
+
+with H_z = AᵀA the Hessian in latent coordinates, the curvature sPC descends, and g0 = ∇_ε E at ε = 0. On a linear graph E is a quadratic and the expansion is exact. On a nonlinear graph it is the local quadratic model at the feedforward point on one batch, and every `Regime` flag is a statement about that model. Up to a constant, exp(−E) is the joint density of the latents given the weights under the node energies (Gaussian at each node with in-degree > 0 that uses the Gaussian energy, categorical at a cross-entropy output, flat on an unclamped source), so H_ε is the model's curvature as well as the solver's.
+
+**Modes and contraction.** H_ε is symmetric, so it has real eigenvalues λ_k with an orthonormal eigenbasis q_k:
+
+    H_ε = Σ_k λ_k q_k q_kᵀ.
+
+Where H_ε is invertible the quadratic model has one stationary point, ε* = −H_ε⁻¹ g0: the PC equilibrium on a linear graph, and on a nonlinear graph the model's stationary point, a saddle when H_ε is indefinite. Write the displacement from it as δ = ε − ε* and its coordinate along mode k as u_k = q_kᵀ δ. Then δᵀ H_ε δ = Σ_k λ_k u_k², so λ_k is the curvature of the energy along q_k, and one gradient step ε ← ε − η ∇_ε E moves each coordinate on its own:
+
+    u_k ← (1 − η λ_k) u_k.
+
+At ε = 0 the displacement is δ = −ε* = H_ε⁻¹ g0, so u_k = q_kᵀ g0 / λ_k: a mode orthogonal to the starting gradient begins at its equilibrium and never moves. The fraction of ‖g0‖² on mode k, summed over the batch because H_ε is block-diagonal over samples,
+
+    w_k = (q_kᵀ g0)² / ‖g0‖²,     Σ_k w_k = 1,
+
+is the gradient weight of Section 2.5. It weights a mode by the gradient it carries, not by its distance to equilibrium, which is (q_kᵀ g0)² / λ_k². Every positive mode contracts when η < 2/λ_max; a negative mode grows at every η. Section 2.4 tabulates one step by η·λ and gives the error after T steps.
+
+**Structure and sign.** Each free node with in-degree > 0 contributes p_t times the identity on its own block, because its error is a coordinate; an unclamped source owns no energy term and contributes no block. Each clamped node t with in-degree > 0 contributes the Hessian of its energy E_t through its prediction μ_t(ε):
+
+    ∇²_ε E_t = J_tᵀ (∇²_μ E_t) J_t + Σ_i (∂E_t/∂μ_{t,i}) ∇²_ε μ_{t,i},     J_t = ∂μ_t/∂ε,
+
+a Gauss–Newton term, positive semidefinite because the node energy is convex in its prediction, plus the energy's gradient with respect to the prediction contracted with the prediction's second derivative over the components i of node t, the only term with no definite sign. For a Gaussian node ∂E_t/∂μ_{t,i} = −p_t ε_{t,i}, so the second term is −p_t Σ_i ε_{t,i} ∇²_ε μ_{t,i}; at ε = 0 the output's ε_y is the residual r of Section 2.2. On a linear graph the second derivative is zero and
+
+    H_ε = diag(p) + Σ_{clamped t} p_t J_tᵀ J_t,
+
+with diag(p) the precisions of the free nodes that own an energy term and zero on unclamped sources. When every source is clamped, H_ε is positive definite and every eigenvalue is at least the smallest precision (Section 5.1): the equilibrium is the unique minimum and there are no flat directions. A direction confined to one free node s that no clamped prediction depends on is an eigenvector with eigenvalue exactly p_s; with uniform precision the whole common null space of the J_t sits at that value. These are the floor modes of Section 2.4, which g0 never excites on a chain. An unclamped source puts λ_min(H_ε) below the floor, and at zero when the source has directions no clamp sees. On a nonlinear graph the gradient-weighted second-derivative term can make H_ε indefinite at ε = 0: on the gelu + cross-entropy ResNet-18 at init, λ_min = −0.42 with 1.2% of the gradient weight on negative curvature (Section 5.8). A mode with λ_k < 0 grows by (1 + η|λ_k|) per step instead of contracting, starting from zero error; (1 + η|λ_min|)^T over T steps is `Regime.growth_min` and Σ_{λ_k < 0} w_k is `Regime.negative_weight`. A symmetric matrix is positive semidefinite when δᵀ H δ ≥ 0 for every δ, equivalently when no eigenvalue is negative; positive definite when the inequalities are strict, which makes it invertible; indefinite when eigenvalues of both signs occur.
+
+**Statistical reading.** On a linear graph with every source clamped, exp(−E) is a Gaussian density in the free latents, so the free latents given the clamps have mean z* and covariance H_z⁻¹, and the errors, an invertible affine image of the latents, have mean ε* and covariance H_ε⁻¹. The eigenvalues are posterior precisions: along a floor mode the clamps add nothing and the precision is the node's own p_s. On a nonlinear graph exp(−E) is still the unnormalized posterior density but no longer Gaussian; the Gaussian with covariance H_ε⁻¹ at ε* is its Laplace approximation and needs H_ε positive definite there. The spectrum this report measures is at ε = 0, not at ε*, so it carries no covariance meaning on the ResNet-18.
+
+### 2.4 Gradient descent on a quadratic: the relaxed fraction and the 2/λ threshold
+
+Both solvers are gradient descent on a quadratic, so one scalar picture explains their behaviour. For one mode coordinate u with curvature λ (Section 2.3), E = ½ λ u² and a step u ← u − η·λ·u multiplies the distance to the minimum by (1 − ηλ):
+
+| η·λ         | one step does | T steps leave |
+|-------------|---|---|
 | 0 < η·λ < 1 | moves part of the way, same side | (1 − ηλ)^T of the distance |
-| η·λ = 1 | lands exactly on the minimum | 0 |
+| η·λ = 1     | lands exactly on the minimum | 0 |
 | 1 < η·λ < 2 | overshoots to the other side, closer | \|1 − ηλ\|^T, alternating sign; at odd T the output residual along the mode, (r/λ)·[1 + (λ − 1)(1 − ηλ)^T], has reversed sign once (1 − ηλ)^T < −1/(λ − 1), so the output layer's weight gradient points the wrong way there (T = 1: η(λ − 1) > 1) |
-| η·λ = 2 | lands the same distance away, opposite side | no progress |
-| η·λ > 2 | lands farther away than it started | grows as \|1 − ηλ\|^T |
+| η·λ = 2     | lands the same distance away, opposite side | no progress |
+| η·λ > 2     | lands farther away than it started | grows as \|1 − ηλ\|^T |
 
-Every quadratic in many variables decomposes into independent such modes along the eigenvectors of its Hessian H, each with its own eigenvalue λ. The step size must satisfy η < 2/λ_max for the stiffest mode, and that one bound governs the whole system. After T steps mode λ has closed the fraction
+The step size must satisfy η < 2/λ_max for the stiffest mode, and that one bound governs the whole system. After T steps mode λ has closed the fraction
 
     f(η, T, λ) = 1 − (1 − ηλ)^T
 
-of its distance to equilibrium. The slowest mode sets how many steps are needed (κ = λ_max/λ_min steps, roughly, at η = 1/λ_max), the fastest sets the largest usable η.
+of its distance to equilibrium, so the error after T steps is
 
-**Applied to ePC.** The Hessian of E in error coordinates is H_ε = Mᵀ Aᵀ A M, where M = (I − B)⁻¹ maps errors to latents and B is the strictly lower-triangular edge map. On a chain with unit precision, H_ε = I + JᵀJ with J the map from the stacked errors to the output prediction, so λ_max(H_ε) = 1 + σ_max(J)², which grows with the product of the downstream weights. Starting from ε = 0 (the feedforward state every FabricPC run starts from), only the modes with a nonzero initial gradient move: these are the d_y eigen-directions of S, and the floor modes at λ = precision never move.
+    ε_T = −Σ_k q_k (q_kᵀ g0) · f(λ_k) / λ_k,
 
-**The backprop regime.** At ε = 0 the gradient ∂E/∂ε_t is exactly the backprop activation gradient g_t = ∂L/∂z_t, because z depends on ε through the same chain of Jacobians backprop uses. One step therefore leaves ε_t = −η·g_t. If every excited mode has η·T·λ ≪ 1, the T-step result is ε ≈ −η·T·g to first order, and the local weight gradients computed from those errors are backprop's, scaled by η·T on hidden layers and unscaled on the output. Goemaere et al. (2026, Appendix C.3, Theorem C.9) state the two cases, T = 1 and "λ sufficiently small relative to 1/T" (their λ is our η). The second condition hides the network's Jacobian scale: the quantity that must be small is η·T·λ_max, and λ_max = 1 + σ_max(J)² is a property of the weights and depth, not a constant. This is why a rule stated in η·T alone cannot transfer between networks, and why the same (η, T) drifts from the backprop regime into the PC regime and then into instability as the weights grow during training.
+which is −η·T·g0 when every excited mode has f ≈ η·T·λ_k and ε* when every f is 1. The slowest excited mode sets the step count: at η = 1/λ_max, contracting every relevant mode below a tolerance tol takes about κ·ln(1/tol) steps, with κ the ratio of λ_max to the smallest relevant positive eigenvalue (every mode for sPC, the excited modes for ePC; Section 5.5 uses tol = 1e-3). The fastest mode sets the largest usable η.
 
-### 2.4 The regimes
+**Applied to ePC.** On a chain with unit precision the decomposition of Section 2.3 reads H_ε = I + JᵀJ, with J = J_y the map from the stacked errors to the output prediction, so λ_max(H_ε) = 1 + σ_max(J)², which grows with the product of the downstream weights. Starting from ε = 0 (the feedforward state every FabricPC run starts from), only the modes with a nonzero initial gradient move: these are the d_y eigen-directions of S, and the floor modes at λ = precision never move.
 
-Only the modes along which the starting gradient g0 = ∇_ε E has a component move, and each carries a fraction w of ‖g0‖². The band reads the gradient-weighted relaxed fraction f̄ = Σ w·f(λ) over the positive-curvature modes (`Regime.f_weighted`); `Regime.f_max` = f(λ_max) is the fastest mode's fraction. On a linear graph g0 lies in the row space of J, every w sits on an eig(S) mode, and f̄ averages f over that band.
+**The backprop regime.** At ε = 0 the gradient ∂E/∂ε_t is exactly the backprop activation gradient g_t, the derivative of the output node's energy with respect to z_t through the forward map, because z depends on ε through the same chain of Jacobians backprop uses. One step therefore leaves ε_t = −η·g_t. If every excited mode has η·T·λ ≪ 1, the T-step result is ε ≈ −η·T·g to first order, and the local weight gradients computed from those errors are backprop's, scaled by η·T on hidden layers and unscaled on the output. Goemaere et al. (2026, Appendix C.3, Theorem C.9) state the two cases, T = 1 and "λ sufficiently small relative to 1/T" (their λ is our η). The second condition hides the network's Jacobian scale: the quantity that must be small is η·T·λ_max, and λ_max = 1 + σ_max(J)² is a property of the weights and depth, not a constant. This is why a rule stated in η·T alone cannot transfer between networks, and why the same (η, T) drifts from the backprop regime into the PC regime and then into instability as the weights grow during training.
+
+### 2.5 The regimes
+
+Only the modes along which the starting gradient g0 = ∇_ε E has a component move, and each carries a fraction w_k of ‖g0‖². The band reads the gradient-weighted relaxed fraction f̄ = Σ_k w_k·f(λ_k) over the positive-curvature modes (`Regime.f_weighted`); `Regime.f_max` = f(λ_max) is the fastest mode's fraction. On a linear graph g0 lies in the row space of J, every w_k sits on an eigen-direction of S, and f̄ averages f over that band.
 
 | condition | ePC computes | `Regime` |
 |---|---|---|
@@ -99,19 +139,25 @@ Section 5.8 shows that on the ResNet-18 the accuracy transition follows f_max, n
 
 | Symbol | Meaning |
 |---|---|
-| z_t, μ_t, ε_t | node t's latent, prediction, and error z_t − μ_t (`NodeState.z_latent`, `z_mu`, `error`) |
+| z_t, μ_t, ε_t | node t's latent, prediction, and error z_t − μ_t (`NodeState.z_latent`, `z_mu`, `error`); ε without subscript is the stacked free errors, one block per unclamped node; ε = 0 is the feedforward state |
 | p_t | Gaussian precision of node t (default 1.0) |
-| E | total energy over nodes with in-degree > 0 |
+| E, E_t | total energy over nodes with in-degree > 0, and node t's term |
 | A, c | the quadratic form E = ½‖A z_free − c‖² over the stacked free latents |
-| H_z, H_ε | Hessians of E in latent coordinates (AᵀA) and error coordinates (MᵀAᵀAM) |
-| λ, λ_max, λ_min | eigenvalues of a Hessian; the top one sets the stability bound 2/λ_max |
+| H_z, H_ε | Hessians of E in latent coordinates (AᵀA) and error coordinates (MᵀAᵀAM), per sample; on a nonlinear graph, evaluated at ε = 0 on one batch |
+| M, B | z_free = M ε + const: B the strictly lower-triangular map from free latents to the predictions downstream of them, M = (I − B)⁻¹, det M = 1 |
+| λ_k, q_k, λ_max, λ_min | the k-th eigenvalue and unit eigenvector of a Hessian; λ_max the largest eigenvalue, which sets the stability bound 2/λ_max; λ_min the smallest: from Lanczos, the smallest excited eigenvalue (negative when the excited spectrum is indefinite), from the oracle, the bottom of the full spectrum |
+| δ, u_k | displacement ε − ε* from the quadratic model's stationary point and its coordinate q_kᵀ δ along mode k; u in Section 2.4 is one such coordinate |
+| κ, κ_z, κ_ε | condition number, λ_max over the smallest relevant positive eigenvalue: every mode of H_z for sPC, the excited modes of H_ε for ePC; steps to contract below tol at η = 1/λ_max ≈ κ·ln(1/tol) |
+| x, y, h_l, W_l, L | the chain of Section 2.2: input node, output node, hidden layer l, the weight into layer l (W_1 from x, W_{L+1} into y), number of hidden layers |
 | P_l, S | downstream weight product from hidden layer l to the output; S = I + Σ_l P_lᵀP_l |
+| z*, ε*, E* | equilibrium latents, errors, and energy on a linear-Gaussian graph, the oracle's outputs; ε* = −H_ε⁻¹ g0 is the quadratic model's stationary point on any graph |
+| d_y | width of the output node; the number of modes g0 excites on a chain |
 | r | feedforward output residual y − μ_y |
-| J | map from the stacked errors to the output prediction; λ_max(H_ε) = 1 + σ_max(J)² |
+| J_t, J | J_t = ∂μ_t/∂ε, the map from the stacked errors to clamped node t's prediction; J = J_y on a chain, where λ_max(H_ε) = 1 + σ_max(J)² at unit precision |
 | η, T | `eta_infer`, `infer_steps` |
 | f(λ), f_max | relaxed fraction 1 − (1 − η·λ)^T of a mode with eigenvalue λ after T steps; f_max = f(λ_max) |
-| g0 | ∇_ε E at ε = 0, the starting gradient; equals the backprop activation gradient at every node |
-| θ_k, w_k | the k-th Ritz value of the Lanczos tridiagonal matrix (an eigenvalue estimate) and the fraction of ‖g0‖² that mode carries; Σ_k w_k = 1 |
+| g0, g_t | ∇_ε E at ε = 0, the starting gradient, and its block at node t; equals the backprop activation gradient, the derivative of the output node's energy with respect to z_t through the forward map |
+| θ_k, w_k | the k-th Ritz value of the Lanczos tridiagonal matrix (an eigenvalue estimate) and the fraction of ‖g0‖² that mode carries; Σ_k w_k = 1; on the exact spectrum w_k = (q_kᵀ g0)² / ‖g0‖² summed over the batch |
 | f̄ | gradient-weighted relaxed fraction Σ_{θ_k > 0} w_k·f(θ_k) / Σ_{θ_k > 0} w_k over the positive Ritz modes |
 | α_j, β_j | the Lanczos recurrence coefficients, the diagonal and off-diagonal of the tridiagonal matrix; the Ritz residual of an extreme is β_k·\|s_{k−1}\| with s the Ritz vector's last component |
 | λ_eff | one eigenvalue fitted to the 2-epoch sweep through f |
@@ -206,7 +252,7 @@ Linear chain x16 → 3 × h16 → y4, batch 8, η stated relative to λ_max(H_ε
 | 1.0 | 5 | 0.1552 | 0.1552 |
 | 1.5 | 4 | 0.0990 | 0.0990 |
 
-The per-mode picture of Section 2.3 is the solver's exact behaviour on a linear graph.
+The per-mode picture of Sections 2.3 and 2.4 is the solver's exact behaviour on a linear graph.
 
 Reproduce: `python scripts/epc_analysis.py --section backprop_regime` (the predicted-against-measured table is the section's last block).
 
@@ -251,9 +297,9 @@ Oracle per-layer equilibrium energies, chains of width 32 (input 32, output 10, 
 
 The spacing follows from the pull-back ε_l* = ε_y*·P_lᵀ: each layer's equilibrium energy is the output error pushed back through the downstream weights, so log10 E_l changes by about 2·log10 of the per-layer gain per layer. Contracting weights (std 0.5) give deep layers almost no energy (11.7 decades of spread at depth 20); expanding weights (std 1.5) pile energy into the deep layers; unit-gain weights and muPC keep the profile flat to within half a decade. The spacing is therefore a statement about the weights' gain profile, not about the solver.
 
-The solvers approach that profile very differently. sPC on the depth-10, std-1.0 chain at η = 0.1 (log10 batch-mean energy after k updates; the last row is the oracle):
+The solvers approach that profile very differently. sPC on the depth-10, std-1.0 chain at η = 0.1 (log10 batch-mean energy after the stated number of updates; the last row is the oracle):
 
-| after k updates | h1 | h3 | h5 | h7 | h10 | y |
+| updates | h1 | h3 | h5 | h7 | h10 | y |
 |---|---|---|---|---|---|---|
 | 10 | −19.87 | −11.44 | −6.75 | −3.21 | −0.04 | +0.15 |
 | 50 | −5.35 | −4.01 | −2.53 | −1.33 | −0.41 | −0.34 |
@@ -342,7 +388,7 @@ The epoch-10 accuracy equals the 100-epoch log's 54.76%, so this is the run that
 | 7 | 9.79% | (diverging) → 1 | — |
 | 8–30 | 9.9 – 10.0% | 1 | 0.01 |
 
-Probes: update 1,000 (epoch 6) λ_max = 60; 1,050: 64; 1,100: 101; 1,150: 220, the first probe with η·λ_max > 2; 1,200 (epoch 7): −9,399; then 1. The −9,399 is not a value of λ_max: power iteration converges to the eigenvalue of largest magnitude, and on this indefinite Hessian a negative eigenvalue had overtaken the positive top by update 1,200 (Section 5.8's init measurement already shows λ_min < 0). The Lanczos re-run of this cell (Section 5.9) reports both extremes. At T = 1 the mechanism is the output-gradient reversal of Section 2.3: at update 1,100, η(λ_max − 1) = 1.00, the output residual after the single step had changed sign along the top mode, test accuracy fell that epoch from 43.2% to 40.6%, and the network was at chance one epoch later.
+Probes: update 1,000 (epoch 6) λ_max = 60; 1,050: 64; 1,100: 101; 1,150: 220, the first probe with η·λ_max > 2; 1,200 (epoch 7): −9,399; then 1. The −9,399 is not a value of λ_max: power iteration converges to the eigenvalue of largest magnitude, and on this indefinite Hessian a negative eigenvalue had overtaken the positive top by update 1,200 (Section 5.8's init measurement already shows λ_min < 0). The Lanczos re-run of this cell (Section 5.9) reports both extremes. At T = 1 the mechanism is the output-gradient reversal of Section 2.4: at update 1,100, η(λ_max − 1) = 1.00, the output residual after the single step had changed sign along the top mode, test accuracy fell that epoch from 43.2% to 40.6%, and the network was at chance one epoch later.
 
 Both collapses were preceded by η·λ_max crossing 2. The 100-epoch log's evaluation every 10 epochs could not resolve the order of events; the tracking does. Both tracked cells collapsed, so the ordering does not separate "λ_max grows regardless of the solver and a fixed η eventually crosses the bound" from "ePC's relaxation drives the growth"; Section 5.9's control runs do.
 
@@ -434,7 +480,7 @@ Goemaere et al. (Tables E.9 and E.10) trained ResNet-18 at the same error rate 1
 
 | Bullet | Question | Finding |
 |---|---|---|
-| 1 | Why does sPC struggle with deep layers? | λ_min(H_z) falls three decades from depth 2 to 20 while λ_max stays near 6; the deep latents lie in flat directions and need κ ≈ 4,000 steps to relax at depth 20 (Section 5.5). |
+| 1 | Why does sPC struggle with deep layers? | λ_min(H_z) falls three decades from depth 2 to 20 while λ_max stays near 6; the deep latents lie in flat directions and have κ_z ≈ 4,400 at depth 20 and need about 30,000 steps for a 1e-3 contraction (Section 5.5). |
 | 2, 3 | What sets the equilibrium energy spacing across layers? | The pull-back ε_l* = ε_y*·P_lᵀ: each layer's energy is the output error pushed back through the downstream weights, so the spacing per layer is about 2·log10 of the layer gain; muPC and unit-gain weights give a flat profile (Section 5.6). |
 | 4 | ePC stability in deep networks; the largest stable η? | η < 2/λ_max(H_ε) at every T, and η < 1/(λ_max − 1) at odd T for the output-layer gradient; λ_max = 1 + σ_max(J)², exponential in depth for expanding weights, near 10–40 at muPC init; measurable on any graph by Lanczos through `error_energy` (Section 5.7), tracked during training by `RegimeProbe`. |
 | 5 | Is 1-step ePC backprop? | Yes: ε = −η·g exactly; weight gradients are backprop's scaled by η on hidden layers (exactly where the input is a clamp, to first order otherwise) and unscaled on the output; Adam removes the scaling while η·\|g\| ≫ its ε (Section 5.3). The condition for T > 1 is η·T·λ ≪ 1 on the excited modes, not η·T ≪ 1. |

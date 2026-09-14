@@ -189,7 +189,7 @@ Tracking: `run_inference_with_history` and `make_inference_history` iterate `seg
 
 Three design facts the oracle's review settled. An unclamped source contributes no curvature floor in ε coordinates: it has columns in the quadratic form but no residual row, because a source has no energy term. "ePC is better conditioned than sPC" holds per regime: λ_min(H_z) decays with depth even for benign weights (sPC's slow mode), while λ_max(H_ε) grows with the downstream weight products (ePC's shrinking stability bound). The 1-step identity ε_1 = −η·g0 is exact, but the weight-gradient identity "1-step ePC equals η × backprop" holds only to first order in η·λ_max, because `finalize_state` re-derives the latents before the local weight gradient is taken.
 
-What it verifies: both solvers reach the oracle's equilibrium on twelve graph shapes (chains to depth 4, biases, precisions, fork-merge, a clamped internal node, an unclamped prior, an unclamped readout, a muPC chain); stability brackets at 0.95× and 1.05× of 2/λ_max on the plain and muPC depth-3 chains, which pin each solver's gradient scale and not only its direction (a positive diagonal preconditioner shares the fixed point with plain descent, so an equilibrium test alone cannot); the Hessian-vector product against H_ε; and the Lanczos extremes and f̄ against the oracle in float32 and float64. `TestBackpropCorrespondence` pins g0 against a hand-written backprop recursion, `error == −η·g0` after one step, and the local weight gradients through `pc_weight_gradients` against a backprop reference divided by the same prediction count, `grad_denominator` (release 0.5.1), exact at the first hidden layer and with a remainder downstream bounded by a constant times η·λ_max. ePC on cyclic graphs has no oracle; its coverage is the sPC-equivalence tests.
+What it verifies: both solvers reach the oracle's equilibrium on twelve graph shapes (chains to depth 4, biases, precisions, fork-merge, a clamped internal node, an unclamped prior, an unclamped readout, a muPC chain); stability brackets at 0.95× and 1.05× of 2/λ_max on the plain and muPC depth-3 chains, which pin each solver's gradient scale and not only its direction (a positive diagonal preconditioner shares the fixed point with plain descent, so an equilibrium test alone cannot); the Hessian-vector product against H_ε; and the Lanczos extremes and f̄ against the oracle in float32 and float64. `TestBackpropCorrespondence` pins g0 against a hand-written backprop recursion, `error == −η·g0` after one step, and the local weight gradients through `pc_weight_gradients` against a backprop reference divided by the same prediction count, `grad_denominator` (release 0.5.1), exact at the first hidden layer and with a remainder downstream bounded by a constant times η·λ_max. ePC on cyclic graphs has no oracle; its coverage is the sPC-equivalence tests. Outcomes, tolerances, and the external cross-check are in Section 5.1.
 
 ### 2.7 Benchmark script
 
@@ -299,6 +299,59 @@ Why the collapsing default was kept. Any fixed η collapses once λ_max grows pa
 - `tests/test_regime_probe.py`: a tanh MLP trained two epochs with `every=2` under both trainers; the CSV round-trips through `read_regime_csv`.
 - `tests/test_fabricpc.py` and `tests/test_trainer.py`: the sPC side of the readout fix (error kept, `latent_grad` untouched, z_latent converges to z_mu, a Hopfield readout keeps its attractor energy; eval energy finite and signed with `target_energy ≥ 0`). The full suite passed with no expectation edits at the contract-split commit, which pins sPC bit-identity.
 
+### 5.1 Oracle validation: outcome
+
+The reviewer's request of cycle 3 (Section 8) was an exact oracle that both solvers are checked against, itself checked by hand computation or by Innocenti et al. 2024 Theorem 1. `tests/test_linear_pc_oracle.py` answers it with 73 tests, all passing on 2026-09-09 (report Sections 5.1 and 5.2 hold the full tables). Three layers of evidence, in dependency order: the oracle against fixed references, both solvers against the oracle, and the oracle against an independently written solver.
+
+**The oracle against itself** (`TestOracleSelfChecks`, 35 tests, no solver runs). Every check compares `linear_pc_oracle` output with a value it did not compute: a hand calculation, a published closed form, or an algebraic identity of the quadratic.
+
+| Check | Fixtures | Tolerance |
+|---|---|---|
+| Hand-computed scalar chain x = 1, W₁ = 2, W₂ = 3, y = 1: z_h* = 0.5, E* = 1.25, ε_h* = −1.5, ε_y* = −0.5, S = [[10]] | 1 | rtol 1e-7 |
+| Theorem 1 closed form E* = ½·r S⁻¹ rᵀ equals the least-squares energy | chains of depth 1 to 4, the stiff chain (weight std 0.8), drawn biases, precisions 2.0 and 0.5, muPC | rtol 1e-10 |
+| Precision-weighted pull-back: p_l·ε_l* equals p_y·ε_y* mapped back through the transposed product of the weights downstream of hidden node l | 7 chains | atol 1e-10 |
+| Per-node readouts: ε_t* is node t's row block of A z* − c divided by √p_t and E* = ½‖A z* − c‖²; normal equations Aᵀ(A z* − c) = 0 | fork-merge, prior source, clamped internal node, biases, precisions | atol 1e-12; 1e-10 relative |
+| Unclamped readout: E* = 0 and z* is the feedforward state | 1 | atol 1e-12 |
+| H_ε closed form: diag(p) over free non-source nodes plus Σ over clamped nodes t of p_t·J_tᵀJ_t, with J_t = ∂μ_t/∂ε; det M = 1; B strictly lower-triangular | 3 graphs | atol 1e-10 |
+| Eigenvalue floor: λ_min(H_ε) ≥ the minimum precision on chains, below 1 with an unclamped source | 7 + 1 | 1e-10 |
+| Stability bound, gradient weights w_k, f̄, f(λ), steps to contract, on hand-built matrices and spectra; raises when no positive eigenvalue exists or η > 2/λ_max | 5 | rtol 1e-7 or exact |
+| `validate_linear_gaussian` rejects tanh, cross-entropy, a flattened input, StorkeyHopfield, and cycles at unroll 1 and 2 | 6 | raises |
+
+**Both solvers reach the oracle.** Twelve graphs: chains of hidden depth 1 to 4 (input 5, hidden 4, output 3, weight std 0.3, batch 3), a chain with drawn biases, a chain with precisions 2.0 and 0.5, a stiff chain (std 0.8, λ_max(S) ≈ 69), a fork-merge, a chain with a clamped internal node, a DAG with an unclamped prior source, an unclamped readout, and a muPC chain. Each solver runs at η = 1/λ_max of its own Hessian (H_ε for ePC, H_z for sPC) for the step count the oracle predicts contracts every relevant mode below 1e-5 of its starting distance.
+
+| Test | Assertion | Result |
+|---|---|---|
+| `TestEPCReachesOracle`, 12 graphs | z_latent, per-node energy, total energy, and error, unclamped sources included, within rtol and atol 1e-4 of the oracle | 12/12 |
+| `TestSPCReachesOracle`, 12 graphs | same, source error skipped because sPC re-syncs source predictions | 12/12 |
+| `TestStabilityBracket`, ePC and sPC, depth-3 chain and muPC depth-3 chain | η = 0.95·(2/λ_max) reaches the oracle; η = 1.05·(2/λ_max) for 150 steps stays finite with energy rising over the last 50 | 4/4 |
+| `TestEpsilonHVPMatchesOracle::test_hvp` | Hessian-vector product through `EPCInference.error_energy` equals H_ε v per sample, float32 solver against the float64 oracle, atol 1e-4 | 2/2 |
+| `TestEpsilonHVPMatchesOracle::test_lanczos_matches_excited_extremes`, 4 graphs × float32 and float64 | λ_max and the excited λ_min within rtol 1e-3; f̄ within atol 1e-3 | 8/8 |
+
+The equilibrium rows pin each solver's fixed point; the bracket rows pin the scale of each solver's gradient, which an equilibrium test cannot (Section 2.6). The muPC rows show that the muPC forward scales enter both solvers' energies identically, since both reach the same oracle on the scaled graph.
+
+**External cross-check, run once, not committed.** The ePC paper's reference solver (`mnist_poc/analytical_solution.py` in `github.com/cgoemaere/error_based_PC`, commit 77acc08) assembles a linear chain's block-tridiagonal normal equations directly, one block row per hidden layer, a different route from the oracle's least squares on the stacked quadratic. A NumPy float64 port was run on 2026-09-09 against the oracle and both solvers. Its scope is unit-precision, bias-free chains, and the adapter rejects graphs outside it.
+
+| Check | Cases | Tolerance | Result |
+|---|---|---|---|
+| Port states equal the oracle's z* | chains of hidden depth 1 to 4, 8, and the std-0.8 chain | rtol 1e-10, atol 1e-12 | 6/6 |
+| Port's block matrix equals the oracle's H_z = AᵀA; right-hand side equals Aᵀc | 5 chains | atol 1e-12 | 5/5 |
+| Adapter rejects bias, precision, muPC, fork-merge | 4 | raises | 4/4 |
+| Weight-convention check: un-transposed weights give a different state on a square chain | 1 | | pass |
+| ePC states, total energy, and the local weight and bias gradients from `compute_local_weight_gradients` equal the closed form at the port's states | 5 chains | rtol and atol 1e-4 | 5/5 |
+| sPC, same | 5 chains | rtol and atol 1e-4 | 5/5 |
+
+The matrix identity means the two derivations build the same normal equations, so the agreement is structural rather than a coincidence of the solutions. The port stays out of the repository: the in-library oracle is the single source of truth, and a second, narrower oracle would be a permanent duplicate. The results are recorded in the PR thread (https://github.com/trueagi-io/FabricPC/pull/47#issuecomment-5608847498).
+
+**Reviewer acceptance.** On 2026-09-10 the reviewer wrote that the wide evaluation on the oracle gives strong confidence in the code's correctness, that the hand-computed scalar chain is the right stress test for the oracle, and that the external cross-check was a good one-time validation that should stay out of FabricPC (https://github.com/trueagi-io/FabricPC/pull/47#issuecomment-5619803203).
+
+**Scope.** The oracle is exact on linear-Gaussian DAGs only. Nonlinear graphs are covered by the sPC-equivalence tests in `tests/test_inference_epc.py` and by the Lanczos tests against `jax.hessian` in `tests/test_epsilon_spectrum.py`; cyclic ePC has no oracle (Section 7).
+
+Reproduce:
+
+```
+python -m pytest tests/test_linear_pc_oracle.py -v
+```
+
 ## 6. Alternatives considered
 
 | Decision | Chosen | Rejected and why |
@@ -343,4 +396,4 @@ Six cycles, in order. Each states what was implemented, what the review found, w
 
 **Cycle 5, 2026-09-08: replacement design, implementation, control runs.** Design: Lanczos from g0 with Ritz weights; `Regime`; `RegimeProbe` on the 0.5.2 `IterContext`, after rebasing the branch onto that release; four control runs with a reading rule fixed in advance. The design's first-draft review ran two CPU experiments (report Appendix B) that changed it: f̄ over the gradient-weighted modes instead of a band on λ_min (943 of 1024 modes excited on a gelu MLP, λ_min below the floor); a relative breakdown guard instead of an exact-zero test; indefiniteness by weight and growth instead of a boolean; the fourth control run, a re-run of the defaults, kept so the headline series comes from the new estimator and the normalized trainer. Implemented: five deliverables in one commit each, with the power-iteration estimator, the string label, and the script's tracking loop deleted and every caller migrated. Findings, each as expected, measured, changed: (1) the guard alone excludes the unexcited floor; on a depth-5 chain it did not, β_10 stayed above the threshold on accumulated rounding; the eps weight floor on the extremes. (2) The excited band is compact on the ResNet-18; f̄ = 0.010 against f_max = 0.080 and the accuracy follows f_max; f_max reported beside the band, the band kept on f̄ as the equilibrium criterion and early warning. (3) The reading rule; λ_max ran away only in the ePC cells with larger η·T while weight norms fell in all four, and the reversal flag fired one probe before the crossing in both collapsing cells; in (1e-2, 1) the design had predicted the flag at update 1100 from the old trainer's trajectory, but on the normalized trainer η(λ_max − 1) was 0.85 there, so the flag fired at the next probe, 1150, with the crossing at 1200; the remedy is solver-side. The trackers were reconciled with 0.5.2. The sweep, the 100-epoch runs, and the two older CSVs predate the 0.5.1 normalization and were accepted as recorded; the inference energy is untouched by the normalization, so H_ε and the regime at init are the same under both trainers; the training trajectories are not, and the control runs are the first tracking data from the normalized trainer. Value: a sign-correct estimator, a band on the right quantity, a probe that runs on any graph, and a measured cause for the collapse.
 
-**Cycle 6, 2026-09-09: consolidation.** Numbers moved to the report, whose Appendices A and B receive the sweep and evidence tables; the changelog, the guide, and the demo docstring reduced to conclusion plus pointer; this record rewritten as a final design document; the four intermediate development documents deleted.
+**Cycle 6, 2026-09-09: consolidation.** Numbers moved to the report, whose Appendices A and B receive the sweep and evidence tables; the changelog, the guide, and the demo docstring reduced to conclusion plus pointer; this record rewritten as a final design document; the four intermediate development documents deleted. 2026-09-14: Section 5.1 added with the oracle validation outcome, the external cross-check, and the reviewer's acceptance of 2026-09-10, so the design file is self-contained on the correctness evidence.
