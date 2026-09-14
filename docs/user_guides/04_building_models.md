@@ -373,7 +373,7 @@ Key parameters:
 - `nodes`: List of all nodes in the graph
 - `edges`: List of all edges connecting nodes
 - `task_map`: Mapping from data keys to nodes
-- `inference`: Inference algorithm configuration (e.g., `InferenceSGD`)
+- `inference`: Inference solver. The state-based solvers (`InferenceSGD`, `InferenceSGDNormClip`) relax the latents with a per-node rate; `EPCInference` relaxes the prediction errors with one global rate bounded by the graph's error-Hessian spectrum; `InferenceSchedule` composes solvers per weight update. Measure the bound before choosing the rate for `EPCInference` ([Training with ePC](17_training_with_epc.md))
 - `scaling`: Scaling strategy (e.g., `MuPCConfig` for deep networks)
 
 ## Graph Topologies
@@ -489,6 +489,8 @@ structure = graph(
     unroll=2,
 )
 ```
+
+On a cyclic graph the solver choice changes the objective: the state-based solvers relax the exact graph energy, while `EPCInference` minimizes its unrolled approximation at degree `U`. A composed `InferenceSchedule(EPCInference(...), InferenceSGD(...))` ends on the exact energy ([Training with ePC](17_training_with_epc.md#composing-epc-and-spc)).
 
 Cyclic graphs may require more inference steps for information to propagate around the loops and reach equilibrium.
 

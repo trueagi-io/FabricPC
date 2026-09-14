@@ -68,56 +68,36 @@ z_new = z * (1 - eta * latent_decay) - eta * clipped_grad
 
 Error-parameterized predictive coding (ePC, Goemaere et al., arXiv 2505.20137). The prediction error ε is the first-class relaxed variable; each latent is derived by a forward pass along `structure.schedule` as `z_latent = z_mu + ε`. Because every node's `z_mu` depends on all upstream latents, one `jax.value_and_grad` over the ε pytree per step delivers the output-loss signal to every layer unattenuated — a few steps replace sPC's hundreds on deep DAGs. The ε ↔ z_latent map is a volume-preserving bijection: identical energies, identical equilibria, and the final derived state feeds the local weight-gradient path unchanged. (The equivalence relies on the node contract's rule that `predict` never reads `state.z_latent` values — see the custom-nodes guide.)
 
-**Backprop regime.** One ePC step from ε = 0 leaves ε_t = −eta_infer·∂L/∂z_t exactly, the backprop activation gradient at the feedforward point, so the local weight gradients match backprop's to first order in eta_infer·λ_max(H_ε): hidden layers scaled by eta_infer, the output layer unscaled (Goemaere et al., Theorem C.9; exact for a layer fed only by clamped nodes). H_ε is the Hessian of the total energy in error coordinates. Gradient descent on it splits into independent modes along its eigenvectors, and only the modes along which the starting gradient g0 = ∇_ε E has a component ever move: the excited modes. After T steps a mode with eigenvalue λ has relaxed toward equilibrium by f(λ) = 1 − (1 − eta_infer·λ)^T. The regime is read on the modes that carry the gradient, each weighted by the fraction w of ‖g0‖² it carries: the gradient-weighted relaxed fraction f̄ = Σ w·f(λ) over the positive-curvature modes. f̄ ≪ 0.1 is backprop-like; f̄ > 0.9 is the PC equilibrium, which needs eta_infer·T·λ ≳ 3 on those modes, and on a linear graph they are the eig(S) modes of Innocenti et al.'s Theorem 1 (S = I + JJᵀ, J the map from the hidden errors to the output prediction), so the slowest of them sets T. eta_infer·λ_max < 2, λ_max the largest excited eigenvalue, is required for stability at every T. At odd T the output layer is damaged before that bound: its weight gradient follows the output residual after T steps, which along the top mode is (1 − eta_infer·(λ_max − 1))·r at T = 1 and reverses sign once eta_infer·(λ_max − 1) > 1 (for general odd T, once (1 − eta_infer·λ_max)^T < −1/(λ_max − 1)); the hidden errors keep their sign for every eta_infer·λ < 2, and at even T the residual never reverses.
+Symbols: η is `eta_infer`; T is `infer_steps`; H_ε is the Hessian of the total energy in error coordinates; λ_max and λ_min are its largest and smallest excited eigenvalues; g₀ = ∇_ε E is the starting gradient; f̄ is the gradient-weighted relaxed fraction after T steps.
 
-`fabricpc.core.epsilon_spectrum.epsilon_spectrum(params, state, clamps, structure)` measures the excited spectrum on any graph (Lanczos on Hessian-vector products through `EPCInference.error_energy`, 30 steps, three vectors of ε size in memory): `lambda_max`, `lambda_min`, the Ritz values with their gradient weights, `negative_weight` (the gradient weight on negative-curvature modes, nonzero on nonlinear graphs once the weights are large), and the Ritz residuals. `EPCInference.regime(spectrum)` returns a `Regime` with `unstable` (eta_infer·λ_max > 2), `output_gradient_reverses`, `f_weighted` (f̄), `f_max`, `band` ("backprop-like", "partially relaxed", "near PC equilibrium"), `negative_weight`, and `growth_min` (the T-step growth of the most negative mode); `str(regime)` is the one-line label, and the demos print it at init. The linear oracle in `fabricpc.utils.linear_pc_oracle` gives the same spectrum exactly on linear-Gaussian graphs.
+**Backprop regime.** One ePC step from ε = 0 leaves ε_t = −η·∂L/∂z_t exactly, the backprop activation gradient at the feedforward point. The local weight gradients are then taken at the re-derived latents, so they match backprop's to first order in η·λ_max: hidden layers scaled by η, the output layer unscaled (Goemaere et al., Theorem C.9). A layer fed only by clamped nodes matches exactly. Whether a run of T steps stays in this regime is read from the spectrum, below.
+
+**Relaxed fraction and bands.** Gradient descent on the energy in error coordinates splits into independent modes along the eigenvectors of H_ε, and only the modes along which g₀ has a component ever move: the excited modes. After T steps a mode with eigenvalue λ has relaxed toward equilibrium by f(λ) = 1 − (1 − ηλ)^T. The regime is read on the modes that carry the gradient, each weighted by the fraction w of ‖g₀‖² it carries: f̄ = Σ w·f(λ) over the positive-curvature modes. `Regime.band` is `"backprop-like"` below f̄ = 0.1, `"near PC equilibrium"` above 0.9, `"partially relaxed"` between, and `"no positive curvature"` when no positive mode carries gradient weight. The equilibrium needs η·T·λ ≳ 3 on the modes that carry the gradient; on a linear graph they are the eig(S) modes of Innocenti et al.'s Theorem 1 (S = I + JJᵀ, J the map from the hidden errors to the output prediction), so the slowest of them sets T.
+
+**Stability bound.** η·λ_max < 2 is required at every T; above it the top mode's distance from equilibrium grows every step (`Regime.unstable`).
+
+**Odd-T reversal.** At odd T the output layer is damaged before the stability bound: its weight gradient follows the output residual after T steps, which along the top mode is (1 − η·(λ_max − 1))·r at T = 1 and reverses sign once η·(λ_max − 1) > 1 (for general odd T, once (1 − ηλ_max)^T < −1/(λ_max − 1)). The reversal is possible only at odd T, since (1 − ηλ)^T ≥ 0 at even T; the hidden errors keep their sign for every ηλ < 2 (`Regime.output_gradient_reverses`).
+
+`fabricpc.core.epsilon_spectrum.epsilon_spectrum(params, state, clamps, structure, iters=30, key=None)` measures the excited spectrum on any graph (Lanczos on Hessian-vector products through `EPCInference.error_energy`, `iters` steps, three vectors of ε size in memory): `lambda_max`, `lambda_min`, the Ritz values with their gradient weights, `negative_weight` (the gradient weight on negative-curvature modes, nonzero on nonlinear graphs once the weights are large), and the Ritz residuals. `EPCInference.regime(spectrum)` returns a `Regime` (a `NamedTuple`) with `eta`, `steps`, `eta_lambda_max`, `eta_T_lambda_max`, `unstable`, `output_gradient_reverses`, `f_max` (f(λ_max)), `f_weighted` (f̄), `band`, `negative_weight`, `growth_min` (the T-step growth of the most negative mode, (1 + η·|λ_min|)^T), `lambda_max`, and `lambda_min`. `str(regime)` is a one-line label with precedence: `unstable`, then `growth_min > 1.1` (indefinite), then the band with f̄, f_max, and the reversal note. The linear oracle in `fabricpc.utils.linear_pc_oracle` gives the same spectrum exactly on linear-Gaussian graphs.
 
 Two optimizer caveats. Under Adam the eta_infer scaling of the hidden-layer gradients is normalized away while eta_infer·|g| ≫ Adam's ε (1e-8), so 1-step ePC with Adam trains as backprop with Adam; below that the ε term damps the hidden layers. Without Adam the hidden layers learn eta_infer times slower than the output layer, a 1000× disparity at the default.
 
-λ_max is a weight-scale quantity: on a chain λ_max = 1 + σ_max(J)² grows with the product of the downstream weights, so it grows during training and a fixed eta_infer can cross either threshold late in a run. Normalization layers and weight decay bound it. Goemaere et al. trained ResNet-18 at eta_infer = 1e-3, T = 5 for 50 epochs without instability, with batch normalization after every convolution, ReLU, weight decay ≤ 1e-3, and a standard parameterization. The muPC ResNet-18 demo (`examples/resnet18_cifar10_demo.py`) has no normalization layers, gelu, weight decay 1e-2, muPC scaling, and a 100-epoch schedule.
+**Weight scale and growth.** λ_max is a weight-scale quantity: on a chain λ_max = 1 + σ_max(J)² grows with the product of the downstream weights' actions, so it grows during training and a fixed η can cross either threshold late in a run. The report `docs/reports/epc_regime_and_stability_report.md` measured this on the muPC ResNet-18 demo (`examples/resnet18_cifar10_demo.py`). λ_max at init sets the bound at init; the library defaults were backprop-like at init and collapsed over 100 epochs; η = 1e-2 collapsed over 100 epochs at every step count run while training at 2 epochs; only the smallest η·T survived the full schedule (Section 5.8). λ_max grew by orders of magnitude while every convolution weight's Frobenius norm fell, so weight-norm control did not bound it; the runaway occurred only in the ePC cells with the larger η·T while the backprop trainer and ePC at T = 1 drifted slowly on the same graph, and the mechanism is not established (Section 5.9). Goemaere et al.'s ResNet-18 trained at (1e-3, 5) without instability and differs from the demo in normalization, activation, weight decay, and parameterization (Section 5.11).
 
-**Measured on the ResNet-18 demo** (`scripts/epc_analysis.py --resnet18` and `--track_regime 50`, 64-sample test batch, seed 42; the tables and the mechanism are in `docs/reports/epc_regime_and_stability_report.md`, Sections 5.8 and 5.9):
-
-| Measurement | Result |
-|---|---|
-| Spectrum at init | λ_max = 16.4, so eta_infer < 0.12. λ_min = −0.42: indefinite from init, with 1.2% of the gradient weight on negative curvature |
-| Defaults (1e-3, 5) at init | f̄ = 0.010, f_max = 0.080: backprop-like on both |
-| 2-epoch sweep | accuracy falls from 38.8% at small eta_infer·T to the 31% PC plateau following f_max, not f̄. Most of the gradient weight sits near the precision floor, and relaxing it rescales the hidden errors, which Adam absorbs; relaxing the top modes re-weights the output error by S⁻¹, which Adam cannot undo |
-| 100-epoch runs | (1e-3, 1) 76.7% and (1e-3, 2) 75.8%; the defaults trained as backprop for tens of epochs and collapsed to chance by epoch 20; eta_infer = 1e-2 collapsed by epoch 10 at every step count |
-| 30-epoch control runs | λ_max drifted 22 → 24 under the backprop trainer and 22 → 29 under ePC at (1e-3, 1), both reaching 68 to 69%. At the defaults it went 27 (epoch 8) → 31,000 (epoch 15) and the run collapsed. Every convolution weight's Frobenius norm fell in all four runs, so the growth is ePC's relaxation, not the weight scale. The reversal flag fired one probe (50 updates) before the stability crossing in both collapses, and f̄ crossed 0.1 two to three epochs before the reversal |
-
-The sweep and the 100-epoch runs predate release 0.5.1's per-prediction gradient normalization; the control runs do not.
-
-Pick eta_infer below 1/(λ_max − 1) at odd T and below 2/λ_max at every T, with margin for growth, and track the spectrum during training with `fabricpc.training.RegimeProbe`: a `train` callback that records the spectrum, the regime flags, and the Frobenius norm of every weight every N updates on a fixed probe batch (or the training batch), plus the test accuracy per epoch, to a CSV that `scripts/epc_analysis.py --plot_track` renders. Supplying `iter_callback` forces a device sync on every batch, probed or not. The same script reproduces the regime analysis on linear graphs.
+A fixed η therefore has no lasting margin (Section 6.2). `fabricpc.training.RegimeProbe` is the detector: a `train` callback that records the spectrum, the regime flags, and the Frobenius norm of every weight every N updates on a fixed probe batch (or the training batch), plus the test accuracy per epoch, to a CSV that `scripts/epc_analysis.py --plot_track` renders. Supplying `iter_callback` forces a device sync on every batch, probed or not. Under `InferenceSchedule`, `structure.config["inference"]` is the schedule, so pass the ePC segment as `RegimeProbe(..., inference=epc)`; the regime then describes that segment's relaxation. The remedies when a flag fires, and their trade-offs, are in [Training with ePC](17_training_with_epc.md#step-7-act-on-the-flags).
 
 ```python
-import jax
 from fabricpc.core import EPCInference, epsilon_spectrum
-from fabricpc.graph_assembly import graph
-from fabricpc.training import RegimeProbe, train
+from fabricpc.training import RegimeProbe
 
-inference = EPCInference(eta_infer=1e-3, infer_steps=5, latent_decay=0.0)
-structure = graph(..., inference=inference)
-
-spectrum = epsilon_spectrum(params, state, clamps, structure)
-print(inference.regime(spectrum))
-
-probe = RegimeProbe(
-    structure, probe_clamps, every=50, key=jax.random.PRNGKey(1),
-    csv_path="epc_regime_track.csv",
-)
-result = train(
-    params, structure, train_loader, optimizer, {"num_epochs": 30}, rng_key,
-    iter_callback=probe.on_iter,
-    epoch_callback=lambda ctx: probe.on_epoch(ctx, accuracy=None),
-)
-print(probe.summary(chance=0.1))
+# Measure the spectrum at init, tabulate the regime for an (eta, T) grid, and
+# attach the probe: docs/user_guides/17_training_with_epc.md
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `eta_infer` | `float` | `1e-3`  | Inference rate on ε — tune like a weight learning rate (see below) |
-| `infer_steps` | `int` | `5`     | Number of inference iterations |
+| `eta_infer` | `float` | `1e-3`  | Inference rate on ε: one global rate through the whole network, bounded by 2/λ_max of the graph. The default has no regime meaning independent of the graph (it was backprop-like at init on the ResNet-18 demo, and that run collapsed); set it from the measured spectrum |
+| `infer_steps` | `int` | `5`     | Number of inference iterations; with `eta_infer` it sets f̄ and the band. Set it from `regime` on the measured spectrum |
 | `latent_decay` | `float` | `0.0`   | Weight decay on the relaxed errors |
 
 **Update rule (per step):**
@@ -154,20 +134,23 @@ Chained execution contract:
 
 Schedules nest, and `segments()` flattens them for per-step consumers (tracking iterates segments instead of assuming one global step count). A schedule has no single per-step rule, so `inference_step()` and `compute_new_latent()` raise. Under a composed schedule, a tracked `latent_grad_norm` series carries each segment's own gradient semantics — sPC's one-hop dE/dz_latent, ePC's full-forward ε gradient.
 
+A few ePC steps then sPC steps is also a stability remedy: the ePC segment runs at a low η·T as a warm start that carries the loss signal to every layer, and the sPC segment finishes the settle on the exact graph energy at the per-node rate. `RegimeProbe` needs the ePC segment as `inference=`. [Training with ePC](17_training_with_epc.md#composing-epc-and-spc) shows how to measure what the warm start saves on your graph.
+
 ## Tuning Guidance
 
 | Parameter | Typical Range | Notes |
 |-----------|:-------------:|-------|
 | `eta_infer` (state-based) |   0.01–0.2    | A per-node rate; lower for stability, higher for faster convergence |
-| `eta_infer` (EPCInference) | below 1/(λ_max − 1) at odd T, below 2/λ_max at every T | A global rate through the whole transfer function; λ_max is the largest excited eigenvalue of the error Hessian, measured with `epsilon_spectrum` at init and tracked with `RegimeProbe` because it grows with the weights (1e-2 collapsed the resnet18 demo at every step count) |
+| `eta_infer` (EPCInference) | below 2/λ_max at every T, below 1/(λ_max − 1) at odd T | One global rate; λ_max is measured with `epsilon_spectrum` at init and tracked with `RegimeProbe` because it grows during training. See [Training with ePC](17_training_with_epc.md) |
 | `infer_steps` (state-based) |  ~5 * depth   | More steps = better convergence, slower training |
-| `infer_steps` (EPCInference) | set by f̄ from `EPCInference.regime` | f̄ ≪ 0.1 is backprop-like (the defaults on resnet18); f̄ > 0.9 is the PC equilibrium, eta_infer·T·λ ≳ 3 on the modes that carry the gradient; one reverse pass per step reaches every layer |
+| `infer_steps` (EPCInference) | set by f̄ from `EPCInference.regime` | f̄ < 0.1 is backprop-like, f̄ > 0.9 the PC equilibrium (η·T·λ ≳ 3 on the modes that carry the gradient); the output-gradient reversal is possible only at odd T. See [Training with ePC](17_training_with_epc.md) |
 | `latent_decay` |      0.0      | Rarely needed; try 0.001 if latents drift |
 | `max_norm` |    0.5–2.0    | For InferenceSGDNormClip; prevents gradient explosions |
 
-For deep networks (>10 layers), consider:
+For deep networks (>10 layers) under the state-based solvers, consider:
 - Increasing `infer_steps` to `max(20, 5 * num_layers)`
 - Using `InferenceSGDNormClip` for stability
+- Switching to `EPCInference`, whose step count does not grow with depth ([Training with ePC](17_training_with_epc.md))
 
 ## Creating Custom Inference Algorithms
 

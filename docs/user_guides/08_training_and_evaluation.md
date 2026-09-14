@@ -179,6 +179,20 @@ Contract guarantees:
   freely; a callback that does not retain it adds no device memory. Without
   an `iter_callback` the step does not return the state at all.
 
+**RegimeProbe** — the shipped iteration callback for `EPCInference` runs.
+`fabricpc.training.RegimeProbe` records, every `every` weight updates, the
+excited spectrum of the energy Hessian in error coordinates on a fixed probe
+batch (or the training batch), the `Regime` flags of the configured
+`EPCInference`, and the Frobenius norm of every weight; `on_epoch` adds a
+row with the epoch's test accuracy. Attach it as
+`train(..., iter_callback=probe.on_iter, epoch_callback=...)`, with the epoch
+callback calling `probe.on_epoch(ctx, evaluate(...)["accuracy"])`. Supplying
+any `iter_callback` forces a device sync per batch; the probe itself costs
+one feedforward initialization and `iters` Hessian-vector products per
+probe. Under `InferenceSchedule` pass the ePC segment as `inference=`.
+[Training with ePC](17_training_with_epc.md#step-5-attach-the-probe) gives the
+workflow.
+
 ## evaluate()
 
 Evaluation clamps the inputs and leaves the targets free; PC settles the

@@ -144,6 +144,8 @@ Two-phase Optuna search for language-model hyperparameters, both phases minimizi
 
 The perplexity objective requires the trial graph's target node to use `CrossEntropyEnergy` — `evaluate` reports `perplexity` only then, and the tuner raises on a graph without it rather than scoring the trial silently. `algorithm=` selects the learning algorithm for every trial's `train`/`evaluate` call (`"pc"` default, `"backprop"` supported).
 
+The `eta_infer` ranges in the example are for the state-based solvers. Under `EPCInference` the rate is bounded by 2/λ_max of the trial graph's energy Hessian in error coordinates, so search it relative to that bound: measure λ_max once at init with `epsilon_spectrum` on the trial graph, sample a fraction of the bound (`trial.suggest_float("eta_frac", low, high, log=True)` with `high` below 1) and set `eta_infer = eta_frac * 2 / lambda_max`, and sample `infer_steps` over a small integer range. The grid step of [Training with ePC](17_training_with_epc.md#step-3-tabulate-the-regime-for-a-grid) shows the band each pair lands in before any trial runs.
+
 ```python
 from fabricpc.tuning import BayesianTuner
 
@@ -153,14 +155,14 @@ def phase1_search_space(trial):
         "num_heads": trial.suggest_categorical("num_heads", [4, 8]),
         "depth": trial.suggest_int("depth", 1, 4),
         "lr": trial.suggest_float("lr", 1e-5, 3e-4, log=True),
-        "eta_infer": trial.suggest_float("eta_infer", 0.01, 0.15),
+        "eta_infer": trial.suggest_float("eta_infer", 0.01, 0.15),  # state-based solvers
     }
 
 def phase2_search_space(trial, best_params):
     lr = best_params["lr"]
     return {
         "lr": trial.suggest_float("lr", lr * 0.5, lr * 2.0, log=True),
-        "eta_infer": trial.suggest_float("eta_infer", 0.01, 0.2),
+        "eta_infer": trial.suggest_float("eta_infer", 0.01, 0.2),  # state-based solvers
     }
 
 tuner = BayesianTuner(

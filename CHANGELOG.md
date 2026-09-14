@@ -1,7 +1,7 @@
 # Changelog
 
 ## [0.6.0] - 2026-09-14
-ePC error-parameterized predictive coding (`EPCInference`) arrives as a drop-in solver alongside composable inference schedules and first-class cyclic graphs (`graph(..., unroll=U)`); see `docs/user_guides/12_api_inference.md`.
+ePC error-parameterized predictive coding (`EPCInference`) arrives as a drop-in solver alongside composable ePC + sPC inference schedules and first-class cyclic graphs (`graph(..., unroll=U)`); see `docs/user_guides/12_api_inference.md` for the reference and `docs/user_guides/17_training_with_epc.md` for the training workflow.
 
 ### Breaking changes
 - The custom-node contract splits `forward()` into `predict()` and `energy()`. A node now implements `predict(params, inputs, state, node_info) -> (z_mu, aux)` — the parameterized prediction plus an optional pytree of intermediates — and, only when it adds energy terms, overrides `energy(params, inputs, state, aux, node_info) -> (batch,)`. The error pair (`error = z_latent - z_mu` and its inverse `z_latent = z_mu + error`) and the assembly templates (`forward`, `forward_with_aux`, `forward_from_error`) are base-owned and no longer node code: one prediction pass now serves both the state-based solvers and the error-parameterized `EPCInference`, which derives `z_latent` from the relaxed error and cannot tolerate a node body that recomputes the pair itself. `NodeBase.energy_functional` is deleted; its body is the default `energy()`. Migration: delete the `error`/`_replace`/`energy_functional` tail from each `forward()` body, rename it `predict`, and return `(z_mu, aux)`; move any post-hoc energy patching into an `energy()` override. See `docs/user_guides/06_custom_nodes.md`.

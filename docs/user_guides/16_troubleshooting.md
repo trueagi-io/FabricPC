@@ -117,9 +117,13 @@ FabricPC supports Python 3.11–3.13. Only the optional Aim experiment tracker (
 
 ## Training Issues
 
+### State-based solvers (`InferenceSGD`, `InferenceSGDNormClip`)
+
+The ranges in this subsection are per-node rates for the state-based solvers. They do not apply to `EPCInference`, whose single global rate is bounded by a quantity measured from the graph; see the ePC subsection below.
+
 **Energy not decreasing**
-- Check `eta_infer` — too high causes oscillation, too low causes slow convergence. Try 0.01–0.2.
-- Check `infer_steps` — too few steps prevent convergence. Try 20–50.
+- Check `eta_infer` — too high causes oscillation, too low causes slow convergence. Try 0.01–0.2 (state-based solvers).
+- Check `infer_steps` — too few steps prevent convergence. Try 20–50 (state-based solvers).
 - Verify activation/energy pairing — use `SoftmaxActivation` + `CrossEntropyEnergy` for classification output nodes.
 - For deep networks, enable muPC: `scaling=MuPCConfig()` in `graph()`.
 
@@ -133,6 +137,38 @@ FabricPC supports Python 3.11–3.13. Only the optional Aim experiment tracker (
 - Verify that `TaskMap(x=..., y=...)` correctly maps to your input and output nodes.
 - Ensure the output node uses `SoftmaxActivation` + `CrossEntropyEnergy` for classification.
 - Check that labels are one-hot encoded.
+
+### ePC (`EPCInference`)
+
+Symbols: η is `eta_infer`, T is `infer_steps`, λ_max is the largest excited eigenvalue of the energy Hessian in error coordinates (`epsilon_spectrum`), f̄ is the gradient-weighted relaxed fraction after T steps (`Regime.f_weighted`). The workflow behind every entry is [Training with ePC](17_training_with_epc.md).
+
+**Accuracy improves for epochs, then falls to chance within a few epochs**
+- Cause: λ_max grew during training until η·λ_max crossed 2. A rate that is safe at init has no lasting margin.
+- Action: attach `RegimeProbe`; the `unstable` flag dates the crossing and `growth_phases()` shows the growth. Restart from the last saved parameters and optimizer state at a lower η and re-read the band, or compose ePC with sPC ([Remedies](17_training_with_epc.md#step-7-act-on-the-flags)).
+
+**The ePC run's accuracy equals the backprop run's**
+- Cause: the run is in the backprop-like band. One ePC step from zero error is backprop's activation gradient, and a small η·T on the modes that carry the gradient leaves the weight gradients at backprop's with rescaled magnitude, which Adam normalizes away.
+- Action: read `str(EPCInference(eta, T).regime(spectrum))`. Report a backprop-like run as backprop-like. To study PC dynamics, raise η·T until the band reads near PC equilibrium while η stays below the bound.
+
+**Chance accuracy from the first epoch at T = 1 or another odd T**
+- Cause: η·(λ_max − 1) > 1 at T = 1 (the general odd-T condition is in the API page), so the output layer's weight gradient points away from the target along the top mode from the first update. `output_gradient_reverses` is True at init.
+- Action: lower η below 1/(λ_max − 1); the label's reversal note disappears when the fix holds.
+
+**Hidden layers barely learn under SGD; the output layer does**
+- Cause: in the backprop-like band the hidden-layer weight gradients are scaled by η and the output layer's are not.
+- Action: use Adam or AdamW, which normalize the scale away while η·|g| ≫ Adam's ε, or raise η·T out of the backprop-like band ([Optimizer interaction](17_training_with_epc.md#optimizer-interaction)).
+
+**I lowered η after a flag and the label changed to backprop-like**
+- Cause: f̄ falls with η at fixed T. Lowering η is the remedy for the stability crossing, and it moves the run toward backprop.
+- Action: re-tabulate the grid at the current spectrum; raise T to hold the band you want while η stays below the new bound, or compose ePC with sPC. Report the regime the run trained in.
+
+**NaN or divergence in the first updates**
+- Cause: η·λ_max > 2 at init; `unstable` is True at init.
+- Action: measure λ_max with `epsilon_spectrum` and set η below 2/λ_max. Swapping to `InferenceSGDNormClip` changes solver family; it does not fix an ePC rate.
+
+**The probe CSV has blank regime columns**
+- Cause: under `algorithm="backprop"` the regime is empty by design (the control run). Under `algorithm="pc"` with an `InferenceSchedule`, `RegimeProbe(inference=None)` finds no `EPCInference` in `structure.config["inference"]` and records no regime.
+- Action: pass the ePC segment: `RegimeProbe(structure, probe_clamps, every=..., inference=epc, key=...)`.
 
 ---
 
@@ -201,7 +237,7 @@ If a slot has `is_multi_input=False` (e.g., StorkeyHopfield's `"in"`), it accept
 
 Under certain conditions (infinite inference steps, specific energy functionals), PC converges to the same gradients as backprop. In practice, PC with finite inference steps and Hebbian learning produces similar but not identical results. FabricPC provides both modes for comparison.
 
-`EPCInference` has a second route to backprop: a single step, or a small gradient-weighted relaxed fraction f̄ (eta_infer × infer_steps × λ ≪ 1 on the error modes that carry the starting gradient, λ an eigenvalue of the energy's Hessian in error coordinates), leaves the errors at the backprop activation gradient, so the weight gradients are backprop's with rescaled magnitude. `EPCInference.regime(spectrum)` reads the regime off the spectrum `fabricpc.core.epsilon_spectrum.epsilon_spectrum` measures; see the backprop-regime paragraph in the [Inference Algorithms API](12_api_inference.md).
+`EPCInference` has a second route to backprop. One ePC step from zero error leaves each error at minus the rate times backprop's activation gradient, so the weight gradients are backprop's with the hidden layers' scaled by the rate, and a small rate times step count on the error modes that carry the gradient leaves them there. Whether a run is in that case is read from the measured spectrum: `EPCInference(eta, T).regime(epsilon_spectrum(...))` returns a `band` of backprop-like, partially relaxed, or near PC equilibrium. Read it before reporting an ePC run as PC. [Training with ePC](17_training_with_epc.md) gives the workflow.
 
 **Why is PC slower than backprop?**
 

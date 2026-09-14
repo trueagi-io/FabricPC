@@ -167,19 +167,12 @@ class EPCInference(InferenceBase):
     slower than the output layer, a 1000× disparity at the default.
 
     Weight scale. On a chain λ_max = 1 + σ_max(J)² grows with the product of
-    the downstream weights, so it grows during training and a fixed
-    eta_infer can cross 2/λ_max late in a run; normalization layers and
-    weight decay bound it. Goemaere et al. trained ResNet-18 at
-    eta_infer = 1e-3, T = 5 for 50 epochs without instability (batch
-    normalization after every convolution, ReLU, weight decay ≤ 1e-3,
-    standard parameterization). The muPC resnet18 demo
-    (``examples/resnet18_cifar10_demo.py``: no normalization layers, gelu,
-    weight decay 1e-2, a 100-epoch schedule) at the same defaults trained as
-    backprop for tens of epochs and collapsed to chance by epoch 20 while
-    infer_steps ∈ {1, 2} survived; λ_max tracked through the collapse grew
-    from 16 at init past 2/eta_infer. The defaults are kept pending a
-    stability-aware rate; ``fabricpc.training.RegimeProbe`` tracks the
-    spectrum and the regime during any ``train`` run.
+    the downstream weights' actions, so it grows during training and a fixed
+    eta_infer can cross 2/λ_max late in a run. The defaults have no regime meaning independent
+    of the graph, so set both arguments explicitly and read ``regime``.
+    ``fabricpc.training.RegimeProbe`` tracks the spectrum and the regime
+    during any ``train`` run; ``docs/user_guides/17_training_with_epc.md``
+    gives the workflow.
     """
 
     def __init__(self, eta_infer=1e-3, infer_steps=5, latent_decay=0.0):

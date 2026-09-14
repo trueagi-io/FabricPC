@@ -146,4 +146,9 @@ io/FabricPC/issues/68).
   tuned before the per-prediction normalization (on batch-summed gradients)
   is multiplied by the prediction count N, and a coupled weight decay divided
   by N.
+- **Under `EPCInference`**: Adam or AdamW. One ePC step leaves the hidden-layer
+  weight gradients scaled by the inference rate η and the output layer's
+  unscaled; Adam normalizes the scale away, while plain SGD trains the hidden
+  layers η times slower than the output layer. Caveats in
+  [Training with ePC](17_training_with_epc.md#optimizer-interaction).
 - Natural gradient transforms are experimental; useful for research comparisons

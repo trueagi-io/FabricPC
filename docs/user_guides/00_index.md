@@ -17,6 +17,7 @@ Step-by-step guides for building and training predictive coding networks.
 - [Custom Nodes](06_custom_nodes.md) — Writing your own node types
 - [Optimizers](07_optimizers.md) — Optax integration, chaining transforms, and natural gradients
 - [Training and Evaluation](08_training_and_evaluation.md) — Training loops, evaluation, callbacks, multi-GPU, and autoregressive language modeling (training, perplexity, generation)
+- [Training with ePC](17_training_with_epc.md) — Measuring the error-Hessian spectrum of your graph, choosing η and T from it, tracking stability during training, and reading the regime label before reporting a result as PC
 - [Experiment Tracking](09_experiment_tracking.md) — Monitoring training with Aim dashboards
 
 ## API Reference
@@ -25,7 +26,7 @@ Comprehensive reference for all library components.
 
 - [Nodes](10_api_nodes.md) — All node types with full constructor signatures
 - [Activations and Energy Functionals](11_api_activations_and_energy.md) — Activation functions and energy formulations
-- [Inference Algorithms](12_api_inference.md) — Inference loop algorithms
+- [Inference Algorithms](12_api_inference.md) — The state-based solvers (`InferenceSGD`, `InferenceSGDNormClip`), the error-based solver `EPCInference` with its spectrum and regime tools, and composed schedules
 - [Initializers](13_api_initializers.md) — Weight and state initializers
 - [Data Loaders](14_api_data.md) — Built-in datasets, character-level and BPE text loaders, and custom data
 - [Experiment Framework](15_api_experiments.md) — paired experiments with planned contrasts, statistics, and two-phase hyperparameter tuning

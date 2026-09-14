@@ -103,7 +103,11 @@ class RegimeProbe:
         inference: the ``EPCInference`` whose (eta_infer, infer_steps) the
             regime judges; ``None`` reads ``structure.config["inference"]``
             when that is an ``EPCInference``. The regime is recorded only
-            under ``algorithm="pc"`` with such a solver.
+            under ``algorithm="pc"`` with such a solver. Under an
+            ``InferenceSchedule`` pass the ePC segment explicitly; the
+            regime then describes that segment's relaxation, not the
+            schedule's final state. With ``None`` and no ``EPCInference``
+            configured, the regime columns stay empty.
         iters: Lanczos steps per probe.
         key: PRNG key for the probe's latent initialization and the random
             Lanczos start when the gradient is zero.
