@@ -33,6 +33,7 @@ REGISTRY_MODULES = [
     "fabricpc.utils.data",
     "fabricpc.tuning",
     "fabricpc.utils.dashboarding.trackers",
+    "fabricpc.training",
 ]
 
 TABLE_HEADER = re.compile(
