@@ -42,6 +42,8 @@ def create_deep_transformer(
     vocab_size: int,
     inference: InferenceBase,
     weight_init: Optional[Dict[str, Any]] = None,
+    dropout_rate: float = 0.0,
+    attn_dropout_rate: float = 0.0,
 ):
     """
     Creates a deep transformer graph using the new class-based builder API.
@@ -54,6 +56,13 @@ def create_deep_transformer(
     muPC scaling is disabled on these two nodes (embedding = discrete lookup,
     output = include_output=False). Changing these without accounting for the
     muPC interaction can cause embedding variance collapse or softmax saturation.
+
+    Dropout: ``dropout_rate`` applies to the embedding output and to both
+    residual branches (attention and MLP) of every block;
+    ``attn_dropout_rate`` to the attention probabilities. Both default to 0.0
+    (the previous behavior). Dropout is active only on training steps — the
+    trainer supplies a per-batch ``dropout_key`` — and off in evaluation and
+    generation.
     """
     if weight_init is None:
         # Transformer block weights default to std=0.02 (GPT-style); embedding
@@ -88,6 +97,7 @@ def create_deep_transformer(
         vocab_size=vocab_size,
         embed_dim=embed_dim,
         weight_init=NormalInitializer(std=1.0),
+        dropout_rate=dropout_rate,
     )
     nodes.append(embed_node)
     edges.append(Edge(source=input_node, target=embed_node.slot("in")))
@@ -101,6 +111,8 @@ def create_deep_transformer(
             embed_dim=embed_dim,
             num_heads=num_heads,
             weight_init=w_init_obj,
+            dropout_rate=dropout_rate,
+            attn_dropout_rate=attn_dropout_rate,
         )
         nodes.append(mha)
         # previous_residual feeds two edges: "in" is the attention-branch input
@@ -126,6 +138,7 @@ def create_deep_transformer(
             embed_dim=embed_dim,
             ff_dim=mlp_dim,
             weight_init=w_init_obj,
+            dropout_rate=dropout_rate,
         )
         nodes.append(mlp2)
         edges.append(Edge(source=mlp1, target=mlp2.slot("in")))

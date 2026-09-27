@@ -14,6 +14,7 @@ Nodes are computational units with state and learnable parameters. Each node mai
   - `error`: The prediction error (`z_latent - z_mu`)
   - `energy`: The per-sample free energy (computed from the error via the energy functional)
   - `latent_grad`: The gradient accumulator `dE/dz_latent` consumed by the inference update
+  - `dropout_key`: The node's dropout key, or `None` when dropout is off (see [Nodes API](10_api_nodes.md))
 
 - **Configuration**:
   - `shape`: Output shape (excluding batch dimension)

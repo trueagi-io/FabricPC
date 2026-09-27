@@ -7,6 +7,7 @@ normalization and energy to ``make_train_step``, so the two cannot drift.
 
 import jax
 import optax
+import pytest
 
 from conftest import make_classification_structure, max_param_diff
 from fabricpc.core.energy import graph_energy
@@ -20,11 +21,13 @@ from fabricpc.utils.dashboarding import (
 )
 
 
-def test_train_step_with_history_matches_trainer_step(rng_key):
+@pytest.mark.parametrize("dropout_rate", [0.0, 0.5])
+def test_train_step_with_history_matches_trainer_step(rng_key, dropout_rate):
     """Under optax.sgd(1.0) the applied update is the gradient itself, so a
     parameter match pins the per-prediction normalization; the returned
-    energy is graph_energy / N with N = B for a rank-2 target."""
-    structure = make_classification_structure()
+    energy is graph_energy / N with N = B for a rank-2 target. With dropout
+    the match also pins the dropout masks to the trainer's."""
+    structure = make_classification_structure(hidden_dropout_rate=dropout_rate)
     params = initialize_params(structure, rng_key)
     kx, ky = jax.random.split(rng_key)
     batch_size = 4

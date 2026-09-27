@@ -2,8 +2,10 @@
 Hyperparameter Tuning — Transformer on Tiny Shakespeare (Two-Phase)
 
 Phase 1 — Architecture search: explore embed_dim, mlp_dim, num_heads, depth,
-           infer_steps, eta_infer, lr, weight_init_std. Minimize perplexity;
-           prune diverging trials via a scale-free energy guard.
+           infer_steps, eta_infer, lr, weight_init_std, dropout_rate. Minimize
+           perplexity; prune diverging trials via a scale-free energy guard.
+           Dropout is active in training only; validation perplexity is
+           measured without it.
 
 Phase 2 — Continuous fine-tuning: fix the winning architecture, search only
            lr, eta_infer, infer_steps in a tight window. Minimize perplexity.
@@ -35,6 +37,9 @@ def trial_model(config, rng_key):
     batch_size = config.get("batch_size", 32)
     vocab_size = config.get("vocab_size", 65)
     weight_init_std = config.get("weight_init_std", 0.02)
+    dropout_rate = config.get("dropout_rate", 0.0)
+    # Attention dropout follows dropout_rate unless set separately (GPT-2 style).
+    attn_dropout_rate = config.get("attn_dropout_rate", dropout_rate)
     use_bpe = config.get("use_bpe", False)
 
     if embed_dim % num_heads != 0:
@@ -83,6 +88,8 @@ def trial_model(config, rng_key):
         vocab_size=vocab_size,
         inference=inference,
         weight_init={"type": "normal", "std": weight_init_std},
+        dropout_rate=dropout_rate,
+        attn_dropout_rate=attn_dropout_rate,
     )
 
     params = initialize_params(structure, rng_key)
@@ -112,6 +119,7 @@ def phase1_search_space(trial):
     eta_infer = trial.suggest_float("eta_infer", 0.01, 0.15)
     lr = trial.suggest_float("lr", 1e-5, 3e-4, log=True)
     weight_init_std = trial.suggest_float("weight_init_std", 0.01, 0.05, log=True)
+    dropout_rate = trial.suggest_categorical("dropout_rate", [0.0, 0.1, 0.2])
 
     return {
         "embed_dim": embed_dim,
@@ -124,6 +132,7 @@ def phase1_search_space(trial):
         "eta_infer": eta_infer,
         "lr": lr,
         "weight_init_std": weight_init_std,
+        "dropout_rate": dropout_rate,
     }
 
 
@@ -135,7 +144,8 @@ def phase1_search_space(trial):
 def phase2_search_space(trial, best_params):
     """
     Fine-tune only continuous training params around the Phase 1 best values.
-    Architecture (embed_dim, num_heads, mlp_dim, depth, weight_init_std) is fixed.
+    Architecture (embed_dim, num_heads, mlp_dim, depth, weight_init_std,
+    dropout_rate) is fixed.
     """
     lr = best_params.get("lr", 1e-4)
     eta_infer = best_params.get("eta_infer", 0.1)

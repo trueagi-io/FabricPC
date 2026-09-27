@@ -152,6 +152,7 @@ Here's how predictive coding concepts map to FabricPC types:
 | Prediction error | `NodeState.error` | `z_latent - z_mu` |
 | Energy | `NodeState.energy` | Computed by the node's `EnergyFunctional` |
 | Latent gradient | `NodeState.latent_grad` | Gradient accumulator `dE/dz_latent` consumed by the inference update |
+| Dropout key | `NodeState.dropout_key` | Per-node key for dropout masks, fixed for the batch; `None` when dropout is off |
 | Inference update | `InferenceBase` | `z -= eta * dE/dz` (updates latent states) |
 | Weight gradient | `compute_local_weight_gradients` | Local Hebbian gradient `dE/dW` |
 | Clamped node | `clamps` dict | Node whose `z_latent` is fixed to observed data |

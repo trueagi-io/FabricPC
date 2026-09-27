@@ -264,6 +264,7 @@ class BayesianTuner:
             f"MLP: {config.get('mlp_dim', 'N/A')} | "
             f"Heads: {config.get('num_heads', 'N/A')} | "
             f"Depth: {config.get('depth', 'N/A')} | "
+            f"Dropout: {config.get('dropout_rate', 'N/A')} | "
             f"Infer: {config.get('infer_steps', 'N/A')} | "
             f"Eta: {config.get('eta_infer', 'N/A')}\n"
         )

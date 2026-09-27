@@ -29,6 +29,7 @@ from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.activations import IdentityActivation
 from fabricpc.core.energy import GaussianEnergy
 from fabricpc.core.initializers import NormalInitializer, KaimingInitializer, initialize
+from fabricpc.core.dropout import dropout, validate_dropout_rate
 
 from fabricpc.core.activations import ActivationBase
 from fabricpc.core.energy import EnergyFunctional
@@ -58,6 +59,7 @@ class Linear(FlattenInputMixin, NodeBase):
         flatten_input: bool = False,
         weight_init: InitializerBase = KaimingInitializer(),
         latent_init: InitializerBase = NormalInitializer(),
+        dropout_rate: float = 0.0,
     ):
         """
         Args:
@@ -69,6 +71,9 @@ class Linear(FlattenInputMixin, NodeBase):
             flatten_input: If True, flatten all input dims for dense behavior (default: False)
             weight_init: InitializerBase instance for weights (default: KaimingInitializer)
             latent_init: InitializerBase instance for latent states
+            dropout_rate: Dropout on the activation output, in [0, 1)
+                (default: 0.0). Active only when the state carries a
+                dropout key (training steps); see fabricpc.core.dropout.
         """
         super().__init__(
             shape=shape,
@@ -79,6 +84,7 @@ class Linear(FlattenInputMixin, NodeBase):
             weight_init=weight_init,
             use_bias=use_bias,
             flatten_input=flatten_input,
+            dropout_rate=validate_dropout_rate(name, "dropout_rate", dropout_rate),
         )
 
     @staticmethod
@@ -122,6 +128,12 @@ class Linear(FlattenInputMixin, NodeBase):
 
         activation = node_info.activation
         z_mu = type(activation).forward(pre_activation, activation.config)
+        z_mu = dropout(
+            z_mu,
+            node_info.node_config.get("dropout_rate", 0.0),
+            state.dropout_key,
+            site=0,
+        )
         return z_mu, pre_activation
 
     @staticmethod

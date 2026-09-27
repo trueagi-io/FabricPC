@@ -17,7 +17,7 @@ Everything else is base-owned and **not an override point**: the error pair (`pa
 
 `fabricpc.nodes.Linear`
 
-Weighted projection node: `z_mu = activation(W @ x + b)`
+Weighted projection node: `z_mu = dropout(activation(W @ x + b))`
 
 ```python
 from fabricpc.nodes import Linear
@@ -36,24 +36,27 @@ node = Linear(
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `shape` | `Tuple[int, ...]` | required | Output shape excluding batch dimension |
-| `name` | `str` | required | Node name (auto-prefixed with current namespace) |
-| `activation` | `ActivationBase` | `IdentityActivation()` | Activation function |
-| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
-| `use_bias` | `bool` | `True` | Whether to include a bias term |
-| `flatten_input` | `bool` | `False` | If True, flatten all input dims for dense behavior |
-| `weight_init` | `InitializerBase` | `KaimingInitializer()` | Weight initializer |
-| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+| Parameter         | Type                 | Default                  | Description                                        |
+| ----------------- | -------------------- | ------------------------ | -------------------------------------------------- |
+| `shape`         | `Tuple[int, ...]`  | required                 | Output shape excluding batch dimension             |
+| `name`          | `str`              | required                 | Node name (auto-prefixed with current namespace)   |
+| `activation`    | `ActivationBase`   | `IdentityActivation()` | Activation function                                |
+| `energy`        | `EnergyFunctional` | `GaussianEnergy()`     | Energy functional                                  |
+| `use_bias`      | `bool`             | `True`                 | Whether to include a bias term                     |
+| `flatten_input` | `bool`             | `False`                | If True, flatten all input dims for dense behavior |
+| `weight_init`   | `InitializerBase`  | `KaimingInitializer()` | Weight initializer                                 |
+| `latent_init`   | `InitializerBase`  | `NormalInitializer()`  | Latent state initializer                           |
+| `dropout_rate` | `float` | `0.0` | Dropout on the activation output; must be in `[0, 1)`. Training steps only (see [The RNG contract](08_training_and_evaluation.md#the-rng-contract)) |
 
 **Slots:** `"in"` (multi-input)
 
 **Weight shape:**
+
 - `flatten_input=False`: `(in_features, out_features)` — matmul on last axis
 - `flatten_input=True`: `(in_numel, out_numel)` — fully-connected dense
 
 **muPC variance factor:** the Kaiming fan_in.
+
 - `flatten_input=False`: `source_shape[-1]` (last axis features)
 - `flatten_input=True`: `prod(source_shape)` (all dims flattened)
 
@@ -73,14 +76,14 @@ pixels = IdentityNode(shape=(784,), name="pixels")
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `shape` | `Tuple[int, ...]` | required | Output shape excluding batch |
-| `name` | `str` | required | Node name |
-| `activation` | `ActivationBase` | `IdentityActivation()` | Activation function |
-| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
-| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
-| `scale` | `float` | `1.0` | Fixed scaling factor applied to output |
+| Parameter       | Type                 | Default                  | Description                            |
+| --------------- | -------------------- | ------------------------ | -------------------------------------- |
+| `shape`       | `Tuple[int, ...]`  | required                 | Output shape excluding batch           |
+| `name`        | `str`              | required                 | Node name                              |
+| `activation`  | `ActivationBase`   | `IdentityActivation()` | Activation function                    |
+| `energy`      | `EnergyFunctional` | `GaussianEnergy()`     | Energy functional                      |
+| `latent_init` | `InitializerBase`  | `NormalInitializer()`  | Latent state initializer               |
+| `scale`       | `float`            | `1.0`                  | Fixed scaling factor applied to output |
 
 **Slots:** `"in"` (multi-input)
 
@@ -108,24 +111,25 @@ hopfield = StorkeyHopfield(
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `shape` | `Tuple[int, ...]` | required | Output shape excluding batch |
-| `name` | `str` | required | Node name |
-| `hopfield_strength` | `float` | `None` | Initial blending strength (learnable if None, fixed if float) |
-| `activation` | `ActivationBase` | `TanhActivation()` | Activation function |
-| `energy` | `EnergyFunctional` | `GaussianEnergy()` | PC energy functional |
-| `use_bias` | `bool` | `False` | Whether to include bias term |
-| `enforce_symmetry` | `bool` | `True` | Symmetrize W via 0.5*(W+W.T) |
-| `zero_diagonal` | `bool` | `False` | Zero W diagonal in forward pass |
-| `weight_init` | `InitializerBase` | `XavierInitializer()` | Weight initializer for W matrix |
-| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+| Parameter             | Type                 | Default                 | Description                                                   |
+| --------------------- | -------------------- | ----------------------- | ------------------------------------------------------------- |
+| `shape`             | `Tuple[int, ...]`  | required                | Output shape excluding batch                                  |
+| `name`              | `str`              | required                | Node name                                                     |
+| `hopfield_strength` | `float`            | `None`                | Initial blending strength (learnable if None, fixed if float) |
+| `activation`        | `ActivationBase`   | `TanhActivation()`    | Activation function                                           |
+| `energy`            | `EnergyFunctional` | `GaussianEnergy()`    | PC energy functional                                          |
+| `use_bias`          | `bool`             | `False`               | Whether to include bias term                                  |
+| `enforce_symmetry`  | `bool`             | `True`                | Symmetrize W via 0.5*(W+W.T)                                  |
+| `zero_diagonal`     | `bool`             | `False`               | Zero W diagonal in forward pass                               |
+| `weight_init`       | `InitializerBase`  | `XavierInitializer()` | Weight initializer for W matrix                               |
+| `latent_init`       | `InitializerBase`  | `NormalInitializer()` | Latent state initializer                                      |
 
 **Slots:** `"in"` (single-input, variance-scalable).
 
 **muPC variance factor:** `v(s) = (1 + s²r)/(1 + s)²`, where `r = Var(probe @ W)/Var(probe)`. The blend coefficients `1/(1+s)` and `s/(1+s)` sum to 1, but the two terms are near-independent so their variances add in quadrature — the blend shrinks variance rather than preserving it. `v` is at most 1 and bottoms out at `r/(1+r)` when `s = 1/r`; under the default Xavier initialization plus symmetrization, `r = (D+1)/(2D) ≈ 1/2`, so the worst case is `v = 1/3` and the default `s = 1` gives `v = 0.375`. Uncorrected that compounds through a chain of these nodes. `get_variance_factor` reports `v(s)`, so muPC applies `a = gain/sqrt(v(s) · K_slot)` and the node holds O(1) variance at any strength and depth. With a learnable strength the factor is evaluated at the initial `s = 1.0` and held fixed (muPC's static-scale contract); the drift is bounded by `sqrt(3)`. The slot is not a skip connection, so the node does not count toward the residual depth L.
 
 **Energy formulation:**
+
 ```
 E_total = E_pc + hopfield_strength * E_hop
 E_pc   = 0.5 ||z - mu||^2  (or user-specified energy)
@@ -133,9 +137,11 @@ E_hop  = (1/2D) z^T (W^2 - W) z
 ```
 
 **Prediction:**
+
 ```
 z_mu = activation(probe/(1+s) + (probe @ W) * s/(1+s) + bias)
 ```
+
 where `s = softplus(raw_strength)` if `hopfield_strength=None` (learnable), otherwise `s = hopfield_strength` (fixed).
 
 **Learnable parameters:** `W` (D x D matrix), `bias` (if `use_bias=True`), `raw_hopfield_strength` (if `hopfield_strength=None`)
@@ -159,15 +165,16 @@ skip = SkipConnection(shape=(128,), name="res1")
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `shape` | `Tuple[int, ...]` | required | Output shape excluding batch |
-| `name` | `str` | required | Node name |
-| `activation` | `ActivationBase` | `IdentityActivation()` | Activation function |
-| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
-| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+| Parameter       | Type                 | Default                  | Description                  |
+| --------------- | -------------------- | ------------------------ | ---------------------------- |
+| `shape`       | `Tuple[int, ...]`  | required                 | Output shape excluding batch |
+| `name`        | `str`              | required                 | Node name                    |
+| `activation`  | `ActivationBase`   | `IdentityActivation()` | Activation function          |
+| `energy`      | `EnergyFunctional` | `GaussianEnergy()`     | Energy functional            |
+| `latent_init` | `InitializerBase`  | `NormalInitializer()`  | Latent state initializer     |
 
 **Slots:**
+
 - `"in"` (multi-input, `is_variance_scalable=True`) — branch contributions, scaled `gain/sqrt(K_slot * L)`
 - `"skip"` (multi-input, `is_variance_scalable=False`, `is_skip_connection=True`) — residual stream, unscaled
 
@@ -181,7 +188,7 @@ skip = SkipConnection(shape=(128,), name="res1")
 
 `fabricpc.nodes.LinearResidual`
 
-Linear residual node: `z_mu = activation(W @ x_in + b) + x_skip`. Combines a linear transformation (on the `"in"` slot) with an identity residual connection (on the `"skip"` slot) in one PC node.
+Linear residual node: `z_mu = dropout(activation(W @ x_in + b)) + x_skip`. Combines a linear transformation (on the `"in"` slot) with an identity residual connection (on the `"skip"` slot) in one PC node.
 
 ```python
 from fabricpc.nodes import LinearResidual
@@ -199,18 +206,20 @@ res = LinearResidual(
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `shape` | `Tuple[int, ...]` | required | Output shape excluding batch |
-| `name` | `str` | required | Node name |
-| `activation` | `ActivationBase` | `IdentityActivation()` | Activation function |
-| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
-| `use_bias` | `bool` | `True` | Whether to include a bias term |
-| `flatten_input` | `bool` | `False` | If True, flatten all input dims for dense behavior |
-| `weight_init` | `InitializerBase` | `KaimingInitializer()` | Weight initializer |
-| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+| Parameter         | Type                 | Default                  | Description                                        |
+| ----------------- | -------------------- | ------------------------ | -------------------------------------------------- |
+| `shape`         | `Tuple[int, ...]`  | required                 | Output shape excluding batch                       |
+| `name`          | `str`              | required                 | Node name                                          |
+| `activation`    | `ActivationBase`   | `IdentityActivation()` | Activation function                                |
+| `energy`        | `EnergyFunctional` | `GaussianEnergy()`     | Energy functional                                  |
+| `use_bias`      | `bool`             | `True`                 | Whether to include a bias term                     |
+| `flatten_input` | `bool`             | `False`                | If True, flatten all input dims for dense behavior |
+| `weight_init`   | `InitializerBase`  | `KaimingInitializer()` | Weight initializer                                 |
+| `latent_init`   | `InitializerBase`  | `NormalInitializer()`  | Latent state initializer                           |
+| `dropout_rate` | `float` | `0.0` | Dropout on the transform path before the residual add (the skip path is never dropped); must be in `[0, 1)` |
 
 **Slots:**
+
 - `"in"` (multi-input, `is_variance_scalable=True`): Transform path with weight matrix, scaled by muPC.
 - `"skip"` (multi-input, `is_variance_scalable=False`, `is_skip_connection=True`): Identity skip path, no weight matrix, passes through at scale 1.0.
 
@@ -237,7 +246,7 @@ prev ─────────┤  slot("skip") ──────────
 
 `fabricpc.nodes.ConvNode`
 
-Convolution node: `z_mu = activation(conv(x, kernel) + b)`, where `x` is the input feature map arriving on the `"in"` slot, `kernel` the node's convolution kernel, and `b` the per-channel bias. Each output position is predicted from a local window of the input feature map. One class covers 1D, 2D, and 3D convolution; the spatial rank is inferred from `len(shape) - 1`. Layout is channels-last: `(batch, spatial..., channels)`.
+Convolution node: `z_mu = dropout(activation(conv(x, kernel) + b))`, where `x` is the input feature map arriving on the `"in"` slot, `kernel` the node's convolution kernel, and `b` the per-channel bias. Each output position is predicted from a local window of the input feature map. One class covers 1D, 2D, and 3D convolution; the spatial rank is inferred from `len(shape) - 1`. Layout is channels-last: `(batch, spatial..., channels)`.
 
 ```python
 from fabricpc.nodes import ConvNode
@@ -253,19 +262,20 @@ conv1 = ConvNode(
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `shape` | `Tuple[int, ...]` | required | Output shape excluding batch: `(spatial..., C_out)` |
-| `name` | `str` | required | Node name |
-| `kernel_size` | `Tuple[int, ...]` | required | Window extent per spatial axis |
-| `stride` | `Tuple[int, ...]` | `None` | Step per spatial axis; `None` means 1 on every spatial axis |
-| `padding` | `str` or pairs | `"SAME"` | `"SAME"`, `"VALID"`, or explicit `(low, high)` pairs per spatial axis |
-| `activation` | `ActivationBase` | `ReLUActivation()` | Activation function |
-| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
-| `use_bias` | `bool` | `True` | Whether to include a per-channel bias |
-| `weight_init` | `InitializerBase` | `KaimingInitializer()` | Kernel initializer |
-| `bias_init` | `InitializerBase` | `ZerosInitializer()` | Bias initializer |
-| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+| Parameter       | Type                 | Default                  | Description                                                                 |
+| --------------- | -------------------- | ------------------------ | --------------------------------------------------------------------------- |
+| `shape`       | `Tuple[int, ...]`  | required                 | Output shape excluding batch:`(spatial..., C_out)`                        |
+| `name`        | `str`              | required                 | Node name                                                                   |
+| `kernel_size` | `Tuple[int, ...]`  | required                 | Window extent per spatial axis                                              |
+| `stride`      | `Tuple[int, ...]`  | `None`                 | Step per spatial axis;`None` means 1 on every spatial axis                |
+| `padding`     | `str` or pairs     | `"SAME"`               | `"SAME"`, `"VALID"`, or explicit `(low, high)` pairs per spatial axis |
+| `activation`  | `ActivationBase`   | `ReLUActivation()`     | Activation function                                                         |
+| `energy`      | `EnergyFunctional` | `GaussianEnergy()`     | Energy functional                                                           |
+| `use_bias`    | `bool`             | `True`                 | Whether to include a per-channel bias                                       |
+| `weight_init` | `InitializerBase`  | `KaimingInitializer()` | Kernel initializer                                                          |
+| `bias_init`   | `InitializerBase`  | `ZerosInitializer()`   | Bias initializer                                                            |
+| `latent_init` | `InitializerBase`  | `NormalInitializer()`  | Latent state initializer                                                    |
+| `dropout_rate` | `float` | `0.0` | Element-wise dropout on the activation output; must be in `[0, 1)` |
 
 **Slots:** `"in"` (multi-input)
 
@@ -295,16 +305,16 @@ pool1 = MaxPool(
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `shape` | `Tuple[int, ...]` | required | Output shape excluding batch: `(spatial..., C)` |
-| `name` | `str` | required | Node name |
-| `window_shape` | `Tuple[int, ...]` | required | Window extent per spatial axis |
-| `stride` | `Tuple[int, ...]` | `None` | Step per spatial axis; `None` uses `window_shape` (non-overlapping windows) |
-| `padding` | `str` or pairs | `"VALID"` | `"SAME"`, `"VALID"`, or explicit `(low, high)` pairs. Note: default differs from ConvNode's `"SAME"` |
-| `activation` | `ActivationBase` | `IdentityActivation()` | Activation function |
-| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
-| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+| Parameter        | Type                 | Default                  | Description                                                                                                  |
+| ---------------- | -------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `shape`        | `Tuple[int, ...]`  | required                 | Output shape excluding batch:`(spatial..., C)`                                                             |
+| `name`         | `str`              | required                 | Node name                                                                                                    |
+| `window_shape` | `Tuple[int, ...]`  | required                 | Window extent per spatial axis                                                                               |
+| `stride`       | `Tuple[int, ...]`  | `None`                 | Step per spatial axis;`None` uses `window_shape` (non-overlapping windows)                               |
+| `padding`      | `str` or pairs     | `"VALID"`              | `"SAME"`, `"VALID"`, or explicit `(low, high)` pairs. Note: default differs from ConvNode's `"SAME"` |
+| `activation`   | `ActivationBase`   | `IdentityActivation()` | Activation function                                                                                          |
+| `energy`       | `EnergyFunctional` | `GaussianEnergy()`     | Energy functional                                                                                            |
+| `latent_init`  | `InitializerBase`  | `NormalInitializer()`  | Latent state initializer                                                                                     |
 
 **Slots:** `"in"` (multi-input)
 
@@ -330,18 +340,18 @@ avgpool = AvgPool(shape=(256,), name="avgpool", global_pool=True)
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `shape` | `Tuple[int, ...]` | required | Output shape excluding batch. Rank-1 `(C,)` required when `global_pool=True`; construction raises `ValueError` otherwise |
-| `name` | `str` | required | Node name |
-| `window_shape` | `Tuple[int, ...]` | `None` | Window extent per spatial axis (windowed mode) |
-| `stride` | `Tuple[int, ...]` | `None` | Step per spatial axis; `None` uses `window_shape` (non-overlapping windows) |
-| `padding` | `str` or pairs | `"VALID"` | `"SAME"`, `"VALID"`, or explicit `(low, high)` pairs |
-| `global_pool` | `bool` | `False` | Average over all spatial axes instead of windows |
-| `count_include_pad` | `bool` | `True` | Divide by the full window volume; `False` divides by the count of real (non-padding) elements |
-| `activation` | `ActivationBase` | `IdentityActivation()` | Activation function |
-| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
-| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+| Parameter             | Type                 | Default                  | Description                                                                                                                   |
+| --------------------- | -------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `shape`             | `Tuple[int, ...]`  | required                 | Output shape excluding batch. Rank-1`(C,)` required when `global_pool=True`; construction raises `ValueError` otherwise |
+| `name`              | `str`              | required                 | Node name                                                                                                                     |
+| `window_shape`      | `Tuple[int, ...]`  | `None`                 | Window extent per spatial axis (windowed mode)                                                                                |
+| `stride`            | `Tuple[int, ...]`  | `None`                 | Step per spatial axis;`None` uses `window_shape` (non-overlapping windows)                                                |
+| `padding`           | `str` or pairs     | `"VALID"`              | `"SAME"`, `"VALID"`, or explicit `(low, high)` pairs                                                                    |
+| `global_pool`       | `bool`             | `False`                | Average over all spatial axes instead of windows                                                                              |
+| `count_include_pad` | `bool`             | `True`                 | Divide by the full window volume;`False` divides by the count of real (non-padding) elements                                |
+| `activation`        | `ActivationBase`   | `IdentityActivation()` | Activation function                                                                                                           |
+| `energy`            | `EnergyFunctional` | `GaussianEnergy()`     | Energy functional                                                                                                             |
+| `latent_init`       | `InitializerBase`  | `NormalInitializer()`  | Latent state initializer                                                                                                      |
 
 **Slots:** `"in"` (multi-input)
 
@@ -368,25 +378,26 @@ block = TransformerBlock(
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `shape` | `Tuple[int, ...]` | required | Output shape `(seq_len, embed_dim)` |
-| `name` | `str` | required | Node name |
-| `activation` | `ActivationBase` | `IdentityActivation()` | Output activation function |
-| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
-| `internal_activation` | `ActivationBase` | `GeluActivation()` | FFN internal activation |
-| `num_heads` | `int` | `8` | Number of attention heads |
-| `ff_dim` | `int` | `None` | Feedforward hidden dimension; `None` means `4 * embed_dim` |
-| `dropout_rate` | `float` | `0.0` | Dropout rate (currently unused) |
-| `pre_norm` | `bool` | `True` | Use pre-norm architecture |
-| `use_rope` | `bool` | `True` | Use Rotary Position Embeddings |
-| `rope_theta` | `float` | `10000.0` | Base frequency for RoPE |
-| `weight_init` | `InitializerBase` | `KaimingInitializer()` | Weight initializer |
-| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+| Parameter               | Type                 | Default                  | Description                                                   |
+| ----------------------- | -------------------- | ------------------------ | ------------------------------------------------------------- |
+| `shape`               | `Tuple[int, ...]`  | required                 | Output shape`(seq_len, embed_dim)`                          |
+| `name`                | `str`              | required                 | Node name                                                     |
+| `activation`          | `ActivationBase`   | `IdentityActivation()` | Output activation function                                    |
+| `energy`              | `EnergyFunctional` | `GaussianEnergy()`     | Energy functional                                             |
+| `internal_activation` | `ActivationBase`   | `GeluActivation()`     | FFN internal activation                                       |
+| `num_heads`           | `int`              | `8`                    | Number of attention heads                                     |
+| `ff_dim`              | `int`              | `None`                 | Feedforward hidden dimension;`None` means `4 * embed_dim` |
+| `dropout_rate`        | `float`            | `0.0`                  | Dropout rate (currently unused)                               |
+| `pre_norm`            | `bool`             | `True`                 | Use pre-norm architecture                                     |
+| `use_rope`            | `bool`             | `True`                 | Use Rotary Position Embeddings                                |
+| `rope_theta`          | `float`            | `10000.0`              | Base frequency for RoPE                                       |
+| `weight_init`         | `InitializerBase`  | `KaimingInitializer()` | Weight initializer                                            |
+| `latent_init`         | `InitializerBase`  | `NormalInitializer()`  | Latent state initializer                                      |
 
 **Slots:** `"in"` (token embeddings), `"mask"` (optional attention mask)
 
 **Architecture:**
+
 ```
 x → LayerNorm → MHA → + → LayerNorm → FFN → +
 └─────────────────────┘ └────────────────────┘
@@ -419,17 +430,17 @@ Each block wires two unscaled bypass edges: the previous block's output feeds bo
 
 Symbols used in the node formulas below:
 
-| Symbol | Meaning |
-|--------|---------|
-| `z_mu` | The node's prediction for its latent state, computed by its forward pass |
-| `x_in` | Input arriving on the node's `"in"` slot (the muPC-scaled path) |
-| `x_skip`, `x_residual` | Inputs on the unscaled bypass slots of `MhaResidualNode` / `Mlp2ResidualNode` |
-| `E` | The `(vocab_size, embed_dim)` embedding table |
-| `W_q`, `W_k`, `W_v`, `W_o` | Attention projection weights inside `MhaResidualNode` |
-| `W_ff1`, `b_ff1` | First MLP projection weight and bias (`LnMlp1Node`) |
-| `W_ff2`, `b_ff2` | Second MLP projection weight and bias (`Mlp2ResidualNode`) |
-| `W_out`, `b_out` | Vocabulary projection weight and bias (`VocabProjectionNode`) |
-| `d` | Number of transformer blocks (the builder's `depth`) |
+| Symbol                             | Meaning                                                                          |
+| ---------------------------------- | -------------------------------------------------------------------------------- |
+| `z_mu`                           | The node's prediction for its latent state, computed by its forward pass         |
+| `x_in`                           | Input arriving on the node's`"in"` slot (the muPC-scaled path)                 |
+| `x_skip`, `x_residual`         | Inputs on the unscaled bypass slots of`MhaResidualNode` / `Mlp2ResidualNode` |
+| `E`                              | The`(vocab_size, embed_dim)` embedding table                                   |
+| `W_q`, `W_k`, `W_v`, `W_o` | Attention projection weights inside`MhaResidualNode`                           |
+| `W_ff1`, `b_ff1`               | First MLP projection weight and bias (`LnMlp1Node`)                            |
+| `W_ff2`, `b_ff2`               | Second MLP projection weight and bias (`Mlp2ResidualNode`)                     |
+| `W_out`, `b_out`               | Vocabulary projection weight and bias (`VocabProjectionNode`)                  |
+| `d`                              | Number of transformer blocks (the builder's`depth`)                            |
 
 ### create_deep_transformer
 
@@ -454,59 +465,67 @@ structure = create_deep_transformer(
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `depth` | `int` | required | Number of transformer blocks |
-| `embed_dim` | `int` | required | Embedding and residual-stream width |
-| `num_heads` | `int` | required | Attention heads per block |
-| `mlp_dim` | `int` | required | Hidden width of the block MLP |
-| `seq_len` | `int` | required | Sequence length |
-| `vocab_size` | `int` | required | Vocabulary size |
-| `inference` | `InferenceBase` | required | Inference algorithm for latent updates |
-| `weight_init` | `dict` | `None` | Block-weight initializer spec, e.g. `{"type": "normal", "std": 0.05}` or `{"type": "xavier"}`; `None` gives `NormalInitializer(std=0.02)` |
+| Parameter       | Type              | Default  | Description                                                                                                                                      |
+| --------------- | ----------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `depth`       | `int`           | required | Number of transformer blocks                                                                                                                     |
+| `embed_dim`   | `int`           | required | Embedding and residual-stream width                                                                                                              |
+| `num_heads`   | `int`           | required | Attention heads per block                                                                                                                        |
+| `mlp_dim`     | `int`           | required | Hidden width of the block MLP                                                                                                                    |
+| `seq_len`     | `int`           | required | Sequence length                                                                                                                                  |
+| `vocab_size`  | `int`           | required | Vocabulary size                                                                                                                                  |
+| `inference`   | `InferenceBase` | required | Inference algorithm for latent updates                                                                                                           |
+| `weight_init` | `dict`          | `None` | Block-weight initializer spec, e.g.`{"type": "normal", "std": 0.05}` or `{"type": "xavier"}`; `None` gives `NormalInitializer(std=0.02)` |
+| `dropout_rate` | `float` | `0.0` | Dropout on the embedding output and on both residual branches (attention and MLP) of every block |
+| `attn_dropout_rate` | `float` | `0.0` | Dropout on the attention probabilities of every block |
 
 Returns a `GraphStructure` with `TaskMap(x=input_ids, y=logits)` — clamp `x` with int32 token ids `(batch, seq_len)`, read logits from `y` — plus `MuPCConfig(include_output=False)` and `FeedforwardStateInit()`.
 
 **Initialization:** `weight_init` covers the block weights only. The builder overrides two nodes regardless: the embedding uses `NormalInitializer(std=1.0)` because muPC scaling is disabled on the discrete lookup edge and unit-normal keeps each token's embedding at order-1 variance, and the vocabulary projection uses `Normal(std=sqrt(1/embed_dim))` because each logit is a dot product over `embed_dim` features and this keeps initial logit variance at order 1. Nodes constructed directly get the class defaults in the tables below, not these overrides.
 
+**Dropout:** inverted dropout at the GPT-2 sites — embedding output, attention probabilities, and each residual branch before its add. `LnMlp1Node` and `VocabProjectionNode` carry none. Masks are drawn from a per-node key in `NodeState.dropout_key` and are fixed for the whole training step: feedforward initialization, every inference sweep, the weight-gradient pass, and the backprop objective all see the same mask, and PC and backprop draw identical masks for the same batch key. With no key (evaluation, generation, and any direct `initialize_graph_state` call without `dropout_key`) the nodes are deterministic. See [The RNG contract](08_training_and_evaluation.md#the-rng-contract).
+
 ### EmbeddingNode
 
-Token-embedding lookup: `z_mu = E[token_ids]`, where `E` is the `(vocab_size, embed_dim)` embedding table. Input is int32 token ids `(batch, seq_len)`; output is `(batch, seq_len, embed_dim)`. Token ids are discrete, so no gradient flows back through the input edge.
+Token-embedding lookup: `z_mu = dropout(E[token_ids])`, where `E` is the `(vocab_size, embed_dim)` embedding table. Input is int32 token ids `(batch, seq_len)`; output is `(batch, seq_len, embed_dim)`. Token ids are discrete, so no gradient flows back through the input edge.
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `shape` | `Tuple[int, int]` | required | `(seq_len, embed_dim)` |
-| `name` | `str` | required | Node name |
-| `vocab_size` | `int` | required | Rows of the embedding table |
-| `embed_dim` | `int` | required | Columns of the embedding table |
-| `weight_init` | `InitializerBase` | `NormalInitializer(std=0.02)` | Embedding-table initializer |
-| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
-| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
+| Parameter       | Type                 | Default                         | Description                    |
+| --------------- | -------------------- | ------------------------------- | ------------------------------ |
+| `shape`       | `Tuple[int, int]`  | required                        | `(seq_len, embed_dim)`       |
+| `name`        | `str`              | required                        | Node name                      |
+| `vocab_size`  | `int`              | required                        | Rows of the embedding table    |
+| `embed_dim`   | `int`              | required                        | Columns of the embedding table |
+| `weight_init` | `InitializerBase`  | `NormalInitializer(std=0.02)` | Embedding-table initializer    |
+| `latent_init` | `InitializerBase`  | `NormalInitializer()`         | Latent state initializer       |
+| `energy`      | `EnergyFunctional` | `GaussianEnergy()`            | Energy functional              |
+| `dropout_rate` | `float` | `0.0` | Dropout on the looked-up embeddings; must be in `[0, 1)` |
 
 **Slots:** `"in"` (single-input, `is_variance_scalable=False` — muPC leaves the token-id edge unscaled)
 
 ### MhaResidualNode
 
-Pre-norm multi-head self-attention with the residual added inside the node: `z_mu = x_skip + W_o @ MHA(LayerNorm(x_in))`, where `x_in` is the `"in"` slot input and `x_skip` the `"skip"` slot input. With `is_causal=True` a lower-triangular mask is applied to the attention scores inside the node. With `use_rope=True` rotary position embeddings are applied to queries and keys.
+Pre-norm multi-head self-attention with the residual added inside the node: `z_mu = x_skip + dropout(W_o @ MHA(LayerNorm(x_in)))`, where `x_in` is the `"in"` slot input and `x_skip` the `"skip"` slot input. With `is_causal=True` a lower-triangular mask is applied to the attention scores inside the node. With `use_rope=True` rotary position embeddings are applied to queries and keys.
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `shape` | `Tuple[int, int]` | required | `(seq_len, embed_dim)` |
-| `name` | `str` | required | Node name |
-| `embed_dim` | `int` | required | Residual-stream width |
-| `num_heads` | `int` | required | Attention heads; head dimension is `embed_dim / num_heads` |
-| `use_rope` | `bool` | `True` | Apply rotary position embeddings to Q and K |
-| `rope_theta` | `float` | `10000.0` | Base frequency for RoPE |
-| `is_causal` | `bool` | `True` | Apply the lower-triangular mask inside attention |
-| `weight_init` | `InitializerBase` | `XavierInitializer()` | Initializer for `W_q`, `W_k`, `W_v`, `W_o` |
-| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
-| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
+| Parameter       | Type                 | Default                 | Description                                                 |
+| --------------- | -------------------- | ----------------------- | ----------------------------------------------------------- |
+| `shape`       | `Tuple[int, int]`  | required                | `(seq_len, embed_dim)`                                    |
+| `name`        | `str`              | required                | Node name                                                   |
+| `embed_dim`   | `int`              | required                | Residual-stream width                                       |
+| `num_heads`   | `int`              | required                | Attention heads; head dimension is`embed_dim / num_heads` |
+| `use_rope`    | `bool`             | `True`                | Apply rotary position embeddings to Q and K                 |
+| `rope_theta`  | `float`            | `10000.0`             | Base frequency for RoPE                                     |
+| `is_causal`   | `bool`             | `True`                | Apply the lower-triangular mask inside attention            |
+| `weight_init` | `InitializerBase`  | `XavierInitializer()` | Initializer for`W_q`, `W_k`, `W_v`, `W_o`           |
+| `latent_init` | `InitializerBase`  | `NormalInitializer()` | Latent state initializer                                    |
+| `energy`      | `EnergyFunctional` | `GaussianEnergy()`    | Energy functional                                           |
+| `dropout_rate` | `float` | `0.0` | Dropout on the attention branch before the residual add; must be in `[0, 1)` |
+| `attn_dropout_rate` | `float` | `0.0` | Dropout on the attention probabilities; must be in `[0, 1)` |
 
 **Slots:**
+
 - `"in"` (single-input, `is_variance_scalable=True`): attention-branch input, muPC-scaled.
 - `"skip"` (single-input, `is_variance_scalable=False`, `is_skip_connection=True`): residual bypass, unscaled.
 
@@ -518,16 +537,16 @@ LayerNorm followed by the first MLP projection: `z_mu = activation(W_ff1 @ Layer
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `shape` | `Tuple[int, int]` | required | `(seq_len, ff_dim)` |
-| `name` | `str` | required | Node name |
-| `embed_dim` | `int` | required | Input width (LayerNorm and `W_ff1` rows) |
-| `ff_dim` | `int` | required | Hidden width (`W_ff1` columns) |
-| `activation` | `ActivationBase` | `GeluActivation()` | Activation after the projection |
-| `weight_init` | `InitializerBase` | `KaimingInitializer()` | Initializer for `W_ff1` |
-| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
-| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
+| Parameter       | Type                 | Default                  | Description                               |
+| --------------- | -------------------- | ------------------------ | ----------------------------------------- |
+| `shape`       | `Tuple[int, int]`  | required                 | `(seq_len, ff_dim)`                     |
+| `name`        | `str`              | required                 | Node name                                 |
+| `embed_dim`   | `int`              | required                 | Input width (LayerNorm and`W_ff1` rows) |
+| `ff_dim`      | `int`              | required                 | Hidden width (`W_ff1` columns)          |
+| `activation`  | `ActivationBase`   | `GeluActivation()`     | Activation after the projection           |
+| `weight_init` | `InitializerBase`  | `KaimingInitializer()` | Initializer for`W_ff1`                  |
+| `latent_init` | `InitializerBase`  | `NormalInitializer()`  | Latent state initializer                  |
+| `energy`      | `EnergyFunctional` | `GaussianEnergy()`     | Energy functional                         |
 
 **Slots:** `"in"` (single-input)
 
@@ -535,21 +554,23 @@ LayerNorm followed by the first MLP projection: `z_mu = activation(W_ff1 @ Layer
 
 ### Mlp2ResidualNode
 
-Second MLP projection with the block residual added inside the node: `z_mu = x_residual + W_ff2 @ x_in + b_ff2`, where `x_in` is the `LnMlp1Node` output and `x_residual` the attention output.
+Second MLP projection with the block residual added inside the node: `z_mu = x_residual + dropout(W_ff2 @ x_in + b_ff2)`, where `x_in` is the `LnMlp1Node` output and `x_residual` the attention output.
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `shape` | `Tuple[int, int]` | required | `(seq_len, embed_dim)` |
-| `name` | `str` | required | Node name |
-| `embed_dim` | `int` | required | Output width (`W_ff2` columns) |
-| `ff_dim` | `int` | required | Input width (`W_ff2` rows) |
-| `weight_init` | `InitializerBase` | `XavierInitializer()` | Initializer for `W_ff2` |
-| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
-| `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
+| Parameter       | Type                 | Default                 | Description                      |
+| --------------- | -------------------- | ----------------------- | -------------------------------- |
+| `shape`       | `Tuple[int, int]`  | required                | `(seq_len, embed_dim)`         |
+| `name`        | `str`              | required                | Node name                        |
+| `embed_dim`   | `int`              | required                | Output width (`W_ff2` columns) |
+| `ff_dim`      | `int`              | required                | Input width (`W_ff2` rows)     |
+| `weight_init` | `InitializerBase`  | `XavierInitializer()` | Initializer for`W_ff2`         |
+| `latent_init` | `InitializerBase`  | `NormalInitializer()` | Latent state initializer         |
+| `energy`      | `EnergyFunctional` | `GaussianEnergy()`    | Energy functional                |
+| `dropout_rate` | `float` | `0.0` | Dropout on the MLP branch before the residual add; must be in `[0, 1)` |
 
 **Slots:**
+
 - `"in"` (single-input, `is_variance_scalable=True`): MLP path, muPC-scaled.
 - `"residual"` (single-input, `is_variance_scalable=False`, `is_skip_connection=True`): residual bypass, unscaled.
 
@@ -561,16 +582,16 @@ Projection to vocabulary logits: `z_mu = activation(W_out @ x_in + b_out)`, wher
 
 **Parameters:**
 
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `shape` | `Tuple[int, int]` | required | `(seq_len, vocab_size)` |
-| `name` | `str` | required | Node name |
-| `vocab_size` | `int` | required | Output width (`W_out` columns) |
-| `embed_dim` | `int` | required | Input width (`W_out` rows) |
-| `activation` | `ActivationBase` | `SoftmaxActivation()` | Output activation |
-| `weight_init` | `InitializerBase` | `XavierInitializer()` | Initializer for `W_out` |
-| `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
-| `energy` | `EnergyFunctional` | `CrossEntropyEnergy()` | Energy functional |
+| Parameter       | Type                 | Default                  | Description                      |
+| --------------- | -------------------- | ------------------------ | -------------------------------- |
+| `shape`       | `Tuple[int, int]`  | required                 | `(seq_len, vocab_size)`        |
+| `name`        | `str`              | required                 | Node name                        |
+| `vocab_size`  | `int`              | required                 | Output width (`W_out` columns) |
+| `embed_dim`   | `int`              | required                 | Input width (`W_out` rows)     |
+| `activation`  | `ActivationBase`   | `SoftmaxActivation()`  | Output activation                |
+| `weight_init` | `InitializerBase`  | `XavierInitializer()`  | Initializer for`W_out`         |
+| `latent_init` | `InitializerBase`  | `NormalInitializer()`  | Latent state initializer         |
+| `energy`      | `EnergyFunctional` | `CrossEntropyEnergy()` | Energy functional                |
 
 **Slots:** `"in"` (single-input)
 

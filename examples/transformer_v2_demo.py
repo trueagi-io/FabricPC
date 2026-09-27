@@ -60,7 +60,8 @@ setup_jax()
 # Tuned on Tiny Shakespeare, BPE tokenizer (50k-sequence subset, val PPL ~1133).
 # NOTE: severe overfitting on this small corpus (train PPL ~85 vs test ~721),
 # from two compounding causes: BPE needs a larger corpus than Tiny Shakespeare,
-# and the model has no regularization (dropout / weight decay) yet. Placeholder
+# and these defaults use no regularization (dropout is available via
+# --dropout_rate / --attn_dropout_rate but untuned; no weight decay). Placeholder
 # default, not a strong config; char-level remains recommended here. See Future
 # Work (regularization, larger BPE-suited datasets).
 BPE_DEFAULTS = {
@@ -170,6 +171,18 @@ def parse_args():
         default=None,
         help="Weight init std (default: tuned per --tokenizer)",
     )
+    parser.add_argument(
+        "--dropout_rate",
+        type=float,
+        default=0.0,
+        help="Dropout on the embedding and both residual branches (training only)",
+    )
+    parser.add_argument(
+        "--attn_dropout_rate",
+        type=float,
+        default=0.0,
+        help="Dropout on the attention probabilities (training only)",
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument(
         "--tokenizer",
@@ -244,6 +257,8 @@ def main(args=None):
             latent_decay=0.0,
         ),
         weight_init={"type": "normal", "std": args.weight_init_std},
+        dropout_rate=args.dropout_rate,
+        attn_dropout_rate=args.attn_dropout_rate,
     )
 
     # --- Train & Evaluate ---

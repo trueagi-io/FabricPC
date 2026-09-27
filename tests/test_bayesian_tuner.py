@@ -34,6 +34,7 @@ def _tiny_trial_model(config, rng_key):
             max_norm=5.0,
         ),
         weight_init={"type": "normal", "std": config.get("weight_init_std", 0.02)},
+        dropout_rate=config.get("dropout_rate", 0.0),
     )
     params = initialize_params(structure, rng_key)
     return params, structure
@@ -152,6 +153,32 @@ def test_run_trial_returns_finite_perplexity(tmp_path):
     t = _run_one(tuner, config)
     assert t.state == optuna.trial.TrialState.COMPLETE
     assert t.value is not None and np.isfinite(t.value) and t.value >= 1.0
+
+
+def test_run_trial_with_dropout(tmp_path):
+    """A dropout trial trains (masks on) and scores a finite validation
+    perplexity (masks off); the log records the rate."""
+    tuner = _make_tuner(tmp_path)
+    config = {
+        **tuner.base_config,
+        "depth": 1,
+        "eta_infer": 0.1,
+        "infer_steps": 3,
+        "lr": 1e-3,
+        "dropout_rate": 0.2,
+    }
+
+    def objective(trial):
+        score, metrics = tuner._run_trial(trial, config, 1)
+        tuner._log(1, trial.number, 0.0, score, metrics, config)
+        return score
+
+    study = optuna.create_study(direction="minimize")
+    study.optimize(objective, n_trials=1)
+    t = study.trials[0]
+    assert t.state == optuna.trial.TrialState.COMPLETE
+    assert np.isfinite(t.value) and t.value >= 1.0
+    assert "Dropout: 0.2" in (tmp_path / "log.txt").read_text()
 
 
 def test_divergence_guard_prunes(tmp_path, monkeypatch):
