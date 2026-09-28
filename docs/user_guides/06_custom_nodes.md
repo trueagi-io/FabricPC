@@ -448,6 +448,7 @@ class NodeState(NamedTuple):
     error: jnp.ndarray          # prediction errors (z_latent - z_mu)
     energy: jnp.ndarray         # per-sample energy, shape (batch,)
     latent_grad: jnp.ndarray    # gradient accumulator for inference updates
+    dropout_key: Optional[jnp.ndarray] = None  # per-node dropout key; None = off
 ```
 
 You cannot add custom fields to it. `state._replace(...)` only updates these existing fields, so there is no place to stash arbitrary per-step memory (such as an RNN hidden vector) on the `NodeState`. `aux` does not help here either: it is created and consumed within one forward trace, never stored.
@@ -459,6 +460,25 @@ If your node needs additional state, route it through what already exists:
 - **Parameters**: fixed-per-graph quantities belong in `params.weights` / `params.biases`, allocated in `initialize_params()`.
 
 Adding a genuinely new piece of dynamic state (a field on `NodeState`) is a framework-level change, not something a single node can do on its own.
+
+### Adding Dropout to a Node
+
+Call `fabricpc.core.dropout.dropout` inside `predict()` with the node's key from `state.dropout_key`:
+
+```python
+from fabricpc.core.dropout import dropout, validate_dropout_rate
+
+# __init__: validate and store the rate in node config
+super().__init__(..., dropout_rate=validate_dropout_rate(name, "dropout_rate", dropout_rate))
+
+# predict():
+h = dropout(h, node_info.node_config["dropout_rate"], state.dropout_key, site=0)
+```
+
+- `dropout` is inverted dropout (survivors scaled by `1 / (1 - rate)`) and returns its input unchanged when the rate is `0.0` or the key is `None`, so evaluation needs no flag.
+- The mask is a pure function of `(state.dropout_key, site)`, so every call of `predict()` on one batch draws the same mask. Give each dropout site in one node its own `site` integer.
+- Never draw randomness in `predict()` from anything else: a mask that changes between inference sweeps makes PC relax against a moving target.
+- A custom `StateInitBase` that runs its own forward pass must read `config.get("dropout_key")` and call `fabricpc.core.dropout.attach_dropout_keys(state, key)` before that pass, as `FeedforwardStateInit` does. One that ignores the key computes its latents without masks, so its initial errors are not zero under dropout; nothing raises. `initialize_graph_state` attaches the keys after every initializer returns, so initializers without a forward pass need nothing.
 
 ## Testing Your Node
 

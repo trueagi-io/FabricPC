@@ -105,11 +105,33 @@ interrupted run reproduces the uninterrupted run's random stream bitwise.
 
 ### The RNG contract
 
-The training key affects only latent initialization
-(`initialize_graph_state`); inference is deterministic and the package has no
-dropout or noise. Keys derive as `fold_in(rng_key, epoch_idx)` then
+The training key drives latent initialization and dropout
+(`initialize_graph_state`); inference itself is deterministic. Keys derive as `fold_in(rng_key, epoch_idx)` then
 `fold_in(epoch_key, batch_idx)` — a pure function of
 `(rng_key, epoch_idx, batch_idx)`, independent of loader length.
+
+Within a step, the batch key initializes latents and
+`training_dropout_key(batch_key)` (from `fabricpc.core.dropout`) is the
+dropout key. Consequences:
+
+- **One mask per step.** Each node stores its key in `NodeState.dropout_key`
+  and rebuilds its mask from it, so feedforward initialization, every
+  inference sweep, and the weight-gradient pass use the same mask. PC settles
+  one fixed thinned network per batch.
+- **PC and backprop share masks.** Both algorithms derive the dropout key the
+  same way, so the same batch key gives both the same thinned network.
+- **Evaluation is deterministic.** `evaluate` and `generate` pass no dropout
+  key, so dropout is off.
+- **Probes of a training step see its masks.** `train_step_with_history`, the
+  dashboard re-settle (`make_tracked_settle`), and `RegimeProbe` derive the
+  same dropout key from their key.
+- **Graphs without dropout are unaffected.** The latent-initialization
+  stream is unchanged, so runs with every rate at `0.0` reproduce bitwise.
+
+Custom loops and probes that call `initialize_graph_state` directly get no
+dropout unless they pass `dropout_key=...`. To reproduce a training step's
+masks — e.g. to compare PC and backprop gradients at one checkpoint — pass
+`dropout_key=training_dropout_key(batch_key)`.
 
 ### Training metrics
 

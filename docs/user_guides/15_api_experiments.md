@@ -144,7 +144,9 @@ Two-phase Optuna search for language-model hyperparameters, both phases minimizi
 
 The perplexity objective requires the trial graph's target node to use `CrossEntropyEnergy` — `evaluate` reports `perplexity` only then, and the tuner raises on a graph without it rather than scoring the trial silently. `algorithm=` selects the learning algorithm for every trial's `train`/`evaluate` call (`"pc"` default, `"backprop"` supported).
 
-The `eta_infer` ranges in the example are for the state-based solvers. Under `EPCInference` the rate is bounded by 2/λ_max of the trial graph's energy Hessian in error coordinates, so search it relative to that bound: measure λ_max once at init with `epsilon_spectrum` on the trial graph, sample a fraction of the bound (`trial.suggest_float("eta_frac", low, high, log=True)` with `high` below 1) and set `eta_infer = eta_frac * 2 / lambda_max`, and sample `infer_steps` over a small integer range. The grid step of [Training with ePC](17_training_with_epc.md#step-3-tabulate-the-regime-for-a-grid) shows the band each pair lands in before any trial runs.
+Dropout is tuned like any other architecture parameter: sample `dropout_rate` in the search space and pass it to `create_deep_transformer` in `trial_model`. It is active in each trial's training and off in its validation `evaluate`, so trials are scored on the deterministic model. Keep it in Phase 1 — Phase 2 inherits it fixed with the rest of the architecture.
+
+The `eta_infer` ranges in the example are for the state-based solvers. Under `EPCInference` the rate is bounded by 2/λ_max of the trial graph's energy Hessian in error coordinates, so search it relative to that bound: measure λ_max once at init with `epsilon_spectrum` on the trial graph (on a graph with dropout, initialize that state with `dropout_key=training_dropout_key(key)`: inverted dropout scales the kept units and raises λ_max), sample a fraction of the bound (`trial.suggest_float("eta_frac", low, high, log=True)` with `high` below 1) and set `eta_infer = eta_frac * 2 / lambda_max`, and sample `infer_steps` over a small integer range. The grid step of [Training with ePC](17_training_with_epc.md#step-3-tabulate-the-regime-for-a-grid) shows the band each pair lands in before any trial runs.
 
 ```python
 from fabricpc.tuning import BayesianTuner
@@ -156,6 +158,7 @@ def phase1_search_space(trial):
         "depth": trial.suggest_int("depth", 1, 4),
         "lr": trial.suggest_float("lr", 1e-5, 3e-4, log=True),
         "eta_infer": trial.suggest_float("eta_infer", 0.01, 0.15),  # state-based solvers
+        "dropout_rate": trial.suggest_categorical("dropout_rate", [0.0, 0.1, 0.2]),
     }
 
 def phase2_search_space(trial, best_params):

@@ -17,7 +17,7 @@ Everything else is base-owned and **not an override point**: the error pair (`pa
 
 `fabricpc.nodes.Linear`
 
-Weighted projection node: `z_mu = activation(W @ x + b)`
+Weighted projection node: `z_mu = dropout(activation(W @ x + b))`
 
 ```python
 from fabricpc.nodes import Linear
@@ -46,6 +46,7 @@ node = Linear(
 | `flatten_input` | `bool` | `False` | If True, flatten all input dims for dense behavior |
 | `weight_init` | `InitializerBase` | `KaimingInitializer()` | Weight initializer |
 | `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+| `dropout_rate` | `float` | `0.0` | Dropout on the activation output; must be in `[0, 1)`. Training steps only (see [The RNG contract](08_training_and_evaluation.md#the-rng-contract)) |
 
 **Slots:** `"in"` (multi-input)
 
@@ -181,7 +182,7 @@ skip = SkipConnection(shape=(128,), name="res1")
 
 `fabricpc.nodes.LinearResidual`
 
-Linear residual node: `z_mu = activation(W @ x_in + b) + x_skip`. Combines a linear transformation (on the `"in"` slot) with an identity residual connection (on the `"skip"` slot) in one PC node.
+Linear residual node: `z_mu = dropout(activation(W @ x_in + b)) + x_skip`. Combines a linear transformation (on the `"in"` slot) with an identity residual connection (on the `"skip"` slot) in one PC node.
 
 ```python
 from fabricpc.nodes import LinearResidual
@@ -209,6 +210,7 @@ res = LinearResidual(
 | `flatten_input` | `bool` | `False` | If True, flatten all input dims for dense behavior |
 | `weight_init` | `InitializerBase` | `KaimingInitializer()` | Weight initializer |
 | `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+| `dropout_rate` | `float` | `0.0` | Dropout on the transform path before the residual add (the skip path is never dropped); must be in `[0, 1)` |
 
 **Slots:**
 - `"in"` (multi-input, `is_variance_scalable=True`): Transform path with weight matrix, scaled by muPC.
@@ -237,7 +239,7 @@ prev ─────────┤  slot("skip") ──────────
 
 `fabricpc.nodes.ConvNode`
 
-Convolution node: `z_mu = activation(conv(x, kernel) + b)`, where `x` is the input feature map arriving on the `"in"` slot, `kernel` the node's convolution kernel, and `b` the per-channel bias. Each output position is predicted from a local window of the input feature map. One class covers 1D, 2D, and 3D convolution; the spatial rank is inferred from `len(shape) - 1`. Layout is channels-last: `(batch, spatial..., channels)`.
+Convolution node: `z_mu = dropout(activation(conv(x, kernel) + b))`, where `x` is the input feature map arriving on the `"in"` slot, `kernel` the node's convolution kernel, and `b` the per-channel bias. Each output position is predicted from a local window of the input feature map. One class covers 1D, 2D, and 3D convolution; the spatial rank is inferred from `len(shape) - 1`. Layout is channels-last: `(batch, spatial..., channels)`.
 
 ```python
 from fabricpc.nodes import ConvNode
@@ -266,6 +268,7 @@ conv1 = ConvNode(
 | `weight_init` | `InitializerBase` | `KaimingInitializer()` | Kernel initializer |
 | `bias_init` | `InitializerBase` | `ZerosInitializer()` | Bias initializer |
 | `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
+| `dropout_rate` | `float` | `0.0` | Element-wise dropout on the activation output; must be in `[0, 1)` |
 
 **Slots:** `"in"` (multi-input)
 
@@ -377,7 +380,7 @@ block = TransformerBlock(
 | `internal_activation` | `ActivationBase` | `GeluActivation()` | FFN internal activation |
 | `num_heads` | `int` | `8` | Number of attention heads |
 | `ff_dim` | `int` | `None` | Feedforward hidden dimension; `None` means `4 * embed_dim` |
-| `dropout_rate` | `float` | `0.0` | Dropout rate (currently unused) |
+| `dropout_rate` | `float` | `0.0` | Must be `0.0`: dropout is not implemented for this block (a non-zero rate raises). Use the decomposed v2 nodes for dropout |
 | `pre_norm` | `bool` | `True` | Use pre-norm architecture |
 | `use_rope` | `bool` | `True` | Use Rotary Position Embeddings |
 | `rope_theta` | `float` | `10000.0` | Base frequency for RoPE |
@@ -464,14 +467,18 @@ structure = create_deep_transformer(
 | `vocab_size` | `int` | required | Vocabulary size |
 | `inference` | `InferenceBase` | required | Inference algorithm for latent updates |
 | `weight_init` | `dict` | `None` | Block-weight initializer spec, e.g. `{"type": "normal", "std": 0.05}` or `{"type": "xavier"}`; `None` gives `NormalInitializer(std=0.02)` |
+| `dropout_rate` | `float` | `0.0` | Dropout on the embedding output and on both residual branches (attention and MLP) of every block |
+| `attn_dropout_rate` | `float` | `0.0` | Dropout on the attention probabilities of every block |
 
 Returns a `GraphStructure` with `TaskMap(x=input_ids, y=logits)` — clamp `x` with int32 token ids `(batch, seq_len)`, read logits from `y` — plus `MuPCConfig(include_output=False)` and `FeedforwardStateInit()`.
 
 **Initialization:** `weight_init` covers the block weights only. The builder overrides two nodes regardless: the embedding uses `NormalInitializer(std=1.0)` because muPC scaling is disabled on the discrete lookup edge and unit-normal keeps each token's embedding at order-1 variance, and the vocabulary projection uses `Normal(std=sqrt(1/embed_dim))` because each logit is a dot product over `embed_dim` features and this keeps initial logit variance at order 1. Nodes constructed directly get the class defaults in the tables below, not these overrides.
 
+**Dropout:** inverted dropout at the GPT-2 sites — embedding output, attention probabilities, and each residual branch before its add. `LnMlp1Node` and `VocabProjectionNode` carry none. Masks are drawn from a per-node key in `NodeState.dropout_key` and are fixed for the whole training step: feedforward initialization, every inference sweep, the weight-gradient pass, and the backprop objective all see the same mask, and PC and backprop draw identical masks for the same batch key. With no key (evaluation, generation, and any direct `initialize_graph_state` call without `dropout_key`) the nodes are deterministic. See [The RNG contract](08_training_and_evaluation.md#the-rng-contract).
+
 ### EmbeddingNode
 
-Token-embedding lookup: `z_mu = E[token_ids]`, where `E` is the `(vocab_size, embed_dim)` embedding table. Input is int32 token ids `(batch, seq_len)`; output is `(batch, seq_len, embed_dim)`. Token ids are discrete, so no gradient flows back through the input edge.
+Token-embedding lookup: `z_mu = dropout(E[token_ids])`, where `E` is the `(vocab_size, embed_dim)` embedding table. Input is int32 token ids `(batch, seq_len)`; output is `(batch, seq_len, embed_dim)`. Token ids are discrete, so no gradient flows back through the input edge.
 
 **Parameters:**
 
@@ -484,12 +491,13 @@ Token-embedding lookup: `z_mu = E[token_ids]`, where `E` is the `(vocab_size, em
 | `weight_init` | `InitializerBase` | `NormalInitializer(std=0.02)` | Embedding-table initializer |
 | `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
 | `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
+| `dropout_rate` | `float` | `0.0` | Dropout on the looked-up embeddings; must be in `[0, 1)` |
 
 **Slots:** `"in"` (single-input, `is_variance_scalable=False` — muPC leaves the token-id edge unscaled)
 
 ### MhaResidualNode
 
-Pre-norm multi-head self-attention with the residual added inside the node: `z_mu = x_skip + W_o @ MHA(LayerNorm(x_in))`, where `x_in` is the `"in"` slot input and `x_skip` the `"skip"` slot input. With `is_causal=True` a lower-triangular mask is applied to the attention scores inside the node. With `use_rope=True` rotary position embeddings are applied to queries and keys.
+Pre-norm multi-head self-attention with the residual added inside the node: `z_mu = x_skip + dropout(W_o @ MHA(LayerNorm(x_in)))`, where `x_in` is the `"in"` slot input and `x_skip` the `"skip"` slot input. With `is_causal=True` a lower-triangular mask is applied to the attention scores inside the node. With `use_rope=True` rotary position embeddings are applied to queries and keys.
 
 **Parameters:**
 
@@ -505,6 +513,8 @@ Pre-norm multi-head self-attention with the residual added inside the node: `z_m
 | `weight_init` | `InitializerBase` | `XavierInitializer()` | Initializer for `W_q`, `W_k`, `W_v`, `W_o` |
 | `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
 | `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
+| `dropout_rate` | `float` | `0.0` | Dropout on the attention branch before the residual add; must be in `[0, 1)` |
+| `attn_dropout_rate` | `float` | `0.0` | Dropout on the attention probabilities; must be in `[0, 1)` |
 
 **Slots:**
 - `"in"` (single-input, `is_variance_scalable=True`): attention-branch input, muPC-scaled.
@@ -535,7 +545,7 @@ LayerNorm followed by the first MLP projection: `z_mu = activation(W_ff1 @ Layer
 
 ### Mlp2ResidualNode
 
-Second MLP projection with the block residual added inside the node: `z_mu = x_residual + W_ff2 @ x_in + b_ff2`, where `x_in` is the `LnMlp1Node` output and `x_residual` the attention output.
+Second MLP projection with the block residual added inside the node: `z_mu = x_residual + dropout(W_ff2 @ x_in + b_ff2)`, where `x_in` is the `LnMlp1Node` output and `x_residual` the attention output.
 
 **Parameters:**
 
@@ -548,6 +558,7 @@ Second MLP projection with the block residual added inside the node: `z_mu = x_r
 | `weight_init` | `InitializerBase` | `XavierInitializer()` | Initializer for `W_ff2` |
 | `latent_init` | `InitializerBase` | `NormalInitializer()` | Latent state initializer |
 | `energy` | `EnergyFunctional` | `GaussianEnergy()` | Energy functional |
+| `dropout_rate` | `float` | `0.0` | Dropout on the MLP branch before the residual add; must be in `[0, 1)` |
 
 **Slots:**
 - `"in"` (single-input, `is_variance_scalable=True`): MLP path, muPC-scaled.

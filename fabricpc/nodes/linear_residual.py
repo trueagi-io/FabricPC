@@ -45,6 +45,7 @@ from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.activations import IdentityActivation
 from fabricpc.core.energy import GaussianEnergy
 from fabricpc.core.initializers import NormalInitializer, KaimingInitializer, initialize
+from fabricpc.core.dropout import dropout, validate_dropout_rate
 
 if TYPE_CHECKING:
     from fabricpc.core.activations import ActivationBase
@@ -59,6 +60,9 @@ class LinearResidual(FlattenInputMixin, NodeBase):
     Combines a linear transformation (on the "in" slot) with an identity
     residual connection (on the "skip" slot) in one PC node. muPC scales
     the "in" edges normally and leaves "skip" edges at scale 1.0.
+
+    ``dropout_rate`` (default 0.0) applies dropout to the transform path
+    before the residual add; the skip path is never dropped.
     """
 
     def __init__(
@@ -71,6 +75,7 @@ class LinearResidual(FlattenInputMixin, NodeBase):
         flatten_input: bool = False,
         weight_init: InitializerBase = KaimingInitializer(),
         latent_init: InitializerBase = NormalInitializer(),
+        dropout_rate: float = 0.0,
     ):
         super().__init__(
             shape=shape,
@@ -81,6 +86,7 @@ class LinearResidual(FlattenInputMixin, NodeBase):
             weight_init=weight_init,
             use_bias=use_bias,
             flatten_input=flatten_input,
+            dropout_rate=validate_dropout_rate(name, "dropout_rate", dropout_rate),
         )
 
     @staticmethod
@@ -185,6 +191,12 @@ class LinearResidual(FlattenInputMixin, NodeBase):
         # Apply activation to the transform path
         activation = node_info.activation
         transformed = type(activation).forward(pre_activation, activation.config)
+        transformed = dropout(
+            transformed,
+            node_info.node_config.get("dropout_rate", 0.0),
+            state.dropout_key,
+            site=0,
+        )
 
         # Sum skip inputs (identity, no transform)
         skip_sum = None

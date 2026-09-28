@@ -73,16 +73,26 @@ def max_param_diff(a, b) -> float:
 
 
 def make_classification_structure(
-    output_energy=None, output_activation=None, state_initializer=None
+    output_energy=None,
+    output_activation=None,
+    state_initializer=None,
+    hidden_dropout_rate=0.0,
 ):
     """3-node Linear chain x(6) -> h(8, sigmoid) -> y(3, softmax + CE).
+
+    ``hidden_dropout_rate`` sets dropout on ``h`` (training steps only).
 
     The default FeedforwardStateInit satisfies both algorithms and
     InferenceSGD drives PC settling; pass ``state_initializer`` (e.g.
     ``GlobalStateInit()``) for RNG-sensitive latent initialization.
     """
     x = Linear(shape=(6,), name="x")
-    h = Linear(shape=(8,), activation=SigmoidActivation(), name="h")
+    h = Linear(
+        shape=(8,),
+        activation=SigmoidActivation(),
+        name="h",
+        dropout_rate=hidden_dropout_rate,
+    )
     y = Linear(
         shape=(3,),
         activation=output_activation or SoftmaxActivation(),

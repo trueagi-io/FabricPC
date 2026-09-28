@@ -32,6 +32,7 @@ import jax.lax as lax
 import jax.numpy as jnp
 
 from fabricpc.nodes.base import NodeBase, SlotSpec, validate_windowed_output
+from fabricpc.core.dropout import dropout, validate_dropout_rate
 from fabricpc.core.types import NodeParams, NodeState, NodeInfo
 from fabricpc.core.activations import ReLUActivation
 from fabricpc.core.energy import GaussianEnergy
@@ -71,6 +72,8 @@ class ConvNode(NodeBase):
         weight_init: Default: KaimingInitializer().
         bias_init:   Default: ZerosInitializer().
         latent_init: Default: NormalInitializer().
+        dropout_rate: Element-wise dropout on the activation output, in
+                [0, 1). Default: 0.0.
     """
 
     _DIM_NUMBERS = {
@@ -92,6 +95,7 @@ class ConvNode(NodeBase):
         weight_init: "InitializerBase" = KaimingInitializer(),
         bias_init: "InitializerBase" = ZerosInitializer(),
         latent_init: "InitializerBase" = NormalInitializer(),
+        dropout_rate: float = 0.0,
     ):
         """
         Args:
@@ -106,6 +110,8 @@ class ConvNode(NodeBase):
             weight_init: Initializer for kernels. Default: KaimingInitializer.
             bias_init: Initializer for bias. Default: ZerosInitializer.
             latent_init: Initializer for latent states. Default: NormalInitializer.
+            dropout_rate: Element-wise dropout on the activation output, in
+                [0, 1). Active only on training steps. Default: 0.0.
         """
         # Stride default depends on spatial_rank, so it stays in the body.
         # Other defaults moved to signature: framework guarantees init class
@@ -128,6 +134,7 @@ class ConvNode(NodeBase):
             kernel_size=kernel_size,
             stride=stride,
             padding=padding,
+            dropout_rate=validate_dropout_rate(name, "dropout_rate", dropout_rate),
         )
 
     @staticmethod
@@ -234,4 +241,10 @@ class ConvNode(NodeBase):
 
         activation = node_info.activation
         z_mu = type(activation).forward(pre_activation, activation.config)
+        z_mu = dropout(
+            z_mu,
+            node_info.node_config.get("dropout_rate", 0.0),
+            state.dropout_key,
+            site=0,
+        )
         return z_mu, None

@@ -123,6 +123,10 @@ class NodeState(NamedTuple):
             state-based solvers the one-hop accumulated dE/dz_latent; under
             ``EPCInference`` the gradient of the total energy w.r.t. ε
             through the full derived forward
+        dropout_key: Per-node PRNG key for dropout masks, or None (dropout
+            off). Fixed for the life of the state, so every ``predict`` on
+            this batch draws the same masks. Set by ``initialize_graph_state
+            (..., dropout_key=...)``; see ``fabricpc.core.dropout``.
     """
 
     z_latent: jnp.ndarray
@@ -130,6 +134,7 @@ class NodeState(NamedTuple):
     error: jnp.ndarray
     energy: jnp.ndarray  # per-sample energy, shape (batch_size,)
     latent_grad: jnp.ndarray  # accumulator: sPC dE/dz_latent, ePC dE/depsilon
+    dropout_key: Optional[jnp.ndarray] = None  # None = dropout off
 
 
 class GraphState(NamedTuple):
@@ -202,6 +207,7 @@ tree_util.register_pytree_node(
             ns.error,
             ns.energy,
             ns.latent_grad,
+            ns.dropout_key,
         ),
         None,
     ),

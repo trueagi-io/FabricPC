@@ -43,10 +43,14 @@ Multi-device data parallelism runs on jit + ``NamedSharding`` over an
 optional ``mesh`` with axis ``"data"`` (``"model"`` is reserved for future
 model parallelism): ``jax.make_mesh((jax.device_count(),), ("data",))``.
 
-RNG contract: the training key affects only latent initialization
-(``initialize_graph_state``); inference is deterministic and the package has
-no dropout or noise. Keys derive as ``fold_in(rng_key, epoch_idx)`` ->
-``fold_in(epoch_key, batch_idx)``, a pure function of
+RNG contract: the training key drives latent initialization and dropout
+(``initialize_graph_state``); inference itself is deterministic. The batch key
+initializes latents; ``training_dropout_key(batch_key)`` is the dropout
+key, so both algorithms draw identical masks for the same batch key, and a
+graph with no dropout is unaffected. Masks are fixed for the whole step (every
+inference sweep and the weight-gradient pass). ``evaluate`` passes no dropout
+key, so evaluation is deterministic. Keys derive as
+``fold_in(rng_key, epoch_idx)`` -> ``fold_in(epoch_key, batch_idx)``, a pure function of
 ``(rng_key, epoch_idx, batch_idx)`` independent of loader length — so
 ``train(..., opt_state=ckpt, start_epoch=k)`` reproduces the uninterrupted
 run's stream exactly.
@@ -63,6 +67,7 @@ import optax
 from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from tqdm.auto import tqdm as _tqdm_cls
 
+from fabricpc.core.dropout import training_dropout_key
 from fabricpc.core.energy import graph_energy
 from fabricpc.core.inference import run_inference
 from fabricpc.core.learning import compute_local_weight_gradients
@@ -395,10 +400,17 @@ def _batch_grads(params, batch, structure, rng_key, *, algorithm):
     target_nodes = _target_node_names(structure, clamps)
     # Static at trace time; global under jit + NamedSharding.
     denom = grad_denominator(structure, clamps)
+    # Same masks under both algorithms for the same batch key.
+    dropout_key = training_dropout_key(rng_key)
 
     if algorithm == "pc":
         state = initialize_graph_state(
-            structure, batch_size, rng_key, clamps=clamps, params=params
+            structure,
+            batch_size,
+            rng_key,
+            clamps=clamps,
+            params=params,
+            dropout_key=dropout_key,
         )
         state = run_inference(params, state, clamps, structure)
         energy = graph_energy(state, structure) / denom
@@ -412,7 +424,12 @@ def _batch_grads(params, batch, structure, rng_key, *, algorithm):
 
         def objective(p):
             state = initialize_graph_state(
-                structure, batch_size, rng_key, clamps=clamps, params=p
+                structure,
+                batch_size,
+                rng_key,
+                clamps=clamps,
+                params=p,
+                dropout_key=dropout_key,
             )
             return (
                 graph_energy(state, structure, node_names=target_nodes) / denom,
@@ -534,8 +551,9 @@ def train(
             is no silent default. Otherwise an opaque pass-through to
             callbacks and experiment harnesses. Retired keys (``loss_type``,
             ``use_causal_mask``) raise ``ValueError``.
-        rng_key: Base training key. It affects only latent initialization;
-            inference is deterministic. Per-epoch keys are
+        rng_key: Base training key. It drives latent initialization and
+            dropout masks (``fabricpc.core.dropout.training_dropout_key``);
+            inference itself is deterministic. Per-epoch keys are
             ``fold_in(rng_key, epoch_idx)``, per-batch keys
             ``fold_in(epoch_key, batch_idx)`` — independent of loader length.
         algorithm: ``"pc"`` (default) or ``"backprop"``.

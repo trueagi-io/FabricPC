@@ -6,6 +6,12 @@ Decomposed transformer pipeline — each stage is a separate PC node:
   tokens → Embedding → MhaResidual(+) → LnMlp1 → Mlp2Residual(+) → VocabProjection → logits
                         │ (skip)   ↑              │ (skip)    ↑
                         └──────────┘              └───────────┘
+Dropout (GPT-2 placement, all default 0.0): ``EmbeddingNode(dropout_rate)`` on
+the embedding output; ``MhaResidualNode(attn_dropout_rate)`` on the attention
+probabilities and ``MhaResidualNode(dropout_rate)`` on the attention branch
+before the residual add; ``Mlp2ResidualNode(dropout_rate)`` on the MLP branch
+before the residual add. Masks come from ``state.dropout_key`` (see
+``fabricpc.core.dropout``); with no key the nodes are deterministic.
 """
 
 from typing import Dict, Any, Tuple
@@ -22,6 +28,7 @@ from fabricpc.core.initializers import (
     KaimingInitializer,
 )
 from fabricpc.core.positional import precompute_freqs_cis, apply_rotary_emb
+from fabricpc.core.dropout import dropout, validate_dropout_rate
 from fabricpc.utils.helpers import layernorm
 from fabricpc.core.activations import (
     GeluActivation,
@@ -48,6 +55,7 @@ class EmbeddingNode(NodeBase):
         weight_init=NormalInitializer(std=0.02),
         latent_init=NormalInitializer(),
         energy=GaussianEnergy(),
+        dropout_rate=0.0,
         **kwargs,
     ):
         super().__init__(
@@ -55,6 +63,7 @@ class EmbeddingNode(NodeBase):
             name=name,
             vocab_size=vocab_size,
             embed_dim=embed_dim,
+            dropout_rate=validate_dropout_rate(name, "dropout_rate", dropout_rate),
             weight_init=weight_init,
             latent_init=latent_init,
             energy=energy,
@@ -99,6 +108,12 @@ class EmbeddingNode(NodeBase):
         # Source-node clamps now propagate dtype through state init, so callers
         # should clamp with int (e.g. jnp.int32), not float.
         z_mu = params.weights["embeddings"][indices]
+        z_mu = dropout(
+            z_mu,
+            node_info.node_config.get("dropout_rate", 0.0),
+            state.dropout_key,
+            site=0,
+        )
         return z_mu, None
 
     @staticmethod
@@ -138,6 +153,8 @@ class MhaResidualNode(NodeBase):
         weight_init=XavierInitializer(),
         latent_init=NormalInitializer(),
         energy=GaussianEnergy(),
+        dropout_rate=0.0,
+        attn_dropout_rate=0.0,
         **kwargs,
     ):
         super().__init__(
@@ -148,6 +165,10 @@ class MhaResidualNode(NodeBase):
             use_rope=use_rope,
             rope_theta=rope_theta,
             is_causal=is_causal,
+            dropout_rate=validate_dropout_rate(name, "dropout_rate", dropout_rate),
+            attn_dropout_rate=validate_dropout_rate(
+                name, "attn_dropout_rate", attn_dropout_rate
+            ),
             weight_init=weight_init,
             latent_init=latent_init,
             energy=energy,
@@ -225,8 +246,13 @@ class MhaResidualNode(NodeBase):
             scores = jnp.where(causal_mask == 0, -1e9, scores)
 
         attn = jax.nn.softmax(scores, axis=-1)
+        # Site 0: attention probabilities; site 1: residual branch output.
+        attn = dropout(
+            attn, cfg.get("attn_dropout_rate", 0.0), state.dropout_key, site=0
+        )
         mha = jnp.matmul(attn, V).transpose(0, 2, 1, 3).reshape(B, L, D)
         mha = proj(mha, "W_o", "b_o")
+        mha = dropout(mha, cfg.get("dropout_rate", 0.0), state.dropout_key, site=1)
 
         z_mu = skip + mha
         return z_mu, None
@@ -310,6 +336,7 @@ class Mlp2ResidualNode(NodeBase):
         weight_init=XavierInitializer(),
         latent_init=NormalInitializer(),
         energy=GaussianEnergy(),
+        dropout_rate=0.0,
         **kwargs,
     ):
         super().__init__(
@@ -317,6 +344,7 @@ class Mlp2ResidualNode(NodeBase):
             name=name,
             embed_dim=embed_dim,
             ff_dim=ff_dim,
+            dropout_rate=validate_dropout_rate(name, "dropout_rate", dropout_rate),
             weight_init=weight_init,
             latent_init=latent_init,
             energy=energy,
@@ -344,6 +372,12 @@ class Mlp2ResidualNode(NodeBase):
         res_in = next(val for key, val in inputs.items() if key.endswith(":residual"))
 
         mlp2 = jnp.dot(mlp1_in, params.weights["W_ff2"]) + params.biases["b_ff2"]
+        mlp2 = dropout(
+            mlp2,
+            node_info.node_config.get("dropout_rate", 0.0),
+            state.dropout_key,
+            site=0,
+        )
         z_mu = res_in + mlp2
         return z_mu, None
 
