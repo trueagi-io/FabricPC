@@ -180,6 +180,12 @@ def test_run_trial_with_dropout(tmp_path):
     assert np.isfinite(t.value) and t.value >= 1.0
     assert "Dropout: 0.2" in (tmp_path / "log.txt").read_text()
 
+    # Dropout reached training: the same trial without it scores differently.
+    config_off = {**config, "dropout_rate": 0.0}
+    study_off = optuna.create_study(direction="minimize")
+    study_off.optimize(lambda tr: tuner._run_trial(tr, config_off, 1)[0], n_trials=1)
+    assert study_off.trials[0].value != t.value
+
 
 def test_divergence_guard_prunes(tmp_path, monkeypatch):
     """Energy that rises above its best epoch by > rel_tol is pruned."""

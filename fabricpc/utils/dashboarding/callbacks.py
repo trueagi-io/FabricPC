@@ -14,6 +14,7 @@ import jax
 import jax.numpy as jnp
 
 from fabricpc.core.types import GraphParams, GraphState, GraphStructure
+from fabricpc.core.dropout import training_dropout_key
 from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 from fabricpc.training.trainer import (
     EpochContext,
@@ -30,7 +31,9 @@ def make_tracked_settle(
 ) -> Callable[[GraphParams, jax.Array, Dict[str, jnp.ndarray]], GraphState]:
     """Build the jitted re-settle the iteration callback runs on a tracked
     PC batch: clamps and latent initialization from the batch and key, then
-    :func:`make_inference_history` sampled every ``every`` steps.
+    :func:`make_inference_history` sampled every ``every`` steps. With the
+    step's ``batch_key`` it reproduces the training step, dropout masks
+    included (``training_dropout_key(key)``).
 
     Returns ``settle(params, key, batch) -> states``, a GraphState pytree
     with a leading axis of length ``infer_steps // every + 1`` (index ``i`` is
@@ -47,6 +50,7 @@ def make_tracked_settle(
             key,
             clamps=clamps,
             params=params,
+            dropout_key=training_dropout_key(key),
         )
         _, states = history(params, init_state, clamps)
         return states

@@ -21,6 +21,7 @@ from fabricpc.core.dropout import (
     attach_dropout_keys,
     dropout,
     node_dropout_key,
+    training_dropout_key,
 )
 from fabricpc.core.activations import (
     ReLUActivation,
@@ -28,7 +29,12 @@ from fabricpc.core.activations import (
     TanhActivation,
 )
 from fabricpc.core.energy import CrossEntropyEnergy
-from fabricpc.core.inference import InferenceSGD, gather_inputs, run_inference
+from fabricpc.core.inference import (
+    InferenceSchedule,
+    InferenceSGD,
+    gather_inputs,
+    run_inference,
+)
 from fabricpc.core.inference_epc import EPCInference
 from fabricpc.core.scaling import scale_inputs
 from fabricpc.core.topology import Edge
@@ -139,7 +145,13 @@ class TestDropoutHelper:
         s = _build()
         p = initialize_params(s, jax.random.PRNGKey(0))
         state, _ = _state(s, p, _batch(), jax.random.PRNGKey(0))
-        assert attach_dropout_keys(state, s, None) is state
+        assert attach_dropout_keys(state, None) is state
+
+    def test_training_dropout_key_is_the_documented_derivation(self):
+        k = jax.random.PRNGKey(6)
+        np.testing.assert_array_equal(
+            training_dropout_key(k), jax.random.fold_in(k, DROPOUT_STREAM)
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -334,10 +346,8 @@ def test_train_step_masks_depend_on_batch_key_only():
     c = step(p, opt.init(p), batch, jax.random.PRNGKey(4))
     _assert_tree_equal(a[0], b[0])
     assert _tree_differs(a[0], c[0])
-    # The trainer's dropout key is fold_in(batch_key, DROPOUT_STREAM).
-    expect = node_dropout_key(
-        jax.random.fold_in(jax.random.PRNGKey(3), DROPOUT_STREAM), "L0_mha"
-    )
+    # The trainer's dropout key is training_dropout_key(batch_key).
+    expect = node_dropout_key(training_dropout_key(jax.random.PRNGKey(3)), "L0_mha")
     np.testing.assert_array_equal(a[3].nodes["L0_mha"].dropout_key, expect)
 
 
@@ -350,6 +360,79 @@ def test_train_step_finite(algorithm):
     p2, _, m, _ = step(p, opt.init(p), _batch(), jax.random.PRNGKey(3))
     assert np.isfinite(float(m["energy"]))
     assert all(np.all(np.isfinite(x)) for x in jax.tree_util.tree_leaves(p2))
+
+
+@pytest.mark.parametrize(
+    "inference",
+    [
+        EPCInference(eta_infer=0.0, infer_steps=3),
+        InferenceSchedule(
+            EPCInference(eta_infer=0.0, infer_steps=2),
+            InferenceSGD(eta_infer=0.0, infer_steps=2),
+        ),
+    ],
+    ids=["epc", "epc_then_spc"],
+)
+def test_masks_fixed_under_epc_and_schedules(inference):
+    """With zero step sizes nothing may move. ePC derives z_latent through
+    every node's forward, so a mask that differed from the init pass would
+    move z_latent; the sPC segment would then see nonzero internal energy."""
+    s = _build(inference=inference)
+    p = initialize_params(s, jax.random.PRNGKey(0))
+    state0, clamps = _state(
+        s, p, _batch(), jax.random.PRNGKey(1), dropout_key=jax.random.PRNGKey(7)
+    )
+    state = jax.jit(lambda pp, st: run_inference(pp, st, clamps, s))(p, state0)
+    for n in INTERNAL:
+        np.testing.assert_allclose(
+            state.nodes[n].z_latent, state0.nodes[n].z_latent, rtol=0, atol=1e-5
+        )
+    assert _internal_energy(state) < 1e-8
+
+
+def test_tracked_settle_reproduces_training_step():
+    """The dashboard re-settle of a batch with its batch key reaches the same
+    settled state as the PC training step, dropout masks included."""
+    from fabricpc.utils.dashboarding.callbacks import make_tracked_settle
+
+    s = _build()
+    p = initialize_params(s, jax.random.PRNGKey(0))
+    opt = optax.sgd(0.1)
+    batch, key = _batch(), jax.random.PRNGKey(3)
+    *_, trained_state = make_train_step(s, opt, algorithm="pc")(
+        p, opt.init(p), batch, key
+    )
+    states = make_tracked_settle(s, every=1)(p, key, batch)
+    for n in INTERNAL:
+        np.testing.assert_allclose(
+            states.nodes[n].z_latent[-1],
+            trained_state.nodes[n].z_latent,
+            rtol=1e-5,
+            atol=1e-5,
+        )
+
+
+def test_v1_transformer_block_rejects_dropout():
+    from fabricpc.nodes import TransformerBlock
+
+    with pytest.raises(ValueError, match="does not implement dropout"):
+        TransformerBlock(shape=(8, 16), name="t", num_heads=2, dropout_rate=0.1)
+    TransformerBlock(shape=(8, 16), name="t", num_heads=2)  # default is fine
+
+
+def test_linear_oracle_rejects_dropout():
+    from fabricpc.utils.linear_pc_oracle import validate_linear_gaussian
+
+    x = Linear(shape=(3,), name="x")
+    h = Linear(shape=(4,), name="h", dropout_rate=0.5)
+    s = graph(
+        nodes=[x, h],
+        edges=[Edge(source=x, target=h.slot("in"))],
+        task_map=TaskMap(x=x),
+        inference=InferenceSGD(eta_infer=0.1, infer_steps=1),
+    )
+    with pytest.raises(ValueError, match="dropout"):
+        validate_linear_gaussian(s)
 
 
 def test_epc_runs_with_dropout():

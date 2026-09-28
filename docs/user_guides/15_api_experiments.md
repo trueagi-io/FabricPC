@@ -22,14 +22,14 @@ arm = ExperimentArm(
 )
 ```
 
-| Field             | Type                             | Description                                                                                                                                                    |
-| ----------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`          | `str`                          | Display name for this condition                                                                                                                                |
-| `model_factory` | `Callable`                     | `(rng_key) -> (params, structure)`                                                                                                                           |
-| `train_fn`      | `Callable`                     | Training function with`train`'s positional prefix, returning a `TrainResult`; select the algorithm with `functools.partial(train, algorithm="backprop")` |
-| `eval_fn`       | `Callable`                     | Evaluation function with`evaluate`'s signature, returning a metrics dict                                                                                     |
-| `optimizer`     | `optax.GradientTransformation` | Optimizer                                                                                                                                                      |
-| `train_config`  | `dict`                         | Training configuration                                                                                                                                         |
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | `str` | Display name for this condition |
+| `model_factory` | `Callable` | `(rng_key) -> (params, structure)` |
+| `train_fn` | `Callable` | Training function with `train`'s positional prefix, returning a `TrainResult`; select the algorithm with `functools.partial(train, algorithm="backprop")` |
+| `eval_fn` | `Callable` | Evaluation function with `evaluate`'s signature, returning a metrics dict |
+| `optimizer` | `optax.GradientTransformation` | Optimizer |
+| `train_config` | `dict` | Training configuration |
 
 ### PlannedMultiContrastExperiment
 
@@ -54,15 +54,15 @@ total = results.delta("2hopfield", "MLP")   # reported-only delta, no test
 print(total.mean, total.se)
 ```
 
-| Parameter               | Type                      | Description                                                                                                           |
-| ----------------------- | ------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `arms`                | `List[ExperimentArm]`   | Arms to run, each once per trial; names must be unique                                                                |
-| `contrasts`           | `List[Tuple[str, str]]` | `(arm_a_name, arm_b_name)` pairs declaring the planned-contrast family; each name must reference an arm in `arms` |
-| `metric`              | `str`                   | Key in each arm's eval-result dict (e.g.,`"accuracy"`)                                                              |
-| `data_loader_factory` | `Callable`              | `(seed) -> (train_loader, test_loader)`; must be deterministic in its seed, otherwise the arms are not paired       |
-| `n_trials`            | `int`                   | Number of paired trials (default 10); the tests require ≥ 2                                                          |
-| `seed_offset`         | `int`                   | Base seed offset (default 0)                                                                                          |
-| `verbose`             | `bool`                  | Forward`verbose=True` to each arm's `train_fn`                                                                    |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `arms` | `List[ExperimentArm]` | Arms to run, each once per trial; names must be unique |
+| `contrasts` | `List[Tuple[str, str]]` | `(arm_a_name, arm_b_name)` pairs declaring the planned-contrast family; each name must reference an arm in `arms` |
+| `metric` | `str` | Key in each arm's eval-result dict (e.g., `"accuracy"`) |
+| `data_loader_factory` | `Callable` | `(seed) -> (train_loader, test_loader)`; must be deterministic in its seed, otherwise the arms are not paired |
+| `n_trials` | `int` | Number of paired trials (default 10); the tests require ≥ 2 |
+| `seed_offset` | `int` | Base seed offset (default 0) |
+| `verbose` | `bool` | Forward `verbose=True` to each arm's `train_fn` |
 
 **`run()` returns `PlannedMultiContrastResults`:**
 
@@ -92,17 +92,16 @@ results = experiment.run()
 results.print_summary()
 ```
 
-| Parameter               | Type              | Description                                               |
-| ----------------------- | ----------------- | --------------------------------------------------------- |
-| `arm_a`               | `ExperimentArm` | First condition                                           |
-| `arm_b`               | `ExperimentArm` | Second condition                                          |
-| `metric`              | `str`           | Metric key from eval_fn return dict (e.g.,`"accuracy"`) |
-| `data_loader_factory` | `Callable`      | `(seed) -> (train_loader, test_loader)`                 |
-| `n_trials`            | `int`           | Number of independent trials                              |
-| `verbose`             | `bool`          | Print per-trial progress                                  |
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `arm_a` | `ExperimentArm` | First condition |
+| `arm_b` | `ExperimentArm` | Second condition |
+| `metric` | `str` | Metric key from eval_fn return dict (e.g., `"accuracy"`) |
+| `data_loader_factory` | `Callable` | `(seed) -> (train_loader, test_loader)` |
+| `n_trials` | `int` | Number of independent trials |
+| `verbose` | `bool` | Print per-trial progress |
 
 **Output** from `print_summary()`:
-
 - Descriptive statistics (mean, std, min, max)
 - Paired t-test (t-statistic, p-value)
 - Cohen's d effect size
@@ -147,7 +146,7 @@ The perplexity objective requires the trial graph's target node to use `CrossEnt
 
 Dropout is tuned like any other architecture parameter: sample `dropout_rate` in the search space and pass it to `create_deep_transformer` in `trial_model`. It is active in each trial's training and off in its validation `evaluate`, so trials are scored on the deterministic model. Keep it in Phase 1 — Phase 2 inherits it fixed with the rest of the architecture.
 
-The `eta_infer` ranges in the example are for the state-based solvers. Under `EPCInference` the rate is bounded by 2/λ_max of the trial graph's energy Hessian in error coordinates, so search it relative to that bound: measure λ_max once at init with `epsilon_spectrum` on the trial graph, sample a fraction of the bound (`trial.suggest_float("eta_frac", low, high, log=True)` with `high` below 1) and set `eta_infer = eta_frac * 2 / lambda_max`, and sample `infer_steps` over a small integer range. The grid step of [Training with ePC](17_training_with_epc.md#step-3-tabulate-the-regime-for-a-grid) shows the band each pair lands in before any trial runs.
+The `eta_infer` ranges in the example are for the state-based solvers. Under `EPCInference` the rate is bounded by 2/λ_max of the trial graph's energy Hessian in error coordinates, so search it relative to that bound: measure λ_max once at init with `epsilon_spectrum` on the trial graph (on a graph with dropout, initialize that state with `dropout_key=training_dropout_key(key)`: inverted dropout scales the kept units and raises λ_max), sample a fraction of the bound (`trial.suggest_float("eta_frac", low, high, log=True)` with `high` below 1) and set `eta_infer = eta_frac * 2 / lambda_max`, and sample `infer_steps` over a small integer range. The grid step of [Training with ePC](17_training_with_epc.md#step-3-tabulate-the-regime-for-a-grid) shows the band each pair lands in before any trial runs.
 
 ```python
 from fabricpc.tuning import BayesianTuner
@@ -190,18 +189,18 @@ Full runnable version: `examples/transformer_tuning.py`.
 
 **Constructor:**
 
-| Parameter              | Type           | Default                  | Description                                                                                                                                                                                                                            |
-| ---------------------- | -------------- | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `train_loader`       | iterable       | required                 | Training batches (int32 token-id pairs, see[Data Loaders](14_api_data.md))                                                                                                                                                              |
-| `val_loader`         | iterable       | required                 | Validation batches for the perplexity objective                                                                                                                                                                                        |
-| `trial_model`        | `Callable`   | required                 | `(config, rng_key) -> (params, structure)`; may instead return a 4-tuple `(params, structure, train_loader, val_loader)` for trials that rebuild loaders per architecture (e.g. `seq_len` or `batch_size` in the search space) |
-| `base_config`        | `dict`       | required                 | Fixed config merged under every trial's sampled parameters                                                                                                                                                                             |
-| `study_name`         | `str`        | `"fabricpc_tuning"`    | Optuna study name                                                                                                                                                                                                                      |
-| `storage`            | Optuna storage | `None`                 | Persistent trial storage;`None` keeps trials in memory                                                                                                                                                                               |
-| `log_file`           | `str`        | `"tuning_results.txt"` | Per-trial results log                                                                                                                                                                                                                  |
-| `divergence_rel_tol` | `float`      | `0.5`                  | Relative energy rise over the trial's best epoch that triggers pruning                                                                                                                                                                 |
-| `verbose`            | `bool`       | `False`                | Print per-epoch trial progress                                                                                                                                                                                                         |
-| `algorithm`          | `str`        | `"pc"`                 | Learning algorithm passed to every trial's`train`/`evaluate`                                                                                                                                                                       |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `train_loader` | iterable | required | Training batches (int32 token-id pairs, see [Data Loaders](14_api_data.md)) |
+| `val_loader` | iterable | required | Validation batches for the perplexity objective |
+| `trial_model` | `Callable` | required | `(config, rng_key) -> (params, structure)`; may instead return a 4-tuple `(params, structure, train_loader, val_loader)` for trials that rebuild loaders per architecture (e.g. `seq_len` or `batch_size` in the search space) |
+| `base_config` | `dict` | required | Fixed config merged under every trial's sampled parameters |
+| `study_name` | `str` | `"fabricpc_tuning"` | Optuna study name |
+| `storage` | Optuna storage | `None` | Persistent trial storage; `None` keeps trials in memory |
+| `log_file` | `str` | `"tuning_results.txt"` | Per-trial results log |
+| `divergence_rel_tol` | `float` | `0.5` | Relative energy rise over the trial's best epoch that triggers pruning |
+| `verbose` | `bool` | `False` | Print per-epoch trial progress |
+| `algorithm` | `str` | `"pc"` | Learning algorithm passed to every trial's `train`/`evaluate` |
 
 **Methods:**
 

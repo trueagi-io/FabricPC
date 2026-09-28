@@ -19,7 +19,7 @@ Usage:
 """
 
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Any, Dict, Optional
 
 import jax
 import jax.numpy as jnp
@@ -277,7 +277,7 @@ class FeedforwardStateInit(StateInitBase):
         state = set_latents_to_clamps(state, clamps)
         # Dropout keys must be in place BEFORE the feedforward pass so that
         # z_latent = z_mu holds under the same masks inference will use.
-        state = attach_dropout_keys(state, structure, config.get("dropout_key"))
+        state = attach_dropout_keys(state, config.get("dropout_key"))
 
         # Second pass: feedforward propagation along the visit schedule. On
         # cyclic graphs built with graph(..., unroll=U) cycle members repeat
@@ -370,7 +370,7 @@ def initialize_graph_state(
     clamps: Dict[str, jnp.ndarray] = None,
     state_init: StateInitBase = None,
     params: GraphParams = None,
-    dropout_key: jax.Array = None,
+    dropout_key: Optional[jax.Array] = None,
 ) -> GraphState:
     """
     Initialize graph state using the specified strategy.
@@ -389,7 +389,10 @@ def initialize_graph_state(
             A custom initializer that runs its own forward pass should read
             ``config.get("dropout_key")`` and call
             ``fabricpc.core.dropout.attach_dropout_keys`` before that pass,
-            as FeedforwardStateInit does.
+            as FeedforwardStateInit does; one that ignores it computes its
+            latents without masks, so its initial errors are not zero under
+            dropout. ``fabricpc.core.dropout.training_dropout_key(batch_key)``
+            reproduces a training step's masks.
 
     Returns:
         Initialized GraphState
@@ -414,7 +417,7 @@ def initialize_graph_state(
         structure, batch_size, rng_key, clamps, init_config, params
     )
     # Every initializer, custom ones included, ends with keys attached.
-    state = attach_dropout_keys(state, structure, dropout_key)
+    state = attach_dropout_keys(state, dropout_key)
 
     # Shared post-pass: in_degree == 0 nodes have no in-edges to project a
     # z_mu, so initialization assigns it — z_mu <- z_latent, cast to z_mu's

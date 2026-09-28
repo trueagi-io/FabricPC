@@ -4,14 +4,15 @@
 Dropout for the decomposed (v2) transformer and the `Linear`, `LinearResidual`, and `ConvNode` nodes, with one mask per training step shared by predictive coding and backprop.
 
 ### New
-- `fabricpc.core.dropout`: `dropout(x, rate, key, site)` (inverted dropout; identity when `rate == 0` or `key is None`), `node_dropout_key`, `attach_dropout_keys`, `validate_dropout_rate`, and `DROPOUT_STREAM`.
+- `fabricpc.core.dropout`: `dropout(x, rate, key, site)` (inverted dropout; identity when `rate == 0` or `key is None`), `training_dropout_key(batch_key)` (the key a training step uses), `node_dropout_key`, `attach_dropout_keys`, `validate_dropout_rate`, and `DROPOUT_STREAM`.
 - `NodeState.dropout_key` (default `None`): a per-node key from which a node rebuilds its masks, so feedforward initialization, every inference sweep, the weight-gradient pass, and the backprop objective see one mask per batch. Existing five-field `NodeState(...)` constructions still work.
 - `initialize_graph_state(..., dropout_key=None)` attaches the per-node keys; `FeedforwardStateInit` attaches them before its forward pass, so `z_latent = z_mu` holds under dropout.
 - `EmbeddingNode(dropout_rate)`, `MhaResidualNode(dropout_rate, attn_dropout_rate)`, `Mlp2ResidualNode(dropout_rate)`, and `create_deep_transformer(..., dropout_rate, attn_dropout_rate)`, all default `0.0`.
 - `Linear(dropout_rate)` and `ConvNode(dropout_rate)` on the activation output; `LinearResidual(dropout_rate)` on the transform path before the residual add. All default `0.0`. `LinearExplicitGrad` takes no `dropout_rate`: its analytic gradients assume the undropped prediction.
 
 ### Behavior changes
-- The training step passes `dropout_key = fold_in(batch_key, DROPOUT_STREAM)` under both algorithms, so PC and backprop draw identical masks for the same batch key. `evaluate` and `generate` pass none and stay deterministic. The latent-initialization stream is unchanged: runs with every dropout rate at `0.0` reproduce bitwise. See the RNG contract in `docs/user_guides/08_training_and_evaluation.md`.
+- The training step passes `dropout_key = training_dropout_key(batch_key)` under both algorithms, so PC and backprop draw identical masks for the same batch key. `train_step_with_history`, the dashboard re-settle, and `RegimeProbe` derive the same key, so they see the training step's masks. `evaluate` and `generate` pass none and stay deterministic. The latent-initialization stream is unchanged: runs with every dropout rate at `0.0` reproduce bitwise. See the RNG contract in `docs/user_guides/08_training_and_evaluation.md`.
+- `TransformerBlock` (v1) raises on a non-zero `dropout_rate`, which it previously accepted and ignored. `linear_pc_oracle.validate_linear_gaussian` rejects nodes with dropout.
 
 ## [0.6.0] - 2026-09-14
 ePC error-parameterized predictive coding (`EPCInference`) arrives as a drop-in solver alongside composable ePC + sPC inference schedules and first-class cyclic graphs (`graph(..., unroll=U)`); start with `docs/user_guides/17_training_with_epc.md`.

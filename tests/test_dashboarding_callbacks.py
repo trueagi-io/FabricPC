@@ -14,6 +14,7 @@ import optax
 import pytest
 
 from conftest import ListLoader, make_classification_structure, with_inference
+from fabricpc.core.dropout import training_dropout_key
 from fabricpc.core.inference import run_inference
 from fabricpc.core.types import GraphParams, GraphState
 from fabricpc.graph_initialization import initialize_graph_state, initialize_params
@@ -158,8 +159,8 @@ def test_state_tracking_every_n_infer_steps_subsamples_and_keeps_final(rng_key):
 
 def test_resettle_states_match_make_inference_history_on_context(rng_key):
     """The logged states are the settle of ctx.batch under ctx.params from
-    ctx.batch_key: step 0 is the initialization, the last is run_inference's
-    settle."""
+    ctx.batch_key, with the training step's dropout key: step 0 is the
+    initialization, the last is run_inference's settle."""
     config = TrackingConfig(
         track_state=True,
         distribution_nodes=["h"],
@@ -176,6 +177,7 @@ def test_resettle_states_match_make_inference_history_on_context(rng_key):
         ctx.batch_key,
         clamps=clamps,
         params=ctx.params,
+        dropout_key=training_dropout_key(ctx.batch_key),
     )
     final, states = make_inference_history(ctx.structure, every=2)(
         ctx.params, init_state, clamps

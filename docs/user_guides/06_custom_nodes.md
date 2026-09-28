@@ -472,13 +472,13 @@ from fabricpc.core.dropout import dropout, validate_dropout_rate
 super().__init__(..., dropout_rate=validate_dropout_rate(name, "dropout_rate", dropout_rate))
 
 # predict():
-h = dropout(h, node_info.node_config.get("dropout_rate", 0.0), state.dropout_key, site=0)
+h = dropout(h, node_info.node_config["dropout_rate"], state.dropout_key, site=0)
 ```
 
 - `dropout` is inverted dropout (survivors scaled by `1 / (1 - rate)`) and returns its input unchanged when the rate is `0.0` or the key is `None`, so evaluation needs no flag.
 - The mask is a pure function of `(state.dropout_key, site)`, so every call of `predict()` on one batch draws the same mask. Give each dropout site in one node its own `site` integer.
 - Never draw randomness in `predict()` from anything else: a mask that changes between inference sweeps makes PC relax against a moving target.
-- A custom `StateInitBase` that runs its own forward pass must read `config.get("dropout_key")` and call `fabricpc.core.dropout.attach_dropout_keys(state, structure, key)` before that pass, as `FeedforwardStateInit` does. `initialize_graph_state` attaches the keys after every initializer returns, so initializers without a forward pass need nothing.
+- A custom `StateInitBase` that runs its own forward pass must read `config.get("dropout_key")` and call `fabricpc.core.dropout.attach_dropout_keys(state, key)` before that pass, as `FeedforwardStateInit` does. One that ignores the key computes its latents without masks, so its initial errors are not zero under dropout; nothing raises. `initialize_graph_state` attaches the keys after every initializer returns, so initializers without a forward pass need nothing.
 
 ## Testing Your Node
 

@@ -277,8 +277,8 @@ def validate_linear_gaussian(structure: GraphStructure) -> None:
     schedule length is not a DAG test, since a cycle unrolled once visits
     each member once); node classes ``Linear`` or ``IdentityNode`` exactly;
     rank-1 node shapes; and on every ``in_degree > 0`` node
-    ``IdentityActivation``, ``GaussianEnergy``, ``flatten_input=False``, and
-    no ``energy()`` override.
+    ``IdentityActivation``, ``GaussianEnergy``, ``flatten_input=False``, no
+    dropout, and no ``energy()`` override.
     """
     order = {name: i for i, name in enumerate(structure.node_order)}
     for edge in structure.edges.values():
@@ -302,6 +302,12 @@ def validate_linear_gaussian(structure: GraphStructure) -> None:
             )
         if info.in_degree == 0:
             continue
+        if info.node_config.get("dropout_rate", 0.0) > 0.0:
+            raise ValueError(
+                f"node '{name}' has dropout_rate "
+                f"{info.node_config['dropout_rate']}; the oracle solves the "
+                f"deterministic energy, which a dropout mask changes"
+            )
         if not isinstance(info.activation, IdentityActivation):
             raise ValueError(
                 f"node '{name}' has activation "

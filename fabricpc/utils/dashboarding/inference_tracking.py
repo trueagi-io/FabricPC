@@ -27,7 +27,7 @@ from fabricpc.core.types import (
     GraphState,
     GraphStructure,
 )
-from fabricpc.core.dropout import DROPOUT_STREAM
+from fabricpc.core.dropout import training_dropout_key
 from fabricpc.core.energy import graph_energy
 from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 from fabricpc.training.trainer import (
@@ -320,7 +320,7 @@ def train_step_with_history(
         clamps=clamps,
         params=params,
         # Same dropout key as the trainer's step, so the masks match too.
-        dropout_key=jax.random.fold_in(rng_key, DROPOUT_STREAM),
+        dropout_key=training_dropout_key(rng_key),
     )
 
     # Run inference WITH history collection (returns stacked metrics)

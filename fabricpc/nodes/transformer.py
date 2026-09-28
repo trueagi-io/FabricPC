@@ -143,7 +143,8 @@ class TransformerBlock(NodeBase):
         internal_activation: FFN internal activation (default: GeluActivation)
         num_heads: Number of attention heads (default: 8)
         ff_dim: FFN hidden dim (default: 4 * embed_dim)
-        dropout_rate: Dropout rate, currently unused (default: 0.0)
+        dropout_rate: Must be 0.0 (default); dropout is not implemented for
+            this block. Use the decomposed v2 nodes for dropout.
         pre_norm: Use pre-norm architecture (default: True)
         use_rope: Use Rotary Position Embeddings (default: True)
         rope_theta: Base frequency for RoPE (default: 10000.0)
@@ -166,6 +167,12 @@ class TransformerBlock(NodeBase):
         weight_init: InitializerBase = KaimingInitializer(),
         latent_init: InitializerBase = NormalInitializer(),
     ):
+        if dropout_rate != 0.0:
+            raise ValueError(
+                f"Node '{name}': TransformerBlock does not implement dropout "
+                f"(got dropout_rate={dropout_rate}); use the decomposed v2 "
+                f"nodes (create_deep_transformer(..., dropout_rate=...))."
+            )
         if not isinstance(internal_activation, ActivationBase):
             raise TypeError(
                 f"Node '{name}': internal_activation must be an ActivationBase "

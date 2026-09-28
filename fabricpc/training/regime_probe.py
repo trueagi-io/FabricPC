@@ -54,6 +54,7 @@ import jax.numpy as jnp
 from fabricpc.core.epsilon_spectrum import make_epsilon_spectrum
 from fabricpc.core.inference_epc import EPCInference
 from fabricpc.core.types import GraphParams, GraphStructure
+from fabricpc.core.dropout import training_dropout_key
 from fabricpc.graph_initialization.state_initializer import initialize_graph_state
 from fabricpc.training.trainer import build_clamps
 
@@ -109,8 +110,10 @@ class RegimeProbe:
             schedule's final state. With ``None`` and no ``EPCInference``
             configured, the regime columns stay empty.
         iters: Lanczos steps per probe.
-        key: PRNG key for the probe's latent initialization and the random
-            Lanczos start when the gradient is zero.
+        key: PRNG key for the probe's latent initialization, its dropout
+            masks (``training_dropout_key(key)``, so a graph with dropout is
+            probed as a training step sees it, with one fixed mask), and the
+            random Lanczos start when the gradient is zero.
         csv_path: when given, ``on_epoch`` rewrites this file after every
             epoch, so a run that dies mid-way leaves its rows on disk.
 
@@ -151,7 +154,12 @@ class RegimeProbe:
         def probe(params, clamps, key):
             batch_size = next(iter(clamps.values())).shape[0]
             state = initialize_graph_state(
-                structure, batch_size, key, clamps=clamps, params=params
+                structure,
+                batch_size,
+                key,
+                clamps=clamps,
+                params=params,
+                dropout_key=training_dropout_key(key),
             )
             norms = {
                 node: {
