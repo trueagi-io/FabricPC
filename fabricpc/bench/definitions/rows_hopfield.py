@@ -393,7 +393,7 @@ def _recall_loaders(seed: int):
 def hopfield_family() -> dict:
     """The three rows of ``patterns64-hopfield``, keyed by row id."""
     # Imported here: the registry imports this module while it is being built.
-    from fabricpc.bench.registry import ALGORITHMS, BenchmarkRow, _safety_net
+    from fabricpc.bench.definitions.registry import ALGORITHMS, BenchmarkRow, _safety_net
 
     scores = recall_metrics()
     rows = {}

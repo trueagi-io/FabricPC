@@ -5,7 +5,7 @@ so when the code that works them out gets a bug fix the old files can be
 corrected on a laptop in a few seconds:
 
 * ``compute`` and ``achieved_tflops``. The FLOP count is rebuilt from the
-  row's graph with today's ``fabricpc.bench.compute`` (the graph is code,
+  row's graph with today's ``fabricpc.bench.run.compute`` (the graph is code,
   so building it again costs nothing), and the TFLOP/s is that count over
   the step time the run measured. The settling steps and batch size the
   run used are kept, so the count describes the run that happened.
@@ -40,13 +40,13 @@ from typing import Dict, List, Optional, Sequence
 import jax
 
 import fabricpc
-from fabricpc.bench.band import attach_band
-from fabricpc.bench.compare import compare_family
-from fabricpc.bench.compute import count_compute
-from fabricpc.bench.manifest import _git_sha
-from fabricpc.bench.registry import COMPARISONS, ROWS
-from fabricpc.bench.summary import MIN_TRIALS, compare_rows, summarize_row
-from fabricpc.bench.writer import _trial_files, write_trials_csv
+from fabricpc.bench.stats.band import attach_band
+from fabricpc.bench.stats.compare import compare_family
+from fabricpc.bench.run.compute import count_compute
+from fabricpc.bench.results.manifest import _git_sha
+from fabricpc.bench.definitions.registry import COMPARISONS, ROWS
+from fabricpc.bench.stats.summary import MIN_TRIALS, compare_rows, summarize_row
+from fabricpc.bench.results.writer import _trial_files, write_trials_csv
 
 PEAK_MEMORY_NOTE = (
     "peak_memory_bytes is the process-wide peak, mostly GPU compile scratch "

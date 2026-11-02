@@ -71,7 +71,7 @@ VGG_DEPTHS = {"vgg7": 7, "vgg9": 9}
 def _vgg_factory(depth: int, algorithm: str):
     """VGG-7 or VGG-9 on 32x32x3 images with 10 classes, pool fused into
     the last conv node of each block, like the VGG-5 rows."""
-    from fabricpc.bench.registry import _vgg_solver_for
+    from fabricpc.bench.definitions.registry import _vgg_solver_for
     from fabricpc.models import create_vgg
 
     def build(rng_key: jax.Array):
@@ -89,7 +89,7 @@ def _vgg_factory(depth: int, algorithm: str):
 
 
 def _vgg_optimizer(total_steps: int) -> optax.GradientTransformation:
-    from fabricpc.bench.registry import (
+    from fabricpc.bench.definitions.registry import (
         _DEEP_ADAM_EPS,
         _VGG_WEIGHT_DECAY,
         _vgg_lr_schedule,
@@ -104,7 +104,7 @@ def _vgg_optimizer(total_steps: int) -> optax.GradientTransformation:
 
 def deep_vgg_families() -> Dict[str, object]:
     """cifar10-vgg7-* and cifar10-vgg9-*, keyed by row id."""
-    from fabricpc.bench.registry import (
+    from fabricpc.bench.definitions.registry import (
         ALGORITHMS,
         BenchmarkRow,
         _cifar10_loaders,
@@ -135,7 +135,7 @@ def deep_vgg_families() -> Dict[str, object]:
 def _resnet18_lean_factory(algorithm: str):
     """The cifar10-resnet18 graph (muPC, GELU, the demo's solvers) in the
     lean layout."""
-    from fabricpc.bench.registry import _resnet_solver_for
+    from fabricpc.bench.definitions.registry import _resnet_solver_for
     from fabricpc.core.activations import GeluActivation
     from fabricpc.core.initializers import MuPCInitializer, XavierInitializer
     from fabricpc.core.mupc import MuPCConfig
@@ -159,7 +159,7 @@ def _resnet18_lean_factory(algorithm: str):
 def resnet18_lean_family() -> Dict[str, object]:
     """cifar10-resnet18lean-*, keyed by row id. Same batch size, optimizer
     and epochs as cifar10-resnet18."""
-    from fabricpc.bench.registry import (
+    from fabricpc.bench.definitions.registry import (
         ALGORITHMS,
         BenchmarkRow,
         _cifar10_loaders,

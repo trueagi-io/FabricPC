@@ -12,12 +12,12 @@ from typing import Dict, List, Optional
 
 import jax
 
-from fabricpc.bench.compute import count_compute
-from fabricpc.bench.manifest import SCHEMA_VERSION
-from fabricpc.bench.diagnostics import diagnose
-from fabricpc.bench.measure import epc_regime, memory_snapshot, time_steps
-from fabricpc.bench.registry import BenchmarkRow
-from fabricpc.bench.zoo import save_params
+from fabricpc.bench.run.compute import count_compute
+from fabricpc.bench.results.manifest import SCHEMA_VERSION
+from fabricpc.bench.run.diagnostics import diagnose
+from fabricpc.bench.run.measure import epc_regime, memory_snapshot, time_steps
+from fabricpc.bench.definitions.registry import BenchmarkRow
+from fabricpc.bench.run.zoo import save_params
 from fabricpc.training import InferenceRateController, evaluate, train
 from fabricpc.training.trainer import build_clamps, convert_batch
 
@@ -144,7 +144,7 @@ class TrialResult:
     # ``curve_batches`` test batches (None when turned off).
     curve: Optional[List[Dict[str, float]]] = None
     # Backprop alignment and stiffness at init and after training
-    # (fabricpc.bench.diagnostics); None when turned off.
+    # (fabricpc.bench.run.diagnostics); None when turned off.
     diagnostics: Optional[Dict[str, Dict[str, object]]] = None
     # ePC rows: EPCInference.regime at init and after training (else None)
     epc_regime: Optional[Dict[str, Dict[str, object]]] = None

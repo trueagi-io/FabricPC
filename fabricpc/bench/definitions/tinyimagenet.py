@@ -159,7 +159,7 @@ def _optimizer_for(algorithm: str):
 
 def tinyimagenet_vgg5_family() -> Dict[str, object]:
     """The three tinyimagenet-vgg5 rows, keyed by row id."""
-    from fabricpc.bench.registry import ALGORITHMS, BenchmarkRow, _safety_net
+    from fabricpc.bench.definitions.registry import ALGORITHMS, BenchmarkRow, _safety_net
 
     rows = {}
     batch_size = 128

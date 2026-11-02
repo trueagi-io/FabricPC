@@ -18,7 +18,7 @@ from typing import Tuple
 import jax
 import orbax.checkpoint as ocp
 
-from fabricpc.bench.registry import BenchmarkRow
+from fabricpc.bench.definitions.registry import BenchmarkRow
 
 
 def checkpoint_dir(zoo_dir, row_id: str, trial: int) -> Path:

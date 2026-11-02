@@ -20,8 +20,8 @@ is marked not comparable instead of passing or failing by accident.
 from dataclasses import asdict, dataclass, replace
 from typing import Optional
 
-from fabricpc.bench.registry import BenchmarkRow
-from fabricpc.bench.summary import RowSummary, write_summary
+from fabricpc.bench.definitions.registry import BenchmarkRow
+from fabricpc.bench.stats.summary import RowSummary, write_summary
 
 DEFAULT_FLOOR = 0.005
 RULE = "max(floor, 2*SE)"

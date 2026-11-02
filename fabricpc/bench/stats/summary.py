@@ -7,7 +7,7 @@ refuses to produce one from fewer than two trials.
 Comparing two rows is a paired test: trial i of row A and trial i of row B
 used the same seed and the same data order, so the per-trial differences
 are what gets tested. The math comes from ``fabricpc.experiments``, through
-``fabricpc.bench.compare``.
+``fabricpc.bench.stats.compare``.
 """
 
 import json
@@ -18,8 +18,8 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from fabricpc.bench.ci import mean_ci95, paired_ci95
-from fabricpc.bench.manifest import SCHEMA_VERSION
+from fabricpc.bench.stats.ci import mean_ci95, paired_ci95
+from fabricpc.bench.results.manifest import SCHEMA_VERSION
 
 MIN_TRIALS = 2
 
@@ -42,7 +42,7 @@ def _stats(values: List[float]) -> Dict[str, float]:
         "mean": float(np.mean(arr)),
         "std": std,
         "se": std / math.sqrt(n) if n > 1 else 0.0,
-        "ci95_low": low,  # 95% t interval for the mean, see fabricpc.bench.ci
+        "ci95_low": low,  # 95% t interval for the mean, see fabricpc.bench.stats.ci
         "ci95_high": high,
         "n": n,
     }
@@ -61,7 +61,7 @@ class RowSummary:
     n_params: int = 0
     num_epochs: float = 0.0
     step_memory: Optional[Dict[str, int]] = None  # same for every trial of a row
-    band: Optional[Dict[str, object]] = None  # filled in by fabricpc.bench.band
+    band: Optional[Dict[str, object]] = None  # filled in by fabricpc.bench.stats.band
     schema_version: int = SCHEMA_VERSION
 
 
@@ -125,9 +125,9 @@ def compare_rows(results_dir, row_a: str, row_b: str, *, metric: str) -> Contras
     """Paired comparison of one metric between two rows, trial by trial.
 
     The statistics come from fabricpc.experiments' planned-contrast results
-    (see ``fabricpc.bench.compare``), the same code every comparison uses.
+    (see ``fabricpc.bench.stats.compare``), the same code every comparison uses.
     """
-    from fabricpc.bench.compare import planned_results
+    from fabricpc.bench.stats.compare import planned_results
 
     res = planned_results(
         results_dir, rows=(row_a, row_b), contrasts=((row_a, row_b),), metric=metric

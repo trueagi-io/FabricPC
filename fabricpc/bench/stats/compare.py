@@ -21,9 +21,9 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Optional, Sequence, Tuple
 
-from fabricpc.bench.ci import paired_ci95
-from fabricpc.bench.registry import BenchmarkRow, Comparison
-from fabricpc.bench.runner import _TRAINER_ALGORITHM
+from fabricpc.bench.stats.ci import paired_ci95
+from fabricpc.bench.definitions.registry import BenchmarkRow, Comparison
+from fabricpc.bench.run.runner import _TRAINER_ALGORITHM
 from fabricpc.experiments import ExperimentArm, PlannedMultiContrastResults
 from fabricpc.experiments.ab_experiment import TrialResult as ArmTrial
 from fabricpc.training import evaluate, train

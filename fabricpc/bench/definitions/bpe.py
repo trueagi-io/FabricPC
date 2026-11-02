@@ -109,7 +109,7 @@ def _lr_schedule(total_steps: int) -> optax.Schedule:
 
 
 def _optimizer(total_steps: int) -> optax.GradientTransformation:
-    from fabricpc.bench.registry import _DEEP_ADAM_EPS
+    from fabricpc.bench.definitions.registry import _DEEP_ADAM_EPS
 
     return optax.adam(_lr_schedule(total_steps), eps=_DEEP_ADAM_EPS)
 
@@ -168,7 +168,7 @@ def _loaders(batch_size: int, seq_len: int):
 
 def tinyshakespeare_bpe_transformer_family() -> Dict[str, object]:
     """The three tinyshakespeare-bpe-transformer rows, keyed by row id."""
-    from fabricpc.bench.registry import ALGORITHMS, BenchmarkRow, _safety_net
+    from fabricpc.bench.definitions.registry import ALGORITHMS, BenchmarkRow, _safety_net
 
     c = _BPE_TRANSFORMER
     rows = {}

@@ -134,7 +134,7 @@ def _model_factory(algorithm: str, depth: int):
 
 
 def _optimizer(total_steps: int) -> optax.GradientTransformation:
-    from fabricpc.bench.registry import _DEEP_ADAM_EPS
+    from fabricpc.bench.definitions.registry import _DEEP_ADAM_EPS
 
     return optax.adamw(LEARNING_RATE, weight_decay=WEIGHT_DECAY, eps=_DEEP_ADAM_EPS)
 
@@ -143,7 +143,7 @@ def fcresnet_depth_family(depths=DEPTHS) -> Dict[str, object]:
     """Three rows per depth, keyed by row id."""
     # Imported here because the registry imports this module while it is
     # still being built.
-    from fabricpc.bench.registry import (
+    from fabricpc.bench.definitions.registry import (
         ALGORITHMS,
         BenchmarkRow,
         _flat_image_loaders,
@@ -178,7 +178,7 @@ def depth_of(row_id: str) -> Optional[int]:
     """A row's depth: the registry's if it has one, else read off the id
     (so old results from a depth we no longer register still show up)."""
     try:
-        from fabricpc.bench.registry import ROWS
+        from fabricpc.bench.definitions.registry import ROWS
 
         row = ROWS.get(row_id)
         if row is not None and row.depth is not None:

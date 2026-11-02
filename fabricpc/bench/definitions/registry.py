@@ -11,10 +11,10 @@ from typing import Callable, Dict, Mapping, Optional, Tuple
 import jax
 import optax
 
-from fabricpc.bench.bpe import tinyshakespeare_bpe_transformer_family
-from fabricpc.bench.cifar100 import cifar100_vgg5_family
-from fabricpc.bench.deep import fcresnet_depth_family
-from fabricpc.bench.tinyimagenet import tinyimagenet_vgg5_family
+from fabricpc.bench.definitions.bpe import tinyshakespeare_bpe_transformer_family
+from fabricpc.bench.definitions.cifar100 import cifar100_vgg5_family
+from fabricpc.bench.definitions.deep import fcresnet_depth_family
+from fabricpc.bench.definitions.tinyimagenet import tinyimagenet_vgg5_family
 from fabricpc.core.activations import (
     GeluActivation,
     ReLUActivation,
@@ -46,7 +46,7 @@ class Reference:
     """The score a full run of a row is expected to land near.
 
     ``floor`` is the smallest allowed miss, in the metric's own units (0.005
-    is half a percentage point of accuracy). ``fabricpc.bench.band`` widens
+    is half a percentage point of accuracy). ``fabricpc.bench.stats.band`` widens
     it to two standard errors when the run is noisier than that.
     """
 
@@ -582,7 +582,7 @@ def _mnist_reconstruction_loaders(batch_size: int) -> LoaderFactory:
 def _mnist_autoencoder_family() -> Dict[str, BenchmarkRow]:
     """The faculty advisor's story: an autoencoder under backprop and PC,
     compared on reconstruction and hidden sparsity rather than accuracy."""
-    from fabricpc.bench.metrics import reconstruction_mse, sparsity
+    from fabricpc.bench.definitions.metrics import reconstruction_mse, sparsity
 
     scores = {
         "reconstruction_mse": reconstruction_mse,
@@ -614,16 +614,16 @@ def _mnist_autoencoder_family() -> Dict[str, BenchmarkRow]:
 
 def _hopfield_family() -> Dict[str, BenchmarkRow]:
     """Associative memory: recall a stored pattern from a noisy copy
-    (fabricpc.bench.rows_hopfield)."""
-    from fabricpc.bench.rows_hopfield import hopfield_family
+    (fabricpc.bench.definitions.rows_hopfield)."""
+    from fabricpc.bench.definitions.rows_hopfield import hopfield_family
 
     return hopfield_family()
 
 
 def _deep_convnet_families() -> Dict[str, BenchmarkRow]:
     """cifar10-vgg7, cifar10-vgg9 and cifar10-resnet18lean
-    (fabricpc.bench.rows_deep_convnets)."""
-    from fabricpc.bench.rows_deep_convnets import deep_convnet_families
+    (fabricpc.bench.definitions.rows_deep_convnets)."""
+    from fabricpc.bench.definitions.rows_deep_convnets import deep_convnet_families
 
     return deep_convnet_families()
 

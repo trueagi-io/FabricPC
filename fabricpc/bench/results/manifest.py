@@ -18,7 +18,7 @@ from typing import List, Optional
 import jax
 
 import fabricpc
-from fabricpc.bench.registry import BenchmarkRow
+from fabricpc.bench.definitions.registry import BenchmarkRow
 
 # Bump this when a field is added, renamed, or changes meaning.
 SCHEMA_VERSION = 2  # 2: expected score, band verdict, peak memory

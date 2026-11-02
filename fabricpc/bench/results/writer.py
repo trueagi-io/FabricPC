@@ -17,7 +17,7 @@ import json
 from pathlib import Path
 from typing import List
 
-from fabricpc.bench.manifest import SCHEMA_VERSION
+from fabricpc.bench.results.manifest import SCHEMA_VERSION
 
 # Columns in the order people read them; metric columns go after "status".
 _LEAD = ["trial", "seed", "status", "num_epochs"]

@@ -36,8 +36,8 @@ from typing import Dict, Optional
 import jax
 
 from fabricpc.bench import registry
-from fabricpc.bench.measure import time_steps
-from fabricpc.bench.runner import (
+from fabricpc.bench.run.measure import time_steps
+from fabricpc.bench.run.runner import (
     _TIMING_STREAM,
     _TRAINER_ALGORITHM,
     DEFAULT_CURVE_BATCHES,

@@ -56,15 +56,15 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from fabricpc.bench.band import attach_band
-from fabricpc.bench.isolate import run_trial_in_child
-from fabricpc.bench.manifest import describe_row, write_manifest
-from fabricpc.bench.compare import compare_family
-from fabricpc.bench.refresh import refresh_results
-from fabricpc.bench.registry import COMPARISONS, ROWS
-from fabricpc.bench.runner import finished_trial, run_trial, seed_for_trial
-from fabricpc.bench.summary import MIN_TRIALS, compare_rows, summarize_row
-from fabricpc.bench.writer import validate, write_trials_csv
+from fabricpc.bench.stats.band import attach_band
+from fabricpc.bench.run.isolate import run_trial_in_child
+from fabricpc.bench.results.manifest import describe_row, write_manifest
+from fabricpc.bench.stats.compare import compare_family
+from fabricpc.bench.results.refresh import refresh_results
+from fabricpc.bench.definitions.registry import COMPARISONS, ROWS
+from fabricpc.bench.run.runner import finished_trial, run_trial, seed_for_trial
+from fabricpc.bench.stats.summary import MIN_TRIALS, compare_rows, summarize_row
+from fabricpc.bench.results.writer import validate, write_trials_csv
 
 SMOKE_ROW = "mnist-mlp-spc"
 SMOKE_FLOOR = 0.85  # half an epoch of MNIST lands well above this
@@ -322,8 +322,8 @@ def cmd_refresh(args, command) -> int:
 
 def cmd_report(args, argv) -> int:
     """Write one page about a results root. Without --out, print it."""
-    from fabricpc.bench.report import run_report
-
+    from fabricpc.bench.results.report import run_report
+    
     if len(args.rows) != 1:
         print(
             "usage: report <results_root> [--out FILE] [--format md|html]",
@@ -370,7 +370,7 @@ def cmd_smoke(args, command) -> int:
 
 def cmd_regress(args, command) -> int:
     """Tiny fixed-seed runs held to fixed lines (fabricpc.bench.regress)."""
-    from fabricpc.bench import regress
+    from fabricpc.bench.stats import regress
 
     try:
         checks = regress.select(regress.CI_CHECKS, args.rows)
@@ -456,7 +456,7 @@ def _run_one_row(row, args, command) -> int:
 
 def cmd_probe(args, argv) -> int:
     """Estimate a row's or family's run time and cost from a few steps."""
-    from fabricpc.bench import probe
+    from fabricpc.bench.run import probe
 
     target = args.rows[0] if args.rows else None
     if target not in ROWS and target not in COMPARISONS:
@@ -480,7 +480,7 @@ def cmd_probe(args, argv) -> int:
 
 def main(argv=None) -> int:
     if (sys.argv[1:] if argv is None else list(argv))[:1] == ["queue"]:
-        from fabricpc.bench.queue import cli as queue_cli  # has its own flags
+        from fabricpc.bench.cli.queue import cli as queue_cli  # has its own flags
 
         return queue_cli((sys.argv[1:] if argv is None else argv)[1:], run_main=main)
     args = _parser().parse_args(argv)

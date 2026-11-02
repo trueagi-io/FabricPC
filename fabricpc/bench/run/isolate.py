@@ -20,8 +20,8 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from fabricpc.bench.registry import BenchmarkRow
-from fabricpc.bench.runner import TrialResult, seed_for_trial
+from fabricpc.bench.definitions.registry import BenchmarkRow
+from fabricpc.bench.run.runner import TrialResult, seed_for_trial
 
 _STDERR_KEPT = 4000  # characters from the end of a dead child's stderr
 

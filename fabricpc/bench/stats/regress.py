@@ -38,8 +38,8 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Callable, Optional, Sequence, Tuple
 
-from fabricpc.bench.report import run_report
-from fabricpc.bench.writer import validate
+from fabricpc.bench.results.report import run_report
+from fabricpc.bench.results.writer import validate
 
 
 @dataclass(frozen=True)
