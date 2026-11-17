@@ -52,6 +52,7 @@ debugging; ``--trial i`` runs a single trial and is what each child does.
 
 import argparse
 import json
+import math
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -136,6 +137,35 @@ def _parser() -> argparse.ArgumentParser:
         help="for 'probe': machine price in USD per hour (default 1.06, a T4)",
     )
     return p
+
+
+def _check_numbers(args) -> list:
+    """Return one message per bad number flag, so all of them show at once.
+
+    Runs before any command, so a bad value never starts training or clears
+    old results. A plain ``x <= 0`` check lets nan through, so each rule says
+    what a good value is, and float flags also need ``math.isfinite``.
+    """
+    problems = []
+
+    def need(flag, value, ok, rule):
+        if value is not None and not ok(value):
+            problems.append(f"{flag} must be {rule}, got {value}")
+
+    need("--trials", args.trials, lambda v: v >= 1, "1 or more")
+    need("--epochs", args.epochs, lambda v: v > 0 and math.isfinite(v), "above 0")
+    need("--warmup", args.warmup, lambda v: v >= 0, "0 or more")
+    need("--timed", args.timed, lambda v: v >= 1, "1 or more")
+    need("--trial", args.trial, lambda v: v >= 0, "0 or more")
+    need("--curve-batches", args.curve_batches, lambda v: v >= 0, "0 or more")
+    need("--floor", args.floor, lambda v: 0 <= v <= 1, "between 0 and 1")
+    need(
+        "--price-per-hour",
+        args.price_per_hour,
+        lambda v: v > 0 and math.isfinite(v),
+        "above 0",
+    )
+    return problems
 
 
 def _unknown_row(row_id: str) -> int:
@@ -323,7 +353,7 @@ def cmd_refresh(args, command) -> int:
 def cmd_report(args, argv) -> int:
     """Write one page about a results root. Without --out, print it."""
     from fabricpc.bench.results.report import run_report
-    
+
     if len(args.rows) != 1:
         print(
             "usage: report <results_root> [--out FILE] [--format md|html]",
@@ -483,7 +513,11 @@ def main(argv=None) -> int:
         from fabricpc.bench.cli.queue import cli as queue_cli  # has its own flags
 
         return queue_cli((sys.argv[1:] if argv is None else argv)[1:], run_main=main)
-    args = _parser().parse_args(argv)
+    parser = _parser()
+    args = parser.parse_args(argv)
+    problems = _check_numbers(args)
+    if problems:
+        parser.error("\n  ".join(["bad values, nothing was run:", *problems]))
     if args.fast:
         # Same training and scores; only the extras that cost time are skipped.
         args.no_diagnostics = True

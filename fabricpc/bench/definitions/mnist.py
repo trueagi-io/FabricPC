@@ -1,6 +1,5 @@
 import tensorflow_datasets as tfds
 import numpy as np
-import torch
 
 class TFDSMnistIterator:
     """Wraps a TFDS dataset into a batch iterator with seed reproducibility and standard MNIST normalization."""
