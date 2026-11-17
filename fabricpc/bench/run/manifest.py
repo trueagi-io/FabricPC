@@ -23,6 +23,9 @@ from fabricpc.bench.definitions.registry import BenchmarkRow
 # Bump this when a field is added, renamed, or changes meaning.
 SCHEMA_VERSION = 2  # 2: expected score, band verdict, peak memory
 
+# Bump this when new suite is released.
+SUITE_VERSION = "0.1.0"
+
 
 def _package_version(name: str) -> Optional[str]:
     try:
@@ -83,6 +86,7 @@ def build_manifest(row: BenchmarkRow, seeds: List[int], command: List[str]) -> d
         "git_sha": _git_sha(),
         "versions": {
             "fabricpc": fabricpc.__version__,
+            "suite": SUITE_VERSION,
             "jax": jax.__version__,
             "jaxlib": _package_version("jaxlib"),
             "optax": _package_version("optax"),
